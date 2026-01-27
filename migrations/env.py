@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+# Load .env file
+from dotenv import load_dotenv
+env_file = Path(__file__).parent.parent / ".env"
+if env_file.exists():
+    load_dotenv(env_file)
 
 from contextbrain.core.config import get_env
 
@@ -14,7 +21,18 @@ if config.config_file_name is not None:
 
 
 def _get_url() -> str:
-    return get_env("POSTGRES_DSN") or config.get_main_option("sqlalchemy.url")
+    # Check multiple possible environment variables
+    url = (
+        get_env("POSTGRES_DSN") or 
+        get_env("BRAIN_DATABASE_URL") or 
+        config.get_main_option("sqlalchemy.url")
+    )
+    if not url:
+        raise ValueError("Database URL not configured. Set POSTGRES_DSN or BRAIN_DATABASE_URL")
+    # Ensure proper driver prefix for SQLAlchemy
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+psycopg://", 1)
+    return url
 
 
 def run_migrations_offline() -> None:

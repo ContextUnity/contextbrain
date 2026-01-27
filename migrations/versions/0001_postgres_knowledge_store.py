@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from alembic import op
-from contextbrain.modules.providers.storage.postgres.schema import build_schema_sql
+from contextbrain.storage.postgres.schema import build_schema_sql
 
 from contextbrain.core.config import get_env
 
