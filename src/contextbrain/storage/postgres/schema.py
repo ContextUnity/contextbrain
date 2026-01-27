@@ -139,13 +139,19 @@ def build_schema_sql(*, vector_dim: int) -> Sequence[str]:
             name        TEXT NOT NULL,
             path        LTREE NOT NULL,
             keywords    TEXT[] NOT NULL DEFAULT '{}',
+            embedding   VECTOR(%d) NULL,
             metadata    JSONB NOT NULL DEFAULT '{}'::jsonb,
             updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (tenant_id, domain, path)
         );
-        """,
+        """
+        % int(vector_dim),
         "CREATE INDEX IF NOT EXISTS catalog_taxonomy_path_gist ON catalog_taxonomy USING GIST (path);",
         "CREATE INDEX IF NOT EXISTS catalog_taxonomy_domain_idx ON catalog_taxonomy (domain);",
+        """
+        CREATE INDEX IF NOT EXISTS catalog_taxonomy_embedding_hnsw
+          ON catalog_taxonomy USING hnsw (embedding vector_cosine_ops);
+        """,
     ]
 
 

@@ -22,7 +22,7 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
     """
 
     def __init__(self):
-        dsn = os.getenv("BRAIN_DATABASE_URL", "postgresql://user:pass@localhost:5432/brain")
+        dsn = os.getenv("BRAIN_DATABASE_URL") or os.getenv("DATABASE_URL") or "postgresql://user:pass@localhost:5432/brain"
         self.storage = PostgresKnowledgeStore(dsn=dsn)
         self.duckdb = DuckDBStore()  # Analytical layer
 
@@ -89,10 +89,13 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
 
     async def UpsertTaxonomy(self, request, context):
         """Sync YAML-to-DB or UI-to-DB taxonomy entries."""
-        payload = request.payload
+        # Convert Protobuf Struct to proper Python dict (recursive)
+        from google.protobuf.json_format import MessageToDict
+        payload = MessageToDict(request.payload, preserving_proto_field_name=True)
+        
         await self.storage.upsert_taxonomy(
             tenant_id=payload.get("tenant_id", "default"),
-            domain=payload.get("domain"),
+            domain=payload.get("domain", "general"),
             name=payload.get("name"),
             path=payload.get("path"),
             keywords=list(payload.get("keywords", [])),
@@ -126,14 +129,21 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
         yield brain_pb2.ContextUnit(payload={"status": "empty"}, modality=0)
 
 
-def serve():
+async def serve():
     # Setup logging from SharedConfig
     config = load_shared_config_from_env()
     setup_logging(config=config, service_name="contextbrain")
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    server = grpc.aio.server()
     brain_pb2_grpc.add_BrainServiceServicer_to_server(BrainService(), server)
     server.add_insecure_port("[::]:50051")
-    logger.info("Unified Brain Service starting on :50051")
-    server.start()
-    server.wait_for_termination()
+    logger.info("Unified Brain Service starting on :50051 (Async Mode)")
+    await server.start()
+    await server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    import asyncio
+    from dotenv import load_dotenv
+    load_dotenv()
+    asyncio.run(serve())

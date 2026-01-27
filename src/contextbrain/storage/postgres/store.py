@@ -6,6 +6,7 @@ from typing import Any, Iterable, List, Optional
 
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Json
 from psycopg_pool import AsyncConnectionPool
 
 from .models import GraphEdge, GraphNode, KnowledgeStoreInterface, SearchResult, TaxonomyPath
@@ -31,7 +32,10 @@ class PostgresKnowledgeStore(KnowledgeStoreInterface):
         )
 
     async def _get_pool(self) -> AsyncConnectionPool:
-        if not self._pool.opened:
+        try:
+            # Try to check if pool is operational, if not - open it
+            await self._pool.wait()
+        except Exception:
             await self._pool.open()
         return self._pool
 
@@ -78,7 +82,7 @@ class PostgresKnowledgeStore(KnowledgeStoreInterface):
                             "source_id": node.source_id,
                             "title": node.title,
                             "content": node.content,
-                            "struct_data": node.metadata,
+                            "struct_data": Json(node.metadata),
                             "keywords_text": node.keywords_text,
                             "content_hash": None,
                             "taxonomy_path": node.taxonomy_path,
@@ -131,7 +135,7 @@ class PostgresKnowledgeStore(KnowledgeStoreInterface):
                     "session_id": session_id,
                     "content": content,
                     "embedding": _format_vector(embedding) if embedding else None,
-                    "metadata": metadata,
+                    "metadata": Json(metadata),
                 },
             )
 
@@ -210,7 +214,7 @@ class PostgresKnowledgeStore(KnowledgeStoreInterface):
                     "name": name,
                     "path": path,
                     "keywords": keywords,
-                    "metadata": metadata or {},
+                    "metadata": Json(metadata or {}),
                 },
             )
 
