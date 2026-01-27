@@ -10,7 +10,9 @@
 
 ## What is ContextBrain?
 
-ContextBrain is the SmartMemory and Intelligence layer of the ContextUnity ecosystem. It manages vector storage, RAG retrieval pipelines, and the Knowledge Graph. It acts as a "shared brain" that can handle complex tasks by combining information retrieval, text generation, and tool execution.
+ContextBrain is the SmartMemory and Intelligence layer of the ContextUnity ecosystem. It manages vector storage, RAG retrieval pipelines, and the Knowledge Graph. It acts as a **centralized memory service** that provides retrieval capabilities to other services like `ContextRouter`.
+
+It can be deployed as a standalone gRPC service or used as a Python library within other applications.
 
 Unlike simple chatbots, ContextBrain can perform multi-step tasks: analyze queries, search for relevant information, apply logic, and provide structured responses.
 
@@ -134,6 +136,31 @@ We welcome contributions! ContextBrain maintains strict coding standards with em
 - **Type Safety** — Strict typing throughout the codebase with mypy validation
 
 See our [Contributing Guide](./CONTRIBUTING.md) for detailed guidelines and current development priorities.
+
+## Development
+
+### Prerequisites
+- Python 3.13+
+- PostgreSQL with `vector` and `ltree` extensions
+- `uv` package manager
+
+### Database Setup
+ContextBrain uses PostgreSQL for knowledge storage.
+1. Create a `.env` file with `BRAIN_DATABASE_URL` (see `.env.example`).
+2. Initialize schema:
+   ```bash
+   uv run python scripts/init_db.py
+   ```
+3. Access database shell:
+   ```bash
+   mise run db_shell
+   ```
+
+### Running the Service
+```bash
+# Start the gRPC server
+uv run python -m contextbrain
+```
 
 ## License
 

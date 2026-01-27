@@ -1,33 +1,23 @@
-# ContextBrain Full Documentation
+# ContextBrain: Knowledge Store
 
 ## Overview
+ContextBrain is the sovereign **Semantic Knowledge Store** for the ecosystem. It provides Vector Search, Graph Traversal, and Taxonomy management.
 
-ContextBrain is the SmartMemory and Intelligence layer of the ContextUnity ecosystem. It manages vector storage, RAG retrieval pipelines, and the Knowledge Graph.
+## Architecture
+- **Database**: PostgreSQL (with `pgvector`, `ltree`).
+- **Data Model**:
+    - `knowledge_nodes`: Vectors + Text Chunks.
+    - `knowledge_edges`: Semantic Graph.
+    - `knowledge_aliases`: Entity Synonyms.
+- **Ingestion**:
+    - Cognee Integration for Knowledge Graph extraction.
+    - ETL pipeline for Files/Web/DB.
 
----
+## Interfaces
+- **gRPC**: `contextcore/protos/brain.proto`
+    - `Search(query)`: Hybrid retrieval.
+    - `GraphSearch(entrypoints)`: Graph expansion.
 
-## Core Components
-
-### 1. RAG Engine
-**Purpose**: High-performance retrieval of relevant context and knowledge facts.
-**Key Functions**:
-- Hybrid search (Vector + Full-Text)
-- Mandatory re-ranking
-- Context assembly for LLM agents
-- Streaming retrieval results
-
-### 2. Knowledge Store (Persistence)
-**Purpose**: Durable storage for structure and semantic data.
-**Stack**: PostgreSQL + pgvector / LanceDB.
-**Interfaces**:
-- `IRead` / `IWrite` (via ContextUnit)
-
-### 3. Documentation Mandate
-Any functional change to the gRPC contract or logic MUST be documented here first.
-
----
-
-## Performance Targets
-- **Vector Retrieval**: <1s
-- **Reranking**: <500ms
-- **Multi-tenant Isolation**: Mandatory
+## Key Files
+- `src/contextbrain/storage/postgres/schema.py`: Database tables.
+- `src/contextbrain/ingestion/`: ETL logic.
