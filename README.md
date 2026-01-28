@@ -3,7 +3,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
-[![GitHub](https://img.shields.io/badge/GitHub-ContextBrain-black.svg)](https://github.com/ContextRouter/contextbrain)
+[![GitHub](https://img.shields.io/badge/GitHub-ContextUnity-black.svg)](https://github.com/ContextUnity/contextbrain)
 [![Docs](https://img.shields.io/badge/docs-contextbrain.dev-green.svg)](https://contextbrain.dev)
 
 > ⚠️ **Early Version**: This is an early version of ContextBrain. Documentation is actively being developed, and the API may change.
@@ -123,8 +123,20 @@ For more examples, see the [`examples/`](./examples/) directory.
 ## Documentation
 
 - [Full Documentation](https://contextbrain.dev) — complete guides and API reference
+- [Technical Reference](./contextbrain-fulldoc.md) — architecture deep-dive
 - [Examples Directory](./examples/) — working code samples
 - [Contributing Guide](./CONTRIBUTING.md) — how to contribute to the project
+
+## ContextUnity Ecosystem
+
+ContextBrain is part of the [ContextUnity](https://github.com/ContextUnity) platform:
+
+| Service | Role | Documentation |
+|---------|------|---------------|
+| **ContextCore** | Shared types and gRPC contracts | [contextcore.dev](https://contextcore.dev) |
+| **ContextRouter** | AI agent orchestration | [contextrouter.dev](https://contextrouter.dev) |
+| **ContextWorker** | Background task execution | [contextworker.dev](https://contextworker.dev) |
+| **ContextCommerce** | E-commerce platform | [contextcommerce.dev](https://contextcommerce.dev) |
 
 ## Contributing
 

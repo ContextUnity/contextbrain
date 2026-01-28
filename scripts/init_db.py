@@ -1,97 +1,73 @@
+"""Initialize Brain database schema.
+
+Usage:
+    BRAIN_DATABASE_URL=postgresql://... python scripts/init_db.py
+
+Options:
+    --include-commerce     Include commerce/taxonomy tables
+    --include-news-engine  Include Pink Pony news tables
+    --vector-dim DIM       Vector dimension (default: from BRAIN_VECTOR_DIM or 1536)
+"""
+
+import argparse
 import asyncio
 import os
+import sys
 
 from dotenv import load_dotenv
-from psycopg_pool import AsyncConnectionPool
-
-# Common sql schema
-SCHEMA_SQL = """
--- CREATE EXTENSION IF NOT EXISTS vector;
--- CREATE EXTENSION IF NOT EXISTS ltree;
-
-CREATE TABLE IF NOT EXISTS knowledge_nodes (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT,
-    node_kind TEXT NOT NULL, -- 'chunk', 'entity', 'image', etc
-    source_type TEXT,
-    source_id TEXT,
-    title TEXT,
-    content TEXT NOT NULL,
-    struct_data JSONB,
-    keywords_text TEXT,
-    content_hash TEXT,
-    taxonomy_path ltree,
-    embedding vector(768),
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_kn_tenant ON knowledge_nodes (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_kn_path ON knowledge_nodes USING GIST (taxonomy_path);
--- Vector index (hnsw) usually added specifically if needed, omitting for brevity/speed
-
-CREATE TABLE IF NOT EXISTS knowledge_edges (
-    tenant_id TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    target_id TEXT NOT NULL,
-    relation TEXT NOT NULL,
-    weight FLOAT DEFAULT 1.0,
-    metadata JSONB,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (tenant_id, source_id, target_id, relation)
-);
-
-CREATE TABLE IF NOT EXISTS episodic_events (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    session_id TEXT,
-    content TEXT NOT NULL,
-    embedding vector(768),
-    metadata JSONB,
-    created_at TIMESTAMPTZ DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS user_facts (
-    user_id TEXT NOT NULL,
-    fact_key TEXT NOT NULL,
-    fact_value JSONB,
-    confidence FLOAT DEFAULT 1.0,
-    source_id TEXT,
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (user_id, fact_key)
-);
-
--- Missing table that caused the error
-CREATE TABLE IF NOT EXISTS catalog_taxonomy (
-    tenant_id TEXT NOT NULL,
-    domain TEXT NOT NULL, -- 'categories', 'colors', etc
-    path ltree NOT NULL,  -- e.g. 'sport.shoes'
-    name TEXT NOT NULL,
-    keywords TEXT[],
-    metadata JSONB,
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    PRIMARY KEY (tenant_id, domain, path)
-);
-
-CREATE INDEX IF NOT EXISTS idx_tax_domain ON catalog_taxonomy (tenant_id, domain);
-"""
 
 
 async def main():
     load_dotenv()
+    
+    parser = argparse.ArgumentParser(description="Initialize Brain database schema")
+    parser.add_argument("--include-commerce", action="store_true", help="Include commerce/taxonomy tables")
+    parser.add_argument("--include-news-engine", action="store_true", help="Include Pink Pony news tables")
+    parser.add_argument("--vector-dim", type=int, default=None, help="Vector dimension")
+    args = parser.parse_args()
+    
     dsn = os.getenv("BRAIN_DATABASE_URL") or os.getenv("DATABASE_URL")
     if not dsn:
-        print("Error: DATABASE_URL not found in environment.")
-        return
-
-    print(f"Connecting to {dsn.split('@')[-1]}...")
+        print("Error: BRAIN_DATABASE_URL or DATABASE_URL not found in environment.")
+        sys.exit(1)
+    
+    vector_dim = args.vector_dim or int(os.getenv("BRAIN_VECTOR_DIM", "1536"))
+    
+    # Import schema builder
+    from contextbrain.storage.postgres.schema import build_schema_sql
+    
+    statements = build_schema_sql(
+        vector_dim=vector_dim,
+        include_commerce=args.include_commerce,
+        include_news_engine=args.include_news_engine,
+    )
+    
+    # Connect and execute
+    from psycopg_pool import AsyncConnectionPool
+    
+    # Parse host info for display
+    host_info = dsn.split("@")[-1] if "@" in dsn else dsn
+    print(f"Connecting to {host_info}...")
+    print(f"Vector dimension: {vector_dim}")
+    print(f"Include commerce: {args.include_commerce}")
+    print(f"Include news_engine: {args.include_news_engine}")
+    
     async with AsyncConnectionPool(dsn, open=False) as pool:
         await pool.open()
         async with pool.connection() as conn:
-            print("Creating tables...")
-            await conn.execute(SCHEMA_SQL)
-            print("Tables created successfully.")
+            print(f"Executing {len(statements)} statements...")
+            for i, stmt in enumerate(statements, 1):
+                try:
+                    await conn.execute(stmt)
+                    # Extract first line for logging
+                    first_line = stmt.strip().split("\n")[0][:60]
+                    print(f"  [{i}/{len(statements)}] ✓ {first_line}...")
+                except Exception as e:
+                    print(f"  [{i}/{len(statements)}] ✗ Error: {e}")
+                    # Continue with other statements (some may be CREATE IF NOT EXISTS)
+            
+            await conn.commit()
+            print("\n✅ Database schema initialized successfully!")
 
 
 if __name__ == "__main__":

@@ -325,7 +325,7 @@ async def test_streaming(provider: str, model_key: str) -> bool:
 # Provider configurations for testing
 PROVIDER_CONFIGS = {
     "openai": {
-        "key": "openai/gpt-4o-mini",
+        "key": "openai/gpt-5-mini",
         "tests": ["text", "image", "audio", "stream"],
     },
     "anthropic": {
@@ -341,7 +341,7 @@ PROVIDER_CONFIGS = {
         "tests": ["text", "image", "audio", "stream"],
     },
     "openrouter": {
-        "key": "openrouter/openai/gpt-4o-mini",
+        "key": "openrouter/openai/gpt-5-mini",
         "tests": ["text", "image", "stream"],
     },
     "hf-hub": {

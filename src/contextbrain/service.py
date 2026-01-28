@@ -16,6 +16,72 @@ from .storage.postgres.store import PostgresKnowledgeStore
 logger = get_context_unit_logger(__name__)
 
 
+class OpenAIEmbedder:
+    """OpenAI API-based embeddings.
+    
+    Uses text-embedding-3-small (1536 dims) by default.
+    Requires OPENAI_API_KEY env var.
+    
+    Models:
+        - text-embedding-3-small: 1536 dims, $0.02/1M tokens (default)
+        - text-embedding-3-large: 3072 dims, $0.13/1M tokens
+        - text-embedding-ada-002: 1536 dims, $0.10/1M tokens (legacy)
+    """
+
+    _instance: Optional["OpenAIEmbedder"] = None
+
+    def __init__(self, model_name: str = "text-embedding-3-small"):
+        self._model_name = model_name
+        self._api_key = os.getenv("OPENAI_API_KEY")
+        self._dim = 1536 if "small" in model_name or "ada" in model_name else 3072
+        
+        if not self._api_key:
+            logger.warning("OPENAI_API_KEY not set, embeddings will fail")
+
+    @classmethod
+    def get_instance(cls) -> "OpenAIEmbedder":
+        if cls._instance is None:
+            model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+            cls._instance = cls(model_name=model)
+        return cls._instance
+
+    def embed(self, text: str) -> list[float]:
+        """Generate embedding for text (sync)."""
+        import asyncio
+        return asyncio.get_event_loop().run_until_complete(self.embed_async(text))
+
+    async def embed_async(self, text: str) -> list[float]:
+        """Generate embedding for text using OpenAI API."""
+        if not self._api_key:
+            logger.error("OPENAI_API_KEY not set")
+            return [0.0] * self._dim
+        
+        try:
+            import httpx
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._model_name,
+                        "input": text,
+                    },
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                data = response.json()
+                embedding = data["data"][0]["embedding"]
+                return embedding
+                
+        except Exception as e:
+            logger.error(f"OpenAI embedding error: {e}")
+            return [0.0] * self._dim
+
+
 class LocalEmbedder:
     """Local embeddings using SentenceTransformers.
 
@@ -103,20 +169,49 @@ class LocalEmbedder:
             LocalEmbedder._warned = True
 
 
+def get_embedder():
+    """Get embedder based on EMBEDDER_TYPE env var.
+    
+    Options:
+        - openai: Use OpenAI API (requires OPENAI_API_KEY)
+        - local: Use SentenceTransformers (requires GPU for speed)
+    
+    Default: openai (if OPENAI_API_KEY is set), otherwise local
+    """
+    embedder_type = os.getenv("EMBEDDER_TYPE", "").lower()
+    
+    if embedder_type == "openai":
+        logger.info("Using OpenAI embedder")
+        return OpenAIEmbedder.get_instance()
+    elif embedder_type == "local":
+        logger.info("Using local SentenceTransformers embedder")
+        return LocalEmbedder.get_instance()
+    else:
+        # Auto-detect: prefer OpenAI if API key is set
+        if os.getenv("OPENAI_API_KEY"):
+            logger.info("Auto-selected OpenAI embedder (OPENAI_API_KEY found)")
+            return OpenAIEmbedder.get_instance()
+        else:
+            logger.info("Auto-selected local embedder (no OPENAI_API_KEY)")
+            return LocalEmbedder.get_instance()
+
+
 class BrainService(brain_pb2_grpc.BrainServiceServicer):
     """
     Unified implementation of the Brain gRPC service.
     """
 
     def __init__(self):
-        dsn = (
-            os.getenv("BRAIN_DATABASE_URL")
-            or os.getenv("DATABASE_URL")
-            or "postgresql://user:pass@localhost:5432/brain"
-        )
+        dsn = os.getenv("BRAIN_DATABASE_URL") or os.getenv("DATABASE_URL")
+        if not dsn:
+            raise RuntimeError(
+                "BRAIN_DATABASE_URL or DATABASE_URL must be set. "
+                "Example: postgresql://brain:brain_dev@localhost:5433/brain"
+            )
         self.storage = PostgresKnowledgeStore(dsn=dsn)
         self.duckdb = DuckDBStore()  # Analytical layer
-        self.embedder = LocalEmbedder.get_instance()
+        self.embedder = get_embedder()
+
 
     async def QueryMemory(self, request, context):
         """Hybrid search (Vector + Text) for Relevant Knowledge."""
@@ -141,7 +236,7 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
                 modality=0,
             )
 
-    async def Memorize(self, request, context):
+    async def Upsert(self, request, context):
         """Primary knowledge ingestion point."""
         from .ingest import IngestionService
 
@@ -417,6 +512,132 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
                 success=False,
                 product_id=0,
                 message=str(e),
+            )
+
+    # =========================================================================
+    # NewsEngine Methods (Pink Pony)
+    # =========================================================================
+
+    async def UpsertNewsItem(self, request, context):
+        """Upsert news item (raw or fact) to Brain storage."""
+        item = request.item
+        item_type = request.item_type or "raw"
+        tenant_id = request.tenant_id
+        
+        try:
+            if item_type == "raw":
+                # Store raw news from harvest
+                item_id = await self.storage.upsert_news_raw(
+                    id=item.id or str(os.urandom(8).hex()),
+                    tenant_id=tenant_id,
+                    url=item.url,
+                    headline=item.headline,
+                    summary=item.summary,
+                    category=item.category,
+                    source_api=item.source_api,
+                    metadata=dict(item.metadata) if item.metadata else {},
+                )
+            else:
+                # Store validated fact from archivist
+                # Generate embedding for dedup/RAG
+                embedding = await self.embedder.embed_async(
+                    f"{item.headline} {item.summary}"
+                )
+                
+                item_id = await self.storage.upsert_news_fact(
+                    id=item.id or str(os.urandom(8).hex()),
+                    tenant_id=tenant_id,
+                    url=item.url,
+                    headline=item.headline,
+                    summary=item.summary,
+                    category=item.category,
+                    embedding=embedding,
+                    metadata=dict(item.metadata) if item.metadata else {},
+                )
+            
+            logger.info(f"Upserted news {item_type}: {item_id}")
+            return brain_pb2.UpsertNewsItemResponse(
+                id=item_id,
+                success=True,
+                message="OK",
+            )
+        except Exception as e:
+            logger.error(f"UpsertNewsItem failed: {e}")
+            return brain_pb2.UpsertNewsItemResponse(
+                id="",
+                success=False,
+                message=str(e),
+            )
+
+    async def GetNewsItems(self, request, context):
+        """Get news items (raw or facts) from Brain."""
+        tenant_id = request.tenant_id
+        item_type = request.item_type or "fact"
+        limit = request.limit or 20
+        since = request.since if request.since else None
+        
+        try:
+            if item_type == "fact":
+                rows = await self.storage.get_news_facts(
+                    tenant_id=tenant_id,
+                    limit=limit,
+                    since=since,
+                )
+            else:
+                # For raw items, we'd need a similar method
+                rows = []
+            
+            items = []
+            for row in rows:
+                items.append(brain_pb2.NewsItem(
+                    id=row.get("id", ""),
+                    tenant_id=tenant_id,
+                    url=row.get("url", ""),
+                    headline=row.get("headline", ""),
+                    summary=row.get("summary", ""),
+                    category=row.get("category", ""),
+                    metadata={k: str(v) for k, v in (row.get("metadata") or {}).items()},
+                ))
+            
+            return brain_pb2.GetNewsItemsResponse(items=items)
+        except Exception as e:
+            logger.error(f"GetNewsItems failed: {e}")
+            return brain_pb2.GetNewsItemsResponse(items=[])
+
+    async def UpsertNewsPost(self, request, context):
+        """Upsert a generated post to Brain storage."""
+        post = request.post
+        tenant_id = request.tenant_id
+        
+        try:
+            # Generate embedding for RAG context
+            embedding = await self.embedder.embed_async(
+                f"{post.headline} {post.content}"
+            )
+            
+            post_id = await self.storage.upsert_news_post(
+                id=post.id or str(os.urandom(8).hex()),
+                tenant_id=tenant_id,
+                fact_id=post.fact_id if post.fact_id else None,
+                agent=post.agent,
+                headline=post.headline,
+                content=post.content,
+                emoji=post.emoji or "📰",
+                fact_url=post.fact_url,
+                embedding=embedding,
+                scheduled_at=post.scheduled_at if post.scheduled_at else None,
+            )
+            
+            logger.info(f"Upserted news post: {post_id}")
+            return brain_pb2.UpsertNewsPostResponse(
+                id=post_id,
+                success=True,
+            )
+        except Exception as e:
+            logger.error(f"UpsertNewsPost failed: {e}")
+            return brain_pb2.UpsertNewsPostResponse(
+                id="",
+                success=False,
             )
 
 

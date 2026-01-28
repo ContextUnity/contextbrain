@@ -437,6 +437,7 @@ dependencies = [
     { name = "click" },
     { name = "contextcore" },
     { name = "duckdb" },
+    { name = "httpx" },
     { name = "joblib" },
     { name = "langchain-community" },
     { name = "langchain-core" },
@@ -448,6 +449,7 @@ dependencies = [
     { name = "rich" },
     { name = "tomli" },
     { name = "typer" },
+    { name = "typing-extensions" },
 ]
 
 [package.optional-dependencies]
@@ -596,6 +598,7 @@ requires-dist = [
     { name = "google-cloud-firestore", marker = "extra == 'storage'", specifier = ">=2.16.0" },
     { name = "google-cloud-storage", marker = "extra == 'storage'", specifier = ">=3.0.0" },
     { name = "google-genai", marker = "extra == 'vertex'", specifier = ">=1.0.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "huggingface-hub", marker = "extra == 'models-hf-hub'", specifier = ">=0.20.0" },
     { name = "joblib", specifier = ">=1.5.3" },
     { name = "joblib", marker = "extra == 'dev'", specifier = ">=1.4.0" },
@@ -631,6 +634,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'hf-transformers'", specifier = ">=4.30.0" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=5.0.0" },
     { name = "typer", specifier = ">=0.12.0" },
+    { name = "typing-extensions", specifier = ">=4.12.0" },
 ]
 provides-extras = ["dev", "vertex", "storage", "integrations", "ingestion", "observability", "models-openai", "models-anthropic", "models-hf-hub", "models", "hf-transformers", "hf-embeddings", "all", "all-experimental"]
 
@@ -669,7 +673,10 @@ requires-dist = [
 provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.14.14" }]
+dev = [
+    { name = "grpcio-tools", specifier = ">=1.76.0" },
+    { name = "ruff", specifier = ">=0.14.14" },
+]
 
 [[package]]
 name = "courlan"

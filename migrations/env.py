@@ -30,9 +30,11 @@ def _get_url() -> str:
     )
     if not url:
         raise ValueError("Database URL not configured. Set POSTGRES_DSN or BRAIN_DATABASE_URL")
-    # Ensure proper driver prefix for SQLAlchemy
+    # Ensure proper driver prefix for SQLAlchemy with psycopg (v3)
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql+psycopg://", 1)
+    elif url.startswith("postgresql://") and "+psycopg" not in url:
+        url = url.replace("postgresql://", "postgresql+psycopg://", 1)
     return url
 
 
