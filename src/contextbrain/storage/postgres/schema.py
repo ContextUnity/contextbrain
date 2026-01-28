@@ -256,7 +256,7 @@ def build_schema_sql(
     include_news_engine: bool = False,
 ) -> Sequence[str]:
     """Build schema SQL statements.
-    
+
     Args:
         vector_dim: Dimension of embedding vectors:
             - 768 for all-mpnet-base-v2 (local)
@@ -264,7 +264,7 @@ def build_schema_sql(
             - 3072 for OpenAI text-embedding-3-large
         include_commerce: Include commerce/taxonomy tables
         include_news_engine: Include Pink Pony news tables
-        
+
     Returns:
         List of SQL statements to execute
     """
@@ -272,13 +272,13 @@ def build_schema_sql(
         raise ValueError("vector_dim must be positive")
 
     statements = _core_schema(vector_dim)
-    
+
     if include_commerce:
         statements.extend(_commerce_schema(vector_dim))
-    
+
     if include_news_engine:
         statements.extend(_news_engine_schema(vector_dim))
-    
+
     return statements
 
 

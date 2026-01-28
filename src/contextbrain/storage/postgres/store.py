@@ -614,7 +614,7 @@ class PostgresKnowledgeStore(KnowledgeStoreInterface):
         async with pool.connection() as conn:
             conn.row_factory = dict_row
             query = """
-                SELECT id, url, headline, summary, category, suggested_agent, 
+                SELECT id, url, headline, summary, category, suggested_agent,
                        significance, atomic_facts, irony_potential, metadata, created_at
                 FROM news_facts
                 WHERE tenant_id = %(tenant_id)s
@@ -679,7 +679,7 @@ class PostgresKnowledgeStore(KnowledgeStoreInterface):
             await conn.execute(
                 """
                 INSERT INTO news_posts (
-                    id, tenant_id, fact_id, agent, headline, content, emoji, 
+                    id, tenant_id, fact_id, agent, headline, content, emoji,
                     fact_url, embedding, scheduled_at, created_at
                 )
                 VALUES (
