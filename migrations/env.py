@@ -4,15 +4,16 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
 
 # Load .env file
 from dotenv import load_dotenv
+from sqlalchemy import engine_from_config, pool
+
 env_file = Path(__file__).parent.parent / ".env"
 if env_file.exists():
     load_dotenv(env_file)
 
-from contextbrain.core.config import get_env
+from contextbrain.core.config import get_env  # noqa: E402
 
 config = context.config
 
@@ -23,9 +24,9 @@ if config.config_file_name is not None:
 def _get_url() -> str:
     # Check multiple possible environment variables
     url = (
-        get_env("POSTGRES_DSN") or 
-        get_env("BRAIN_DATABASE_URL") or 
-        config.get_main_option("sqlalchemy.url")
+        get_env("POSTGRES_DSN")
+        or get_env("BRAIN_DATABASE_URL")
+        or config.get_main_option("sqlalchemy.url")
     )
     if not url:
         raise ValueError("Database URL not configured. Set POSTGRES_DSN or BRAIN_DATABASE_URL")

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from alembic import op
-from contextbrain.storage.postgres.schema import build_schema_sql
 
 from contextbrain.core.config import get_env
+from contextbrain.storage.postgres.schema import build_schema_sql
 
 # revision identifiers, used by Alembic.
 revision = "0001_postgres_knowledge_store"

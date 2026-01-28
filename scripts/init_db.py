@@ -1,8 +1,8 @@
-
 import asyncio
 import os
-from psycopg_pool import AsyncConnectionPool
+
 from dotenv import load_dotenv
+from psycopg_pool import AsyncConnectionPool
 
 # Common sql schema
 SCHEMA_SQL = """
@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS catalog_taxonomy (
 CREATE INDEX IF NOT EXISTS idx_tax_domain ON catalog_taxonomy (tenant_id, domain);
 """
 
+
 async def main():
     load_dotenv()
     dsn = os.getenv("BRAIN_DATABASE_URL") or os.getenv("DATABASE_URL")
@@ -91,6 +92,7 @@ async def main():
             print("Creating tables...")
             await conn.execute(SCHEMA_SQL)
             print("Tables created successfully.")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

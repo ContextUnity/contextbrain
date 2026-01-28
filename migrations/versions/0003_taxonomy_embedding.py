@@ -17,7 +17,7 @@ def upgrade() -> None:
         ALTER TABLE catalog_taxonomy 
         ADD COLUMN IF NOT EXISTS embedding VECTOR({VECTOR_DIM});
     """)
-    
+
     # Create HNSW index for vector similarity search
     op.execute("""
         CREATE INDEX IF NOT EXISTS catalog_taxonomy_embedding_hnsw
@@ -28,4 +28,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS catalog_taxonomy_embedding_hnsw;")
     op.execute("ALTER TABLE catalog_taxonomy DROP COLUMN IF EXISTS embedding;")
-

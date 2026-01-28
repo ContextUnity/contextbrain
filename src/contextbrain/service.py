@@ -1,5 +1,4 @@
 import os
-from concurrent import futures
 
 import grpc
 from contextcore import (
@@ -22,7 +21,11 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
     """
 
     def __init__(self):
-        dsn = os.getenv("BRAIN_DATABASE_URL") or os.getenv("DATABASE_URL") or "postgresql://user:pass@localhost:5432/brain"
+        dsn = (
+            os.getenv("BRAIN_DATABASE_URL")
+            or os.getenv("DATABASE_URL")
+            or "postgresql://user:pass@localhost:5432/brain"
+        )
         self.storage = PostgresKnowledgeStore(dsn=dsn)
         self.duckdb = DuckDBStore()  # Analytical layer
 
@@ -91,8 +94,9 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
         """Sync YAML-to-DB or UI-to-DB taxonomy entries."""
         # Convert Protobuf Struct to proper Python dict (recursive)
         from google.protobuf.json_format import MessageToDict
+
         payload = MessageToDict(request.payload, preserving_proto_field_name=True)
-        
+
         await self.storage.upsert_taxonomy(
             tenant_id=payload.get("tenant_id", "default"),
             domain=payload.get("domain", "general"),
@@ -144,6 +148,8 @@ async def serve():
 
 if __name__ == "__main__":
     import asyncio
+
     from dotenv import load_dotenv
+
     load_dotenv()
     asyncio.run(serve())
