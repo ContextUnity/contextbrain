@@ -13,6 +13,21 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_brain
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
     - uses: actions/checkout@v4
 
@@ -33,7 +48,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync --dev
+        uv sync --group dev
         uv sync --extra storage
 
     - name: Run ruff linting
@@ -42,9 +57,10 @@ jobs:
     - name: Run ruff formatting check
       run: uv run ruff format --check src/contextbrain
 
-    # Tests temporarily disabled until packages stabilize
-    # - name: Run tests
-    #   run: uv run python -m pytest tests/ -v --cov=src/contextbrain --cov-report=xml
+    - name: Run tests
+      env:
+        DATABASE_URL: postgres://test:test@localhost:5432/test_brain
+      run: uv run pytest tests/ -v --tb=short
 
     - name: Run Bandit security scanner
       run: |
