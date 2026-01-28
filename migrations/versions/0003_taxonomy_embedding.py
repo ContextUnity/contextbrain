@@ -14,7 +14,7 @@ VECTOR_DIM = 768
 def upgrade() -> None:
     # Add embedding column using raw SQL (pgvector extension must be enabled)
     op.execute(f"""
-        ALTER TABLE catalog_taxonomy 
+        ALTER TABLE catalog_taxonomy
         ADD COLUMN IF NOT EXISTS embedding VECTOR({VECTOR_DIM});
     """)
 
