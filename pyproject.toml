@@ -1,7 +1,7 @@
 [project]
 name = "contextbrain"
-version = "0.13.0"
-description = "Modular LangGraph-powered agentic brain for multi-source knowledge orchestration and RAG"
+version = "0.14.0"
+description = "Knowledge storage and RAG service with PostgreSQL, vector search, and gRPC API"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [

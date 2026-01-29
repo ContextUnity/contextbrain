@@ -2,7 +2,6 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
-[![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 [![GitHub](https://img.shields.io/badge/GitHub-ContextUnity-black.svg)](https://github.com/ContextUnity/contextbrain)
 [![Docs](https://img.shields.io/badge/docs-contextbrain.dev-green.svg)](https://contextbrain.dev)
 
@@ -10,122 +9,190 @@
 
 ## What is ContextBrain?
 
-ContextBrain is the SmartMemory and Intelligence layer of the ContextUnity ecosystem. It manages vector storage, RAG retrieval pipelines, and the Knowledge Graph. It acts as a **centralized memory service** that provides retrieval capabilities to other services like `ContextRouter`.
+ContextBrain is the **Knowledge Storage and RAG Service** of the [ContextUnity](https://github.com/ContextUnity) ecosystem. It provides:
 
-It can be deployed as a standalone gRPC service or used as a Python library within other applications.
+- **Vector storage** with PostgreSQL + pgvector
+- **Semantic search** with hybrid retrieval (vector + full-text)
+- **Knowledge Graph** with ltree-based taxonomy
+- **Episodic memory** for conversation history
+- **gRPC API** for integration with other ContextUnity services
 
-Unlike simple chatbots, ContextBrain can perform multi-step tasks: analyze queries, search for relevant information, apply logic, and provide structured responses.
+It acts as a **centralized memory backend** that [ContextRouter](https://github.com/ContextUnity/contextrouter) and other services use for retrieval and knowledge management.
 
 ## What is it for?
 
-ContextBrain is designed for developers and companies who want to:
+ContextBrain is designed for:
 
-- **Build complex AI agents** — from simple Q&A systems to sophisticated workflows
-- **Integrate RAG (Retrieval-Augmented Generation)** — search and generate responses based on your data
-- **Create platform-independent solutions** — works with web, Telegram, API, or any other platform
-- **Ensure security and traceability** — every piece of data has a provenance history
+- **RAG backends** — store and retrieve knowledge for LLM applications
+- **Product catalogs** — taxonomy, enrichment, and semantic search
+- **Memory systems** — episodic and entity-based memory for AI agents
+- **News aggregation** — fact storage and deduplication
 
 ### Typical use cases:
-- Corporate chatbots with knowledge bases
-- AI assistants for document analysis
-- Search-based recommendation systems
-- Intelligent agents for business process automation
+- Knowledge base backend for chatbots
+- Product enrichment and classification
+- Semantic search over documents
+- Multi-tenant knowledge storage
 
 ## Key Features
 
-- **🧩 Fully Modular** — swap any component: LLM models, data stores, connectors, agents, and even entire processing graphs
-- **🧠 Intelligent Orchestration** — sophisticated state management and conditional routing based on LangGraph
-- **🛡️ Security and Tracing** — built-in ContextUnit protocol with ContextToken authorization and capability-based access control
-- **📡 Streaming-Oriented** — optimized for real-time and event-driven interfaces
-- **🌍 Flexible Data Sources** — support for various storage solutions: Vertex AI Search, upcoming Postgres and local models support
-- **🔧 Extensible by Design** — build custom agents, processing graphs, and integrations without touching core code
+- **🗄️ Multi-Backend Storage** — PostgreSQL with pgvector (primary), Vertex AI Search, DuckDB for testing
+- **🔍 Hybrid Search** — combines vector similarity with full-text search and reranking
+- **🌳 Taxonomy & Ontology** — ltree-based hierarchical classification with AI-powered categorization
+- **🧠 Memory Types** — semantic (knowledge), episodic (conversations), entity (facts)
+- **📡 gRPC Service** — production-ready service with streaming support
+- **� Multi-Tenant** — tenant isolation with ContextToken authorization
 
-## Modules Overview
+## Architecture
 
-ContextBrain's architecture is built around specialized modules:
+```
+ContextBrain/
+├── service.py          # gRPC service implementation
+├── storage/
+│   ├── postgres/       # PostgreSQL + pgvector (primary)
+│   ├── vertex.py       # Vertex AI Search integration
+│   └── duckdb_store.py # Testing backend
+├── ingestion/
+│   └── rag/            # RAG pipeline, processors, plugins
+└── core/               # Config, registry, interfaces
+```
 
-- **`modules/providers/`** — Data storage implementations (Vertex AI Search, Postgres, GCS)
-- **`modules/connectors/`** — Raw data fetchers (Web search, RSS feeds, APIs, local files)
-- **`modules/ingestion/`** — Data ingestion pipelines (ETL, indexing, RAG processing, deployment)
-- **`modules/retrieval/`** — Search and RAG orchestration (pipelines, reranking, formatting)
-- **`modules/models/`** — LLM and embedding model abstractions (Gemini, GPT, local models)
-- **`modules/protocols/`** — Platform adapters (AG-UI events, A2A/A2UI protocols)
+## gRPC API
 
-## RAG Capabilities
+ContextBrain exposes its functionality via [gRPC](https://grpc.io/) — a high-performance RPC framework. The protocol definitions (`.proto` files) are defined in [ContextCore](https://github.com/ContextUnity/contextcore), the shared kernel of the ContextUnity ecosystem. This ensures type-safe communication between all services.
 
-ContextBrain provides a complete RAG (Retrieval-Augmented Generation) pipeline powered by Vertex AI and Gemini:
+BrainService provides these operations:
 
-### Ingestion Pipeline
-- **Supported Content Types**: Books, articles, videos, Q&A pairs, web content, and custom structured data
-- **Taxonomy & Ontology**: Automatic categorization and relationship mapping using AI-powered taxonomy builders
-- **Knowledge Graph**: Semantic relationships and entity connections between ingested content
-- **Citation System**: Precise source attribution with page numbers, timestamps, and context preservation
-
-### Retrieval & Generation
-- **Multi-stage Retrieval**: Initial search → reranking → context assembly
-- **Citation Formatting**: Rich citations with source verification and confidence scores
-- **Streaming Responses**: Real-time generation with source citations and reasoning traces
-
-### Vertex AI + Gemini Integration
-The RAG system runs on Google Cloud's Vertex AI Search for scalable vector storage and Gemini models for intelligent processing, ensuring enterprise-grade performance and security.
-
-### Quick RAG Implementation
-Build a production-ready RAG system in hours, not months. For custom integrations, enterprise deployments, or specialized RAG solutions, visit [contextbrain.dev](https://contextbrain.dev) to discuss your requirements.
-
-## Roadmap
-
-We're actively developing ContextBrain with focus on expanding data source support and improving developer experience:
-
-### Near-term priorities:
-- **PostgreSQL Integration** — native support for Postgres with pgvector for knowledge storage
-- **Cognee Memory Integration** — advanced memory and knowledge graph capabilities
-- **Local Model Support** — run AI models locally without cloud dependencies
-- **Plugin System & Library** — comprehensive plugin architecture for extending functionality
+| Method | Description |
+|--------|-------------|
+| `QueryMemory` | Hybrid search (vector + text) for knowledge retrieval |
+| `Upsert` | Store knowledge with embeddings |
+| `AddEpisode` | Add conversation turn to episodic memory |
+| `UpsertFact` | Store entity facts (user preferences, etc.) |
+| `UpsertTaxonomy` | Sync taxonomy entries |
+| `GetTaxonomy` | Export taxonomy for a domain |
+| `GetProducts` | Get products for enrichment |
+| `UpdateEnrichment` | Update product enrichment data |
+| `CreateKGRelation` | Create Knowledge Graph relations |
+| `UpsertNewsItem` | Store news facts |
+| `GetNewsItems` | Retrieve news by criteria |
+| `UpsertNewsPost` | Store generated posts |
 
 ## Quick Start
 
-```python
-from contextbrain.cortex import stream_agent
+### As Python Library
 
-# Initialize the shared brain
-async for event in stream_agent(
-    messages=[{"role": "user", "content": "How does RAG work?"}],
-    session_id="session_123",
-    platform="web",
-    style_prompt="Be concise and technical."
-):
-    print(event)
+```python
+from contextbrain.storage.postgres import PostgresKnowledgeStore
+import asyncio
+
+async def main():
+    store = PostgresKnowledgeStore(dsn="postgres://...")
+    await store.connect()
+    
+    # Store knowledge
+    await store.upsert_knowledge(
+        tenant_id="my_app",
+        content="PostgreSQL is a relational database...",
+        source_type="document",
+        embedding=[0.1, 0.2, ...],  # 768 or 1536 dims
+    )
+    
+    # Semantic search
+    results = await store.search(
+        tenant_id="my_app",
+        query_embedding=[0.1, 0.2, ...],
+        limit=10,
+    )
+
+asyncio.run(main())
 ```
 
-For more examples, see the [`examples/`](./examples/) directory.
+### As gRPC Service
 
-## Getting Started
+```python
+import grpc
+from contextcore import brain_pb2, brain_pb2_grpc
 
-1. **Install ContextBrain**:
-   ```bash
-   pip install contextbrain
-   # For full functionality (recommended):
-   pip install contextbrain[vertex,storage,ingestion]
-   # Observability (optional):
-   pip install contextbrain[observability]
-   ```
+channel = grpc.insecure_channel("localhost:50051")
+stub = brain_pb2_grpc.BrainServiceStub(channel)
 
-2. **Configure your data sources** and LLM models
-3. **Build your first agent** using the examples above
-4. **Deploy** to your preferred platform (web, API, Telegram, etc.)
+# Query memory
+response = stub.QueryMemory(brain_pb2.QueryMemoryRequest(
+    tenant_id="my_app",
+    query="How does PostgreSQL work?",
+    top_k=5,
+))
+for result in response.results:
+    print(result.content)
+```
 
-### Notes (Vertex / Gemini)
+## Installation
 
-- **Vertex AI mode**: ContextBrain sets `GOOGLE_GENAI_USE_VERTEXAI=true` by default to avoid the
-  Google GenAI SDK accidentally trying API-key auth. You can override it by exporting
-  `GOOGLE_GENAI_USE_VERTEXAI=false` before importing/starting ContextBrain.
+```bash
+pip install contextbrain
+
+# With PostgreSQL support (recommended):
+pip install contextbrain[storage]
+
+# With Vertex AI support:
+pip install contextbrain[vertex]
+```
+
+## Configuration
+
+```bash
+# Required
+export BRAIN_DATABASE_URL="postgres://user:pass@localhost:5432/brain"
+
+# Embeddings (choose one)
+export OPENAI_API_KEY="sk-..."           # OpenAI embeddings
+export EMBEDDER_TYPE="local"             # or local SentenceTransformers
+
+# Optional: Vertex AI
+export VERTEX_PROJECT_ID="my-project"
+export VERTEX_LOCATION="us-central1"
+```
+
+## Development
+
+### Prerequisites
+- Python 3.13+
+- PostgreSQL 16+ with `vector` and `ltree` extensions
+- `uv` package manager
+
+### Database Setup
+
+```bash
+# Create database
+createdb brain
+
+# Enable extensions
+psql brain -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql brain -c "CREATE EXTENSION IF NOT EXISTS ltree;"
+
+# Initialize schema
+uv run python scripts/init_db.py
+```
+
+### Running the Service
+
+```bash
+# Start gRPC server on :50051
+uv run python -m contextbrain
+```
+
+### Running Tests
+
+```bash
+uv run pytest tests/ -v
+```
 
 ## Documentation
 
 - [Full Documentation](https://contextbrain.dev) — complete guides and API reference
 - [Technical Reference](./contextbrain-fulldoc.md) — architecture deep-dive
-- [Examples Directory](./examples/) — working code samples
-- [Contributing Guide](./CONTRIBUTING.md) — how to contribute to the project
+- [Proto Definitions](../contextcore/protos/brain.proto) — gRPC contract
 
 ## ContextUnity Ecosystem
 
@@ -136,43 +203,6 @@ ContextBrain is part of the [ContextUnity](https://github.com/ContextUnity) plat
 | **ContextCore** | Shared types and gRPC contracts | [contextcore.dev](https://contextcore.dev) |
 | **ContextRouter** | AI agent orchestration | [contextrouter.dev](https://contextrouter.dev) |
 | **ContextWorker** | Background task execution | [contextworker.dev](https://contextworker.dev) |
-| **ContextCommerce** | E-commerce platform | [contextcommerce.dev](https://contextcommerce.dev) |
-
-## Contributing
-
-We welcome contributions! ContextBrain maintains strict coding standards with emphasis on:
-
-- **Security First** — All contributions undergo security review and automated scanning
-- **Code Quality** — Comprehensive linting, type checking, and automated testing
-- **Clean Architecture** — Clear separation between business logic, infrastructure, and data layers
-- **Type Safety** — Strict typing throughout the codebase with mypy validation
-
-See our [Contributing Guide](./CONTRIBUTING.md) for detailed guidelines and current development priorities.
-
-## Development
-
-### Prerequisites
-- Python 3.13+
-- PostgreSQL with `vector` and `ltree` extensions
-- `uv` package manager
-
-### Database Setup
-ContextBrain uses PostgreSQL for knowledge storage.
-1. Create a `.env` file with `BRAIN_DATABASE_URL` (see `.env.example`).
-2. Initialize schema:
-   ```bash
-   uv run python scripts/init_db.py
-   ```
-3. Access database shell:
-   ```bash
-   mise run db_shell
-   ```
-
-### Running the Service
-```bash
-# Start the gRPC server
-uv run python -m contextbrain
-```
 
 ## License
 

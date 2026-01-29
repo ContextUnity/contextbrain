@@ -136,3 +136,76 @@ error_registry.register("MODEL_ERROR", ModelError)
 error_registry.register("INGESTION_ERROR", IngestionError)
 error_registry.register("GRAPH_BUILDER_ERROR", GraphBuilderError)
 error_registry.register("TRANSFORMER_ERROR", TransformerError)
+
+
+# ---- gRPC Error Handling Utilities ------------------------------------------
+
+
+def get_grpc_status_code(error: ContextbrainError) -> int:
+    """Map ContextbrainError to gRPC status code.
+
+    Returns grpc.StatusCode value (int) for the given error type.
+    Import grpc locally to avoid dependency at module level.
+    """
+    import grpc
+
+    error_to_status = {
+        "CONFIGURATION_ERROR": grpc.StatusCode.FAILED_PRECONDITION,
+        "SECURITY_ERROR": grpc.StatusCode.PERMISSION_DENIED,
+        "RETRIEVAL_ERROR": grpc.StatusCode.NOT_FOUND,
+        "PROVIDER_ERROR": grpc.StatusCode.UNAVAILABLE,
+        "STORAGE_ERROR": grpc.StatusCode.UNAVAILABLE,
+        "DB_CONNECTION_ERROR": grpc.StatusCode.UNAVAILABLE,
+        "CONNECTOR_ERROR": grpc.StatusCode.UNAVAILABLE,
+        "MODEL_ERROR": grpc.StatusCode.INTERNAL,
+        "INGESTION_ERROR": grpc.StatusCode.INVALID_ARGUMENT,
+        "TRANSFORMER_ERROR": grpc.StatusCode.INVALID_ARGUMENT,
+    }
+    return error_to_status.get(error.code, grpc.StatusCode.INTERNAL)
+
+
+def grpc_error_handler(method):
+    """Decorator for gRPC service methods with proper error handling.
+
+    Catches ContextbrainError and sets appropriate gRPC status codes.
+    Logs errors and ensures consistent error response format.
+
+    Usage:
+        @grpc_error_handler
+        async def MyMethod(self, request, context):
+            ...
+    """
+    import functools
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    @functools.wraps(method)
+    async def wrapper(self, request, context):
+        try:
+            return await method(self, request, context)
+        except ContextbrainError as e:
+            import grpc
+
+            status_code = get_grpc_status_code(e)
+            error_message = f"[{e.code}] {e.message}"
+
+            logger.error(
+                f"{method.__name__} failed: {error_message}",
+                extra={
+                    "error_code": e.code,
+                    "error_details": e.details,
+                },
+            )
+
+            # Set trailing metadata with error code for clients
+            context.set_trailing_metadata([("error-code", e.code)])
+            context.abort(status_code, error_message)
+
+        except Exception as e:
+            import grpc
+
+            logger.exception(f"{method.__name__} unexpected error: {e}")
+            context.abort(grpc.StatusCode.INTERNAL, f"Internal error: {type(e).__name__}")
+
+    return wrapper
