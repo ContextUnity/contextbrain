@@ -10,6 +10,7 @@ from contextcore import (
     setup_logging,
 )
 
+from .core.exceptions import grpc_error_handler, grpc_stream_error_handler
 from .storage.duckdb_store import DuckDBStore
 from .storage.postgres.store import PostgresKnowledgeStore
 
@@ -213,6 +214,7 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
         self.duckdb = DuckDBStore()  # Analytical layer
         self.embedder = get_embedder()
 
+    @grpc_stream_error_handler
     async def QueryMemory(self, request, context):
         """Hybrid search (Vector + Text) for Relevant Knowledge."""
         query_text = request.payload.get("content", "")
@@ -291,6 +293,7 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
         )
         return request
 
+    @grpc_stream_error_handler
     async def GetTaxonomy(self, request, context):
         """Export taxonomy from DB back to logic/file layer."""
         domain = request.payload.get("domain")
@@ -324,6 +327,7 @@ class BrainService(brain_pb2_grpc.BrainServiceServicer):
     # Commerce / Gardener Methods
     # =========================================================================
 
+    @grpc_error_handler
     async def Search(self, request, context):
         """Semantic/Hybrid search implementation."""
         # Use real embeddings

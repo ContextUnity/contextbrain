@@ -167,6 +167,36 @@ async for node in client.graph_search(["entity:jacket"], depth=2):
     print(node.relation, node.target)
 ```
 
+### Error Handling
+
+Brain uses structured error codes for gRPC responses:
+
+| Error Code | gRPC Status | Description |
+|------------|-------------|-------------|
+| `SCHEMA_MISMATCH` | `FAILED_PRECONDITION` | Database schema doesn't match expected |
+| `DB_QUERY_ERROR` | `UNAVAILABLE` | Query execution failed |
+| `DB_CONNECTION_ERROR` | `UNAVAILABLE` | Cannot connect to database |
+| `RETRIEVAL_ERROR` | `NOT_FOUND` | No results for query |
+| `VALIDATION_ERROR` | `INVALID_ARGUMENT` | Invalid request parameters |
+
+#### Using Error Decorators
+
+```python
+from contextbrain.core.exceptions import grpc_error_handler, grpc_stream_error_handler
+
+# For unary methods
+@grpc_error_handler
+async def Search(self, request, context):
+    results = await self.store.search(request.query)
+    return SearchResponse(results=results)
+
+# For streaming methods
+@grpc_stream_error_handler
+async def StreamSearch(self, request, context):
+    async for result in self.store.stream_search(request.query):
+        yield result
+```
+
 ---
 
 ## Ingestion Pipeline

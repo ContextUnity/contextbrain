@@ -396,7 +396,7 @@ wheels = [
 
 [[package]]
 name = "contextbrain"
-version = "0.13.0"
+version = "0.13.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -616,7 +616,7 @@ dev = [
 
 [[package]]
 name = "contextcore"
-version = "0.2.0"
+version = "0.2.1"
 source = { directory = "../contextcore" }
 dependencies = [
     { name = "grpcio" },

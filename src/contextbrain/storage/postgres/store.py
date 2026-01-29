@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Iterable, List, Optional
 
+from psycopg import errors as psycopg_errors
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 from psycopg_pool import AsyncConnectionPool
 
+from contextbrain.core.exceptions import StorageError
+
 from .models import GraphEdge, GraphNode, KnowledgeStoreInterface, SearchResult, TaxonomyPath
+
+logger = logging.getLogger(__name__)
 
 
 def _format_vector(vec: List[float]) -> str:
@@ -403,7 +409,20 @@ class PostgresKnowledgeStore(KnowledgeStoreInterface):
     async def _fetch_scores(
         self, *, conn, sql: sql.Composed, params: list, score_key: str
     ) -> dict[str, float]:
-        rows = await conn.execute(sql, params)
+        try:
+            rows = await conn.execute(sql, params)
+        except psycopg_errors.UndefinedColumn as e:
+            # Schema mismatch - likely missing column/index
+            column_info = str(e).split("column ")[-1].split()[0].strip('"') if "column " in str(e) else "unknown"
+            logger.error(f"Database schema error: missing column '{column_info}'. Run migrations.")
+            raise StorageError(
+                f"Missing database column: {column_info}. Please run migrations.",
+                code="SCHEMA_MISMATCH",
+            ) from e
+        except psycopg_errors.DatabaseError as e:
+            logger.error(f"Database error during search: {e}")
+            raise StorageError(f"Database query failed: {e}", code="DB_QUERY_ERROR") from e
+
         out: dict[str, float] = {}
         async for row in rows:
             rid = str(row["id"])

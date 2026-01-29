@@ -155,6 +155,8 @@ def get_grpc_status_code(error: ContextbrainError) -> int:
         "RETRIEVAL_ERROR": grpc.StatusCode.NOT_FOUND,
         "PROVIDER_ERROR": grpc.StatusCode.UNAVAILABLE,
         "STORAGE_ERROR": grpc.StatusCode.UNAVAILABLE,
+        "SCHEMA_MISMATCH": grpc.StatusCode.FAILED_PRECONDITION,
+        "DB_QUERY_ERROR": grpc.StatusCode.UNAVAILABLE,
         "DB_CONNECTION_ERROR": grpc.StatusCode.UNAVAILABLE,
         "CONNECTOR_ERROR": grpc.StatusCode.UNAVAILABLE,
         "MODEL_ERROR": grpc.StatusCode.INTERNAL,
@@ -199,6 +201,54 @@ def grpc_error_handler(method):
             )
 
             # Set trailing metadata with error code for clients
+            context.set_trailing_metadata([("error-code", e.code)])
+            context.abort(status_code, error_message)
+
+        except Exception as e:
+            import grpc
+
+            logger.exception(f"{method.__name__} unexpected error: {e}")
+            context.abort(grpc.StatusCode.INTERNAL, f"Internal error: {type(e).__name__}")
+
+    return wrapper
+
+
+def grpc_stream_error_handler(method):
+    """Decorator for streaming gRPC service methods with proper error handling.
+
+    Works with async generator methods that use 'yield'.
+    Catches ContextbrainError and sets appropriate gRPC status codes.
+
+    Usage:
+        @grpc_stream_error_handler
+        async def MyStreamingMethod(self, request, context):
+            yield item1
+            yield item2
+    """
+    import functools
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    @functools.wraps(method)
+    async def wrapper(self, request, context):
+        try:
+            async for item in method(self, request, context):
+                yield item
+        except ContextbrainError as e:
+            import grpc
+
+            status_code = get_grpc_status_code(e)
+            error_message = f"[{e.code}] {e.message}"
+
+            logger.error(
+                f"{method.__name__} failed: {error_message}",
+                extra={
+                    "error_code": e.code,
+                    "error_details": e.details,
+                },
+            )
+
             context.set_trailing_metadata([("error-code", e.code)])
             context.abort(status_code, error_message)
 
