@@ -47,14 +47,32 @@ ContextBrain is designed for:
 
 ```
 ContextBrain/
-├── service.py          # gRPC service implementation
+├── service/                    # gRPC service (modular)
+│   ├── server.py               # Server setup
+│   ├── brain_service.py        # Main service class
+│   ├── commerce_service.py     # Commerce operations
+│   ├── embedders.py            # Embedding providers
+│   └── handlers/               # Domain-specific handlers
+│       ├── knowledge.py        # Knowledge management
+│       ├── memory.py           # Episodic memory
+│       ├── taxonomy.py         # Taxonomy operations
+│       ├── commerce.py         # Commerce handlers
+│       └── news.py             # News engine handlers
 ├── storage/
-│   ├── postgres/       # PostgreSQL + pgvector (primary)
-│   ├── vertex.py       # Vertex AI Search integration
-│   └── duckdb_store.py # Testing backend
+│   ├── postgres/               # PostgreSQL + pgvector (primary)
+│   │   ├── store/              # Modular store (mixin pattern)
+│   │   │   ├── base.py         # Base connection handling
+│   │   │   ├── search.py       # Vector search operations
+│   │   │   ├── graph.py        # Graph CRUD operations
+│   │   │   ├── episodes.py     # Episodic memory
+│   │   │   └── taxonomy.py     # Taxonomy operations
+│   │   ├── news.py             # News post storage
+│   │   └── schema.py           # Database schema
+│   └── duckdb_store.py         # Testing backend
+├── payloads.py                 # Pydantic validation models
 ├── ingestion/
-│   └── rag/            # RAG pipeline, processors, plugins
-└── core/               # Config, registry, interfaces
+│   └── rag/                    # RAG pipeline, processors
+└── core/                       # Config, registry, interfaces
 ```
 
 ## gRPC API

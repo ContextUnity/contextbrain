@@ -27,24 +27,35 @@ ContextBrain acts as the centralized memory for the ContextUnity ecosystem. It s
 │                              ContextBrain                                   │
 ├────────────────────────────────────────────────────────────────────────────┤
 │                                                                            │
-│  storage/                         core/                                    │
-│  ├── postgres/                    ├── config.py                           │
-│  │   ├── schema.py                ├── types.py                            │
-│  │   ├── store.py                 └── utils.py                            │
-│  │   └── migrations/                                                       │
-│  │                                ingestion/                               │
-│  └── duckdb/                      ├── pipeline.py                         │
-│      └── store.py                 ├── transformers/                       │
-│                                   │   ├── pdf.py                          │
-│  modules/                         │   ├── web.py                          │
-│  └── embeddings/                  │   └── structured.py                   │
-│      └── vertex.py                └── loaders/                            │
-│                                       ├── file.py                          │
-│  service.py  ──────────────────────▶  └── api.py                          │
-│  (gRPC Server)                                                             │
+│  service/                        storage/postgres/                         │
+│  ├── server.py        ────────▶  ├── store/           (mixin pattern)     │
+│  ├── brain_service.py            │   ├── base.py      (connection)        │
+│  ├── commerce_service.py         │   ├── search.py    (vector search)     │
+│  ├── embedders.py                │   ├── graph.py     (CRUD)              │
+│  └── handlers/                   │   ├── episodes.py  (memory)            │
+│      ├── knowledge.py            │   └── taxonomy.py  (categories)        │
+│      ├── memory.py               ├── news.py          (news posts)        │
+│      ├── taxonomy.py             └── schema.py                            │
+│      ├── commerce.py                                                       │
+│      └── news.py                 ingestion/                                │
+│                                  ├── pipeline.py                          │
+│  payloads.py                     ├── transformers/                        │
+│  (Pydantic validation)           └── loaders/                             │
+│                                                                            │
+│  core/                                                                     │
+│  ├── config.py                                                            │
+│  ├── types.py                                                             │
+│  └── exceptions.py                                                        │
 │                                                                            │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Modular Design (400-Line Code Scale)
+
+All modules follow the 400-Line Code Scale standard:
+- **service/**: Split from monolithic service.py into focused handlers
+- **store/**: Uses mixin pattern for composable database operations
+- **payloads.py**: Server-side Pydantic validation for all gRPC requests
 
 ---
 
@@ -356,9 +367,16 @@ uv run pytest --cov=contextbrain
 
 | File | Purpose |
 |------|---------|
+| `service/server.py` | gRPC server setup |
+| `service/brain_service.py` | Main BrainService class |
+| `service/handlers/knowledge.py` | Knowledge management handlers |
+| `service/handlers/news.py` | News engine handlers |
+| `storage/postgres/store/` | Modular store (mixin pattern) |
+| `storage/postgres/store/search.py` | Vector search operations |
+| `storage/postgres/store/graph.py` | Graph CRUD operations |
+| `storage/postgres/news.py` | News post storage |
 | `storage/postgres/schema.py` | Database table definitions |
-| `storage/postgres/store.py` | Storage operations |
-| `service.py` | gRPC server implementation |
+| `payloads.py` | Pydantic validation models |
 | `ingestion/pipeline.py` | ETL orchestration |
 | `core/config.py` | Configuration management |
 
