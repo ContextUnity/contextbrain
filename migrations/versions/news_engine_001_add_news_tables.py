@@ -1,4 +1,4 @@
-"""Add news_engine tables for Pink Pony
+"""Add news_engine tables for news pipeline
 
 Revision ID: news_engine_001
 Revises: 

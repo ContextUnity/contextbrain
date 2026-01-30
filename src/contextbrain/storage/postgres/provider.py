@@ -14,8 +14,7 @@ from contextbrain.core.types import coerce_struct_data
 
 # NOTE: Router-specific logic (model_registry, get_rag_retrieval_settings) removed.
 # Brain should use a simpler embedding interface when implemented.
-from .models import GraphNode
-from .store import PostgresKnowledgeStore
+from .store import GraphNode, PostgresKnowledgeStore
 
 
 def _flatten_keywords(metadata: dict[str, Any]) -> str | None:

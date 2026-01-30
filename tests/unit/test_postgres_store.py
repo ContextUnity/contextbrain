@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from contextbrain.storage.postgres.models import TaxonomyPath
-from contextbrain.storage.postgres.store import PostgresKnowledgeStore
+from contextbrain.storage.postgres import PostgresKnowledgeStore, TaxonomyPath
 
 
 def _store() -> PostgresKnowledgeStore:
@@ -26,13 +25,7 @@ def test_build_scope_filters_basic():
 def test_fuse_results_weighted_handles_missing_scores():
     store = _store()
     ranked = store._fuse_results(
-        vector_hits={"a": 0.9},
-        text_hits={"b": 0.8},
-        fusion="weighted",
-        rrf_k=60,
-        vector_weight=0.8,
-        text_weight=0.2,
-        limit=2,
+        {"a": 0.9}, {"b": 0.8}, "weighted", 60, 0.8, 0.2, 2
     )
     ids = [rid for rid, _ in ranked]
     assert set(ids) == {"a", "b"}
@@ -41,13 +34,7 @@ def test_fuse_results_weighted_handles_missing_scores():
 def test_fuse_results_rrf_is_deterministic():
     store = _store()
     ranked = store._fuse_results(
-        vector_hits={"a": 0.9, "b": 0.5},
-        text_hits={"b": 0.9, "a": 0.2},
-        fusion="rrf",
-        rrf_k=10,
-        vector_weight=0.8,
-        text_weight=0.2,
-        limit=2,
+        {"a": 0.9, "b": 0.5}, {"b": 0.9, "a": 0.2}, "rrf", 10, 0.8, 0.2, 2
     )
     ids = [rid for rid, _ in ranked]
     assert set(ids) == {"a", "b"}

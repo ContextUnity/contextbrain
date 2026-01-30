@@ -3,7 +3,7 @@
 Modules:
 - core: Knowledge nodes, edges, aliases, episodes, user_facts (always included)
 - commerce: Dealer products, taxonomy (for e-commerce)
-- news_engine: Raw news, facts, posts (for Pink Pony)
+- news_engine: Raw news, facts, posts (for news pipeline)
 """
 
 from __future__ import annotations
@@ -172,7 +172,7 @@ def _commerce_schema(vector_dim: int) -> List[str]:
 
 
 def _news_engine_schema(vector_dim: int) -> List[str]:
-    """NewsEngine tables - for Pink Pony news pipeline."""
+    """NewsEngine tables - for news pipeline news pipeline."""
     return [
         # Raw news items (direct from harvest)
         """
@@ -242,6 +242,8 @@ def _news_engine_schema(vector_dim: int) -> List[str]:
         "CREATE INDEX IF NOT EXISTS news_posts_tenant_idx ON news_posts (tenant_id);",
         "CREATE INDEX IF NOT EXISTS news_posts_scheduled_idx ON news_posts (scheduled_at);",
         "CREATE INDEX IF NOT EXISTS news_posts_published_idx ON news_posts (published_at);",
+        # Unique constraint for deduplication by fact_url
+        "ALTER TABLE news_posts ADD CONSTRAINT IF NOT EXISTS news_posts_tenant_fact_url_uq UNIQUE (tenant_id, fact_url);",
         """
         CREATE INDEX IF NOT EXISTS news_posts_embedding_hnsw
           ON news_posts USING hnsw (embedding vector_cosine_ops);
@@ -263,7 +265,7 @@ def build_schema_sql(
             - 1536 for OpenAI text-embedding-3-small
             - 3072 for OpenAI text-embedding-3-large
         include_commerce: Include commerce/taxonomy tables
-        include_news_engine: Include Pink Pony news tables
+        include_news_engine: Include news pipeline news tables
 
     Returns:
         List of SQL statements to execute

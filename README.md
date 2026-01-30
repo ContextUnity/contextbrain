@@ -95,7 +95,7 @@ async def main():
         tenant_id="my_app",
         content="PostgreSQL is a relational database...",
         source_type="document",
-        embedding=[0.1, 0.2, ...],  # 768 or 1536 dims
+        embedding=[0.1, 0.2, ...],  # 1536 dims (OpenAI) or 768 (local)
     )
     
     # Semantic search
@@ -146,13 +146,24 @@ pip install contextbrain[vertex]
 export BRAIN_DATABASE_URL="postgres://user:pass@localhost:5432/brain"
 
 # Embeddings (choose one)
-export OPENAI_API_KEY="sk-..."           # OpenAI embeddings
-export EMBEDDER_TYPE="local"             # or local SentenceTransformers
+export EMBEDDER_TYPE="openai"            # OpenAI text-embedding-3-small (1536 dims)
+export EMBEDDER_TYPE="local"             # Local SentenceTransformers (768 dims)
+# If not set: auto-selects OpenAI if OPENAI_API_KEY exists, otherwise local
+
+export OPENAI_API_KEY="sk-..."           # Required for OpenAI embeddings
+
+# Optional: Custom OpenAI model
+export OPENAI_EMBEDDING_MODEL="text-embedding-3-large"  # 3072 dims
 
 # Optional: Vertex AI
 export VERTEX_PROJECT_ID="my-project"
 export VERTEX_LOCATION="us-central1"
 ```
+
+:::note
+Database schema must match embedding dimensions (1536 for OpenAI, 768 for local).
+Run `uv run alembic upgrade head` after changing embedding provider.
+:::
 
 ## Development
 

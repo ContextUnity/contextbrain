@@ -11,8 +11,7 @@ from typing import Any
 from psycopg_pool import AsyncConnectionPool
 
 from contextbrain.core import get_core_config
-from contextbrain.modules.providers.storage.postgres.models import GraphEdge, GraphNode
-from contextbrain.modules.providers.storage.postgres.store import PostgresKnowledgeStore
+from contextbrain.storage.postgres import GraphEdge, GraphNode, PostgresKnowledgeStore
 
 from ..config import get_assets_paths
 from ..settings import RagIngestionConfig
