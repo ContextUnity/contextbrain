@@ -184,6 +184,22 @@ class NewsStore:
             )
             return await result.fetchall()
 
+    async def check_url_exists(self, *, tenant_id: str, fact_url: str) -> bool:
+        """Check if a news post with this URL already exists."""
+        pool = await self._get_pool()
+        async with pool.connection() as conn:
+            result = await conn.execute(
+                """
+                SELECT 1 FROM news_posts 
+                WHERE tenant_id = %(tenant_id)s AND fact_url = %(fact_url)s
+                LIMIT 1
+            """,
+                {"tenant_id": tenant_id, "fact_url": fact_url},
+            )
+            row = await result.fetchone()
+            return row is not None
+
+
     async def upsert_post(
         self,
         *,

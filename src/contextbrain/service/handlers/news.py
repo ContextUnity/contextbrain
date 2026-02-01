@@ -5,7 +5,12 @@ from __future__ import annotations
 from contextcore import get_context_unit_logger
 
 from ...core.exceptions import grpc_error_handler, grpc_stream_error_handler
-from ...payloads import GetNewsItemsPayload, UpsertNewsItemPayload, UpsertNewsPostPayload
+from ...payloads import (
+    CheckNewsPostExistsPayload,
+    GetNewsItemsPayload,
+    UpsertNewsItemPayload,
+    UpsertNewsPostPayload,
+)
 from ..helpers import make_response, parse_unit
 
 logger = get_context_unit_logger(__name__)
@@ -128,4 +133,32 @@ class NewsHandlersMixin:
             )
 
 
+    @grpc_error_handler
+    async def CheckNewsPostExists(self, request, context):
+        """Check if a news post with given URL already exists."""
+        unit = parse_unit(request)
+        params = CheckNewsPostExistsPayload(**unit.payload)
+
+        try:
+            exists = await self.news_store.check_url_exists(
+                tenant_id=params.tenant_id,
+                fact_url=params.fact_url,
+            )
+
+            logger.debug(f"CheckNewsPostExists: {params.fact_url} -> {exists}")
+            return make_response(
+                payload={"exists": exists},
+                trace_id=str(unit.trace_id),
+                provenance=list(unit.provenance) + ["brain:check_news_post_exists"],
+            )
+        except Exception as e:
+            logger.error(f"CheckNewsPostExists failed: {e}")
+            return make_response(
+                payload={"exists": False},
+                trace_id=str(unit.trace_id),
+                provenance=list(unit.provenance) + ["brain:check_news_post_exists:error"],
+            )
+
+
 __all__ = ["NewsHandlersMixin"]
+

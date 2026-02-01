@@ -109,6 +109,14 @@ class UpsertNewsPostPayload(BaseModel):
     scheduled_at: Optional[str] = None
 
 
+class CheckNewsPostExistsPayload(BaseModel):
+    """Payload for CheckNewsPostExists RPC."""
+
+    tenant_id: str
+    fact_url: str
+
+
+
 # =====================================================
 # Episodic & Entity Memory
 # =====================================================
