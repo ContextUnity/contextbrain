@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from contextcore import get_context_unit_logger
+from contextcore.exceptions import grpc_error_handler, grpc_stream_error_handler
 
-from ...core.exceptions import grpc_error_handler, grpc_stream_error_handler
 from ...payloads import GetTaxonomyPayload, UpsertTaxonomyPayload
 from ..helpers import make_response, parse_unit
 
@@ -30,8 +30,8 @@ class TaxonomyHandlersMixin:
         )
         return make_response(
             payload={"success": True},
-            trace_id=str(unit.trace_id),
-            provenance=list(unit.provenance) + ["brain:upsert_taxonomy"],
+            parent_unit=unit,
+            provenance=["brain:upsert_taxonomy"],
         )
 
     @grpc_stream_error_handler
@@ -53,8 +53,8 @@ class TaxonomyHandlersMixin:
                         "keywords": list(tax["keywords"]),
                         "metadata": dict(tax["metadata"]),
                     },
-                    trace_id=str(unit.trace_id),
-                    provenance=list(unit.provenance) + ["brain:get_taxonomy"],
+                    parent_unit=unit,
+                    provenance=["brain:get_taxonomy"],
                 )
 
 

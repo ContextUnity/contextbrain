@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Iterable, List
 
+from contextcore.exceptions import StorageError
 from psycopg import errors as pg_errors
 from psycopg import sql
 from psycopg.rows import dict_row
-
-from contextbrain.core.exceptions import StorageError
 
 from ..models import GraphNode, SearchResult, TaxonomyPath
 from .helpers import vec
@@ -41,8 +40,7 @@ class SearchMixin:
         if not tenant_id or candidate_k <= 0 or limit <= 0:
             return []
 
-        pool = await self._get_pool()
-        async with pool.connection() as conn:
+        async with await self.tenant_connection(tenant_id) as conn:
             conn.row_factory = dict_row
 
             where, params = self._build_scope_filters(

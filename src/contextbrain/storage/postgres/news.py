@@ -190,7 +190,7 @@ class NewsStore:
         async with pool.connection() as conn:
             result = await conn.execute(
                 """
-                SELECT 1 FROM news_posts 
+                SELECT 1 FROM news_posts
                 WHERE tenant_id = %(tenant_id)s AND fact_url = %(fact_url)s
                 LIMIT 1
             """,
@@ -198,7 +198,6 @@ class NewsStore:
             )
             row = await result.fetchone()
             return row is not None
-
 
     async def upsert_post(
         self,

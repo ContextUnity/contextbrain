@@ -1,17 +1,19 @@
 """Security configuration for ContextBrain."""
 
+from contextcore.permissions import Permissions
 from pydantic import BaseModel, ConfigDict, Field
-
-from .base import DEFAULT_READ_PERMISSION, DEFAULT_WRITE_PERMISSION
 
 
 class SecurityPoliciesConfig(BaseModel):
-    """Security policies for data access control."""
+    """Security policies for data access control.
+
+    Uses canonical Permissions.* constants from contextcore.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    read_permission: str = DEFAULT_READ_PERMISSION
-    write_permission: str = DEFAULT_WRITE_PERMISSION
+    read_permission: str = Permissions.BRAIN_READ
+    write_permission: str = Permissions.BRAIN_WRITE
 
 
 class SecurityConfig(BaseModel):

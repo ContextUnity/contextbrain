@@ -1,5 +1,6 @@
 """Add embedding to catalog_taxonomy for vector search."""
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "0003_taxonomy_embedding"
@@ -12,13 +13,21 @@ VECTOR_DIM = 768
 
 
 def upgrade() -> None:
-    # Add embedding column using raw SQL (pgvector extension must be enabled)
+    # catalog_taxonomy is created by ContextCommerce — skip if not deployed
+    conn = op.get_bind()
+    table_exists = conn.execute(
+        sa.text("SELECT to_regclass('public.catalog_taxonomy') IS NOT NULL")
+    ).scalar()
+
+    if not table_exists:
+        print("  ⏭  catalog_taxonomy does not exist — skipping 0003")
+        return
+
     op.execute(f"""
         ALTER TABLE catalog_taxonomy
         ADD COLUMN IF NOT EXISTS embedding VECTOR({VECTOR_DIM});
     """)
 
-    # Create HNSW index for vector similarity search
     op.execute("""
         CREATE INDEX IF NOT EXISTS catalog_taxonomy_embedding_hnsw
         ON catalog_taxonomy USING hnsw (embedding vector_cosine_ops);

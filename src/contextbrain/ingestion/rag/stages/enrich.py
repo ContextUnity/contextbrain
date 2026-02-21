@@ -91,7 +91,8 @@ async def enrich_clean_text(
                 payload={
                     "content": item.content,
                     "metadata": dict(item.metadata or {}),
-                }
+                },
+                provenance=["brain:enrich"],
             )
             try:
                 if ner:

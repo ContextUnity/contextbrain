@@ -10,11 +10,13 @@ from .episodes import EpisodesMixin
 from .graph import GraphMixin
 from .search import SearchMixin
 from .taxonomy import TaxonomyMixin
+from .traces import TracesMixin
 
 
 class PostgresKnowledgeStore(
     GraphMixin,
     EpisodesMixin,
+    TracesMixin,
     TaxonomyMixin,
     SearchMixin,
     PostgresStoreBase,

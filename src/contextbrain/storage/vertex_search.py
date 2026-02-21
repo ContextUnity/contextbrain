@@ -12,8 +12,9 @@ import contextlib
 import logging
 import time
 
+from contextcore.exceptions import ProviderError
+
 from contextbrain.core import get_core_config
-from contextbrain.core.exceptions import ProviderError
 from contextbrain.core.models import RetrievedDoc
 from contextbrain.core.types import coerce_struct_data
 

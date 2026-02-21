@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import grpc
 from contextcore import get_context_unit_logger
+from contextcore.exceptions import grpc_error_handler, grpc_stream_error_handler
 
-from ..core.exceptions import grpc_error_handler, grpc_stream_error_handler
 from ..payloads import (
     GetProductsPayload,
     UpdateEnrichmentPayload,
     UpsertDealerProductPayload,
 )
-from .helpers import make_response, parse_unit
+from .helpers import (
+    extract_token_from_context,
+    make_response,
+    parse_unit,
+    validate_token_for_read,
+    validate_token_for_write,
+)
 
 logger = get_context_unit_logger(__name__)
 
@@ -30,6 +36,8 @@ try:
         async def GetProducts(self, request, context):
             """Get products for enrichment by IDs."""
             unit = parse_unit(request)
+            token = extract_token_from_context(context)
+            validate_token_for_read(unit, token, context)
             params = GetProductsPayload(**unit.payload)
 
             if hasattr(self._brain.storage, "get_products_by_ids"):
@@ -48,8 +56,8 @@ try:
                             "params": p.get("params", {}),
                             "enrichment": p.get("enrichment", {}),
                         },
-                        trace_id=str(unit.trace_id),
-                        provenance=list(unit.provenance) + ["commerce:get_products"],
+                        parent_unit=unit,  # Inherit trace_id and extend provenance
+                        provenance=["commerce:get_products"],
                     )
 
         @grpc_error_handler
@@ -86,21 +94,23 @@ try:
                         "product_id": product_id,
                         "message": "OK",
                     },
-                    trace_id=str(unit.trace_id),
-                    provenance=list(unit.provenance) + ["commerce:upsert_dealer"],
+                    parent_unit=unit,  # Inherit trace_id and extend provenance
+                    provenance=["commerce:upsert_dealer"],
                 )
             except Exception as e:
                 logger.error(f"UpsertDealerProduct failed: {e}")
                 return make_response(
                     payload={"success": False, "product_id": 0, "message": str(e)},
-                    trace_id=str(unit.trace_id),
-                    provenance=list(unit.provenance) + ["commerce:upsert_dealer:error"],
+                    parent_unit=unit,  # Inherit trace_id and extend provenance
+                    provenance=["commerce:upsert_dealer:error"],
                 )
 
         @grpc_error_handler
         async def UpdateEnrichment(self, request, context):
             """Update product enrichment data."""
             unit = parse_unit(request)
+            token = extract_token_from_context(context)
+            validate_token_for_write(unit, token, context)
             params = UpdateEnrichmentPayload(**unit.payload)
 
             if hasattr(self._brain.storage, "update_product_enrichment"):
@@ -114,14 +124,14 @@ try:
                 logger.info(f"Updated enrichment for product {params.product_id}")
                 return make_response(
                     payload={"success": True},
-                    trace_id=str(unit.trace_id),
-                    provenance=list(unit.provenance) + ["commerce:update_enrichment"],
+                    parent_unit=unit,  # Inherit trace_id and extend provenance
+                    provenance=["commerce:update_enrichment"],
                 )
 
             return make_response(
                 payload={"success": False},
-                trace_id=str(unit.trace_id),
-                provenance=list(unit.provenance) + ["commerce:update_enrichment:not_supported"],
+                parent_unit=unit,  # Inherit trace_id and extend provenance
+                provenance=["commerce:update_enrichment:not_supported"],
             )
 
         @grpc_error_handler

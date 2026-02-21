@@ -40,13 +40,16 @@ ContextBrain is a **gRPC service** for knowledge storage and retrieval. Key comp
 
 ```
 src/contextbrain/
-├── service.py         # gRPC service implementation (BrainService)
+├── service/           # Modular gRPC service
+│   ├── brain_service.py  # Main service class (mixins)
+│   ├── server.py         # Server entry point
+│   └── handlers/         # Domain request handlers
 ├── storage/           # Storage backends
 │   ├── postgres/      # PostgreSQL + pgvector (primary)
-│   └── vertex.py      # Vertex AI Search integration
-├── ingestion/         # Data ingestion pipelines
-│   └── rag/           # RAG-specific processing
-└── core/              # Config, registry, interfaces
+│   └── duckdb_store.py # Local/testing backend
+├── ingest.py          # Ingestion logic (IngestionService)
+├── payloads.py        # Pydantic models
+└── core/              # Config, security, interfaces
 ```
 
 ## Golden Path: Adding New Functionality

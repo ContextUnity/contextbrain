@@ -34,7 +34,7 @@ class TestShouldSkip:
             ("file.swp", True),
             # Should not skip (normal files)
             ("document.txt", False),
-            ("README.md", False),
+            ("readme.md", False),
             ("data.json", False),
             ("test_file.py", False),
         ],

@@ -7,22 +7,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
-class RagConfig(BaseModel):
-    """RAG datastore selection (compat for retrieval settings).
-
-    Used by `contextbrain.modules.retrieval.rag.settings.resolve_data_store_id`.
-    Values may be provided via TOML or env; env can still override at runtime.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    # blue/green selector or full datastore id
-    db_name: str = ""
-    data_store_id_blue: str = ""
-    data_store_id_green: str = ""
-
-
 ModelSelectionStrategy = Literal["fallback", "parallel", "cost-priority"]
 
 

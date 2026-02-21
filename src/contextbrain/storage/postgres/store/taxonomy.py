@@ -21,8 +21,7 @@ class TaxonomyMixin:
         metadata: dict = None,
     ) -> None:
         """Upsert a taxonomy node."""
-        pool = await self._get_pool()
-        async with pool.connection() as conn:
+        async with await self.tenant_connection(tenant_id) as conn:
             await execute(
                 conn,
                 """
@@ -44,8 +43,7 @@ class TaxonomyMixin:
 
     async def get_all_taxonomy(self, *, tenant_id: str, domain: Optional[str] = None) -> List[dict]:
         """Get all taxonomy nodes."""
-        pool = await self._get_pool()
-        async with pool.connection() as conn:
+        async with await self.tenant_connection(tenant_id) as conn:
             query = "SELECT * FROM catalog_taxonomy WHERE tenant_id = %(tenant_id)s"
             params = {"tenant_id": tenant_id}
             if domain:

@@ -32,12 +32,17 @@ class SearchPayload(BaseModel):
 
 
 class GraphSearchPayload(BaseModel):
-    """Payload for GraphSearch RPC."""
+    """Payload for GraphSearch RPC.
+
+    Structural graph traversal starting from known entity IDs,
+    walking edges up to max_hops.
+    """
 
     tenant_id: str
     entrypoint_ids: list[str]
-    max_hops: int = 2
+    max_hops: int = Field(default=2, ge=1, le=10)
     allowed_relations: list[str] = Field(default_factory=list)
+    max_results: int = Field(default=200, ge=1, le=1000)
 
 
 class CreateKGRelationPayload(BaseModel):
@@ -116,7 +121,6 @@ class CheckNewsPostExistsPayload(BaseModel):
     fact_url: str
 
 
-
 # =====================================================
 # Episodic & Entity Memory
 # =====================================================
@@ -136,10 +140,65 @@ class UpsertFactPayload(BaseModel):
     """Payload for UpsertFact RPC."""
 
     user_id: str
+    tenant_id: str = "default"
     key: str
     value: Any
     confidence: float = 1.0
     source_id: Optional[str] = None
+
+
+class GetRecentEpisodesPayload(BaseModel):
+    """Payload for GetRecentEpisodes RPC."""
+
+    tenant_id: str = "default"
+    user_id: str
+    limit: int = 5
+
+
+class GetUserFactsPayload(BaseModel):
+    """Payload for GetUserFacts RPC."""
+
+    tenant_id: str = "default"
+    user_id: str
+
+
+class RetentionCleanupPayload(BaseModel):
+    """Payload for RetentionCleanup RPC."""
+
+    tenant_id: str = "default"
+    older_than_days: int = 30
+    episode_ids: list[str] | None = None
+
+
+# =====================================================
+# Agent Traces
+# =====================================================
+
+
+class LogTracePayload(BaseModel):
+    """Payload for LogTrace RPC."""
+
+    tenant_id: str
+    agent_id: str
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    graph_name: Optional[str] = None
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    token_usage: dict[str, Any] = Field(default_factory=dict)
+    timing_ms: Optional[int] = None
+    security_flags: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    provenance: list[str] = Field(default_factory=list)
+
+
+class GetTracesPayload(BaseModel):
+    """Payload for GetTraces RPC."""
+
+    tenant_id: str
+    agent_id: Optional[str] = None
+    session_id: Optional[str] = None
+    limit: int = 20
+    since: Optional[str] = None  # ISO datetime
 
 
 # =====================================================

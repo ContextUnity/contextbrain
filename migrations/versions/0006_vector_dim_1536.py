@@ -11,8 +11,8 @@ This migration:
 3. All existing embeddings will be cleared (NULL)
 """
 
+import sqlalchemy as sa
 from alembic import op
-
 
 # revision identifiers
 revision = "0006_vector_dim_1536"
@@ -24,9 +24,15 @@ OLD_DIM = 768
 NEW_DIM = 1536
 
 
+def _table_exists(table_name: str) -> bool:
+    """Check if a table exists using pg_catalog."""
+    conn = op.get_bind()
+    return conn.execute(sa.text(f"SELECT to_regclass('public.{table_name}') IS NOT NULL")).scalar()
+
+
 def upgrade():
     """Recreate vector columns with 1536 dimensions."""
-    
+
     # Tables with embedding columns
     tables_with_embedding = [
         ("knowledge_nodes", "knowledge_nodes_embedding_hnsw"),
@@ -35,18 +41,22 @@ def upgrade():
         ("news_facts", "news_facts_embedding_hnsw"),
         ("news_posts", "news_posts_embedding_hnsw"),
     ]
-    
+
     for table, index_name in tables_with_embedding:
+        if not _table_exists(table):
+            print(f"  ⏭  {table} does not exist — skipping")
+            continue
+
         # Drop index first
         op.execute(f"DROP INDEX IF EXISTS {index_name};")
-        
+
         # Alter column type
         op.execute(f"""
-            ALTER TABLE {table} 
-            ALTER COLUMN embedding TYPE VECTOR({NEW_DIM}) 
+            ALTER TABLE {table}
+            ALTER COLUMN embedding TYPE VECTOR({NEW_DIM})
             USING NULL::VECTOR({NEW_DIM});
         """)
-        
+
         # Recreate index
         op.execute(f"""
             CREATE INDEX IF NOT EXISTS {index_name}
@@ -63,12 +73,12 @@ def downgrade():
         ("news_facts", "news_facts_embedding_hnsw"),
         ("news_posts", "news_posts_embedding_hnsw"),
     ]
-    
+
     for table, index_name in tables_with_embedding:
         op.execute(f"DROP INDEX IF EXISTS {index_name};")
         op.execute(f"""
-            ALTER TABLE {table} 
-            ALTER COLUMN embedding TYPE VECTOR({OLD_DIM}) 
+            ALTER TABLE {table}
+            ALTER COLUMN embedding TYPE VECTOR({OLD_DIM})
             USING NULL::VECTOR({OLD_DIM});
         """)
         op.execute(f"""

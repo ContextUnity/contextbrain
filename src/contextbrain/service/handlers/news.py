@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from contextcore import get_context_unit_logger
+from contextcore.exceptions import grpc_error_handler, grpc_stream_error_handler
 
-from ...core.exceptions import grpc_error_handler, grpc_stream_error_handler
 from ...payloads import (
     CheckNewsPostExistsPayload,
     GetNewsItemsPayload,
@@ -53,15 +53,15 @@ class NewsHandlersMixin:
             logger.info(f"Upserted news {params.item_type}: {item_id}")
             return make_response(
                 payload={"id": item_id, "success": True, "message": "OK"},
-                trace_id=str(unit.trace_id),
-                provenance=list(unit.provenance) + ["brain:upsert_news_item"],
+                parent_unit=unit,
+                provenance=["brain:upsert_news_item"],
             )
         except Exception as e:
             logger.error(f"UpsertNewsItem failed: {e}")
             return make_response(
                 payload={"id": "", "success": False, "message": str(e)},
-                trace_id=str(unit.trace_id),
-                provenance=list(unit.provenance) + ["brain:upsert_news_item:error"],
+                parent_unit=unit,
+                provenance=["brain:upsert_news_item:error"],
             )
 
     @grpc_stream_error_handler
@@ -90,8 +90,8 @@ class NewsHandlersMixin:
                         "category": row.get("category", ""),
                         "metadata": {k: str(v) for k, v in (row.get("metadata") or {}).items()},
                     },
-                    trace_id=str(unit.trace_id),
-                    provenance=list(unit.provenance) + ["brain:get_news_items"],
+                    parent_unit=unit,
+                    provenance=["brain:get_news_items"],
                 )
         except Exception as e:
             logger.error(f"GetNewsItems failed: {e}")
@@ -121,17 +121,16 @@ class NewsHandlersMixin:
             logger.info(f"Upserted news post: {post_id}")
             return make_response(
                 payload={"id": post_id, "success": True},
-                trace_id=str(unit.trace_id),
-                provenance=list(unit.provenance) + ["brain:upsert_news_post"],
+                parent_unit=unit,
+                provenance=["brain:upsert_news_post"],
             )
         except Exception as e:
             logger.error(f"UpsertNewsPost failed: {e}")
             return make_response(
                 payload={"id": "", "success": False},
-                trace_id=str(unit.trace_id),
-                provenance=list(unit.provenance) + ["brain:upsert_news_post:error"],
+                parent_unit=unit,
+                provenance=["brain:upsert_news_post:error"],
             )
-
 
     @grpc_error_handler
     async def CheckNewsPostExists(self, request, context):
@@ -148,17 +147,16 @@ class NewsHandlersMixin:
             logger.debug(f"CheckNewsPostExists: {params.fact_url} -> {exists}")
             return make_response(
                 payload={"exists": exists},
-                trace_id=str(unit.trace_id),
-                provenance=list(unit.provenance) + ["brain:check_news_post_exists"],
+                parent_unit=unit,
+                provenance=["brain:check_news_post_exists"],
             )
         except Exception as e:
             logger.error(f"CheckNewsPostExists failed: {e}")
             return make_response(
                 payload={"exists": False},
-                trace_id=str(unit.trace_id),
-                provenance=list(unit.provenance) + ["brain:check_news_post_exists:error"],
+                parent_unit=unit,
+                provenance=["brain:check_news_post_exists:error"],
             )
 
 
 __all__ = ["NewsHandlersMixin"]
-

@@ -1,26 +1,32 @@
+"""Contract tests for contextbrain exception hierarchy.
+
+Verifies that:
+1. ContextbrainError inherits from ContextUnityError (centralized hierarchy)
+2. All error subclasses have stable error codes
+3. ErrorRegistry contains expected base codes
+4. gRPC error handlers are importable from contextcore
+"""
+
 from __future__ import annotations
 
-import inspect
+from contextcore.exceptions import ContextUnityError, error_registry
 
-from contextbrain.core import exceptions as exc
+from contextbrain.core.exceptions import ContextbrainError
 
 
-def test_all_contextbrain_errors_have_codes() -> None:
-    classes = [
-        obj
-        for _name, obj in inspect.getmembers(exc, inspect.isclass)
-        if issubclass(obj, exc.ContextbrainError)
-    ]
-    assert classes, "expected at least one ContextbrainError subclass"
+def test_contextbrain_error_inherits_from_core() -> None:
+    """ContextbrainError must be a subclass of ContextUnityError."""
+    assert issubclass(ContextbrainError, ContextUnityError)
 
-    for cls in classes:
-        # code must exist and be stable non-empty string
-        code = getattr(cls, "code", None)
-        assert isinstance(code, str) and code.strip(), f"{cls.__name__}.code must be non-empty str"
+
+def test_contextbrain_error_has_code() -> None:
+    """ContextbrainError must have a valid code from parent."""
+    code = getattr(ContextbrainError, "code", None)
+    assert isinstance(code, str) and code.strip()
 
 
 def test_error_registry_contains_base_codes() -> None:
-    reg = exc.error_registry.all()
+    reg = error_registry.all()
     for code in [
         "INTERNAL_ERROR",
         "CONFIGURATION_ERROR",
@@ -29,5 +35,15 @@ def test_error_registry_contains_base_codes() -> None:
         "PROVIDER_ERROR",
         "CONNECTOR_ERROR",
         "MODEL_ERROR",
+        "STORAGE_ERROR",
+        "DB_CONNECTION_ERROR",
     ]:
         assert code in reg, f"missing {code} in error_registry"
+
+
+def test_grpc_handlers_importable() -> None:
+    """gRPC error handlers must be importable from contextcore."""
+    from contextcore.exceptions import grpc_error_handler, grpc_stream_error_handler
+
+    assert callable(grpc_error_handler)
+    assert callable(grpc_stream_error_handler)

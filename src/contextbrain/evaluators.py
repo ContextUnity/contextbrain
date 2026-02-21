@@ -3,6 +3,8 @@ from typing import Dict, List
 
 from pydantic import BaseModel
 
+__all__ = ["MatchResult", "MatchEvaluator"]
+
 
 class MatchResult(BaseModel):
     """

@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict
 
 from contextcore import ContextUnit
+from contextcore.sdk.models import UnitMetrics
 
 from .storage import PostgresKnowledgeStore
 
@@ -19,11 +20,10 @@ class IngestionService:
     4. Store in PostgresKnowledgeStore (pgvector).
     """
 
-    def __init__(
-        self, storage: PostgresKnowledgeStore, project_path: str = "/home/oleksii/Projects/traverse"
-    ):
+    def __init__(self, storage: PostgresKnowledgeStore, project_path: str | None = None):
         """
         Initialize the modular ingestion pipeline.
+        project_path: optional project root for taxonomy; defaults to CONTEXTBRAIN_PROJECT_PATH env.
         """
         self.storage = storage
         from .modules.intelligence.hub import IntelligenceHub
@@ -33,13 +33,25 @@ class IngestionService:
         self.graph = KnowledgeGraphOrchestrator()
 
     async def ingest_document(
-        self, content: Any, metadata: Dict[str, Any], modality: str = "text"
+        self,
+        content: Any,
+        metadata: Dict[str, Any],
+        modality: str = "text",
+        embedder: Any = None,
+        tenant_id: str = "default",
+        source_type: str = "document",
     ) -> str:
         """
         Process and store content based on its modality.
         """
         if modality == "text":
-            return await self._ingest_text(content, metadata)
+            return await self._ingest_text(
+                content,
+                metadata,
+                embedder=embedder,
+                tenant_id=tenant_id,
+                source_type=source_type,
+            )
         elif modality == "image":
             return await self._ingest_binary(content, metadata, "image")
         elif modality == "audio":
@@ -48,7 +60,14 @@ class IngestionService:
             logger.error(f"Unsupported modality: {modality}")
             return "error"
 
-    async def _ingest_text(self, content: str, metadata: Dict[str, Any]) -> str:
+    async def _ingest_text(
+        self,
+        content: str,
+        metadata: Dict[str, Any],
+        embedder: Any = None,
+        tenant_id: str = "default",
+        source_type: str = "document",
+    ) -> str:
         # Enrichment step (The "Smart Brain" part)
         enriched_metadata = await self._enrich_metadata(content, metadata)
 
@@ -57,30 +76,47 @@ class IngestionService:
 
         from .storage.postgres.models import GraphNode
 
+        doc_id = None
         for chunk in chunks:
-            # Placeholder: Embedding generation
-            embedding = [0.1] * 1536
+            # Generate real embeddings if embedder is available
+            if embedder is not None:
+                try:
+                    embedding = await embedder.embed_async(chunk)
+                except Exception as e:
+                    logger.warning("Embedding failed, using placeholder: %s", e)
+                    embedding = [0.1] * 1536
+            else:
+                embedding = [0.1] * 1536
 
             unit = ContextUnit(
                 modality="text",
                 payload={"content": chunk, "metadata": enriched_metadata},
-                metrics={"tokens_used": len(chunk.split())},
+                provenance=["brain:ingest:chunk"],
+                metrics=UnitMetrics(tokens_used=len(chunk.split())),
             )
+
+            # Use deterministic ID from metadata if provided (enables true upsert)
+            doc_id = enriched_metadata.pop("_doc_id", None) or str(unit.unit_id)
 
             # Map ContextUnit to GraphNode for persistence
             node = GraphNode(
-                id=str(unit.unit_id),
+                id=doc_id,
                 content=chunk,
                 embedding=embedding,
                 node_kind="chunk",
+                source_type=source_type,
                 metadata=enriched_metadata,
-                tenant_id="default",
+                tenant_id=tenant_id,
             )
 
-            await self.storage.upsert_graph(nodes=[node], edges=[], tenant_id="default")
+            await self.storage.upsert_graph(
+                nodes=[node],
+                edges=[],
+                tenant_id=tenant_id,
+            )
             await self.graph.add_data(unit, enriched_metadata.get("entities", []))
 
-        return "doc_id_placeholder"
+        return doc_id or "error"
 
     async def _ingest_binary(self, data: bytes, metadata: Dict[str, Any], modality: str) -> str:
         """Stub for binary data ingestion (GCS storage + metadata link)."""
@@ -105,7 +141,9 @@ class IngestionService:
         )
 
         # 1. Resolve Category (via Taxonomy Manager inside Intel)
-        if not enriched.get("category"):
+        # Skip taxonomy matching for non-product content (docs, tool definitions, etc.)
+        skip_types = {"procedural", "documentation"}
+        if not enriched.get("category") and enriched.get("source_type") not in skip_types:
             matched_cat = self.intel.taxonomy.match_category(content)
             if matched_cat:
                 enriched["category"] = matched_cat

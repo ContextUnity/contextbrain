@@ -3,7 +3,5 @@ import asyncio
 from .service import serve
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-
-    load_dotenv()
+    # .env loaded in serve() via Config.load() (single config entry)
     asyncio.run(serve())

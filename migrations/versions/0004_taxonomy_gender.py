@@ -3,6 +3,7 @@
 This migration also merges the news_engine branch.
 """
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers
@@ -13,18 +14,27 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # catalog_taxonomy is created by ContextCommerce — skip if not deployed
+    conn = op.get_bind()
+    table_exists = conn.execute(
+        sa.text("SELECT to_regclass('public.catalog_taxonomy') IS NOT NULL")
+    ).scalar()
+
+    if not table_exists:
+        print("  ⏭  catalog_taxonomy does not exist — skipping 0004")
+        return
+
     # Drop the old constraint and add new one with gender
-    # Support both singular (category) and plural (categories) forms for compatibility
     op.execute("""
-        ALTER TABLE catalog_taxonomy 
+        ALTER TABLE catalog_taxonomy
         DROP CONSTRAINT IF EXISTS catalog_taxonomy_domain_check;
     """)
     op.execute("""
-        ALTER TABLE catalog_taxonomy 
-        ADD CONSTRAINT catalog_taxonomy_domain_check 
+        ALTER TABLE catalog_taxonomy
+        ADD CONSTRAINT catalog_taxonomy_domain_check
         CHECK (domain IN (
             'category', 'categories',
-            'color', 'colors', 
+            'color', 'colors',
             'size', 'sizes',
             'gender', 'genders'
         ));
@@ -33,15 +43,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("""
-        ALTER TABLE catalog_taxonomy 
+        ALTER TABLE catalog_taxonomy
         DROP CONSTRAINT IF EXISTS catalog_taxonomy_domain_check;
     """)
     op.execute("""
-        ALTER TABLE catalog_taxonomy 
-        ADD CONSTRAINT catalog_taxonomy_domain_check 
+        ALTER TABLE catalog_taxonomy
+        ADD CONSTRAINT catalog_taxonomy_domain_check
         CHECK (domain IN (
             'category', 'categories',
-            'color', 'colors', 
+            'color', 'colors',
             'size', 'sizes'
         ));
     """)

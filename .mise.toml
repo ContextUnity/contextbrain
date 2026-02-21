@@ -1,3 +1,7 @@
+# ContextBrain — Semantic Memory Service
+# Knowledge storage, vector search, RAG retrieval, gRPC-native API
+# PostgreSQL + pgvector backend
+
 [tools]
 python = "3.13"
 uv = "latest"
@@ -8,31 +12,59 @@ PYTHON = "$(mise which python)"
 
 [tasks.sync]
 description = "Install all dependencies (dev)"
-run = "uv sync --dev"
+run = "uv sync --group dev"
 
 [tasks.lint]
 description = "Lint + format-check all code (Ruff)"
-run = "uv run ruff check src/ && uv run ruff format --check src/"
+run = "uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/"
 
 [tasks.format]
 description = "Format all code (Ruff)"
-run = "uv run ruff check --fix src/ && uv run ruff format src/"
+run = "uv run ruff check --fix src/ tests/ && uv run ruff format src/ tests/"
 
 [tasks.test]
 description = "Run all tests"
-run = "uv run python -m pytest tests/ -v"
+run = "uv run pytest tests/ -v"
 
 [tasks.test-unit]
 description = "Run unit tests only"
-run = "uv run python -m pytest tests/unit/ -v"
+run = "uv run pytest tests/ -v -m unit"
 
-[tasks.db_shell]
-description = "Connect to PostgreSQL database shell"
-run = "psql $BRAIN_DATABASE_URL"
+[tasks.test-integration]
+description = "Run integration tests (requires PostgreSQL)"
+run = "uv run pytest tests/ -v -m integration"
+
+[tasks.security]
+description = "Run security scan (Bandit)"
+run = "uv run bandit -r src/contextbrain/"
 
 [tasks.check]
 description = "Run all checks (lint + test)"
 run = "mise run lint && mise run test-unit"
+
+# =============================================================================
+# Server Commands
+# =============================================================================
+
+[tasks.serve]
+description = "Start Brain gRPC service (port from BRAIN_PORT env, default 50051)"
+run = "uv run python -m contextbrain"
+
+[tasks.dev]
+description = "Start Brain gRPC service in dev mode"
+run = "uv run python -m contextbrain"
+
+# =============================================================================
+# Database
+# =============================================================================
+
+[tasks.db-shell]
+description = "Connect to PostgreSQL database shell"
+run = "psql $BRAIN_DATABASE_URL"
+
+# =============================================================================
+# Utility
+# =============================================================================
 
 [tasks.clean]
 description = "Clean cache files and build artifacts"
@@ -47,3 +79,7 @@ rm -rf .pytest_cache/ .ruff_cache/ build/ dist/ 2>/dev/null || true
 [tasks.build]
 description = "Build distribution packages"
 run = "uv build"
+
+[tasks.compile-protos]
+description = "Compile protobuf files (runs in contextcore)"
+run = "cd ../contextcore && ./compile_protos.sh"

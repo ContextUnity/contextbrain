@@ -129,10 +129,9 @@ asyncio.run(main())
 ### As gRPC Service
 
 ```python
-import grpc
-from contextcore import brain_pb2, brain_pb2_grpc
+from contextcore import brain_pb2, brain_pb2_grpc, create_channel_sync
 
-channel = grpc.insecure_channel("localhost:50051")
+channel = create_channel_sync("localhost:50051")
 stub = brain_pb2_grpc.BrainServiceStub(channel)
 
 # Query memory
@@ -161,21 +160,24 @@ pip install contextbrain[vertex]
 
 ```bash
 # Required
-export BRAIN_DATABASE_URL="postgres://user:pass@localhost:5432/brain"
+export BRAIN_DATABASE_URL="postgres://user:pass@localhost:5432/brain"  # or DATABASE_URL
+
+# Server Configuration
+export BRAIN_PORT=50051
+export BRAIN_SCHEMA="brain"
+export BRAIN_TENANTS="tenant1,tenant2"   # Comma-separated list of allowed tenants
+export BRAIN_NEWS_ENGINE=true            # Enable news engine tables
 
 # Embeddings (choose one)
 export EMBEDDER_TYPE="openai"            # OpenAI text-embedding-3-small (1536 dims)
 export EMBEDDER_TYPE="local"             # Local SentenceTransformers (768 dims)
 # If not set: auto-selects OpenAI if OPENAI_API_KEY exists, otherwise local
 
+export PGVECTOR_DIM=1536                 # Must match embedder! (1536 for OpenAI, 768 for local)
 export OPENAI_API_KEY="sk-..."           # Required for OpenAI embeddings
 
 # Optional: Custom OpenAI model
 export OPENAI_EMBEDDING_MODEL="text-embedding-3-large"  # 3072 dims
-
-# Optional: Vertex AI
-export VERTEX_PROJECT_ID="my-project"
-export VERTEX_LOCATION="us-central1"
 ```
 
 :::note
@@ -223,15 +225,59 @@ uv run pytest tests/ -v
 - [Technical Reference](./contextbrain-fulldoc.md) — architecture deep-dive
 - [Proto Definitions](../contextcore/protos/brain.proto) — gRPC contract
 
+## Testing & docs
+
+- [Integration tests](../tests/integration/README.md) — cross-service tests (token/trace propagation, etc.)
+- Doc site: [contextbrain.dev](https://contextbrain.dev)
+
+## Security
+
+ContextBrain enforces multi-layer tenant isolation.
+See [Security Architecture](../../docs/security_architecture.md) for the full model.
+
+### Token Verification
+
+Every gRPC call is verified via `TokenValidationInterceptor`:
+- Signature verification (Ed25519 / UnsignedBackend)
+- `token.allowed_tenants` must include the requested `tenant_id`
+- `BrainPermissionInterceptor` enforces domain-level permissions (`brain:read`, `brain:write`)
+
+### Database-Level Isolation (RLS)
+
+PostgreSQL Row-Level Security ensures that even if application-level checks are bypassed,
+data cannot leak between tenants:
+
+```sql
+-- Every query is scoped by:
+SET LOCAL app.current_tenant = '{tenant_id}';
+
+-- RLS policy on all 10 tenant tables:
+USING (tenant_id = current_setting('app.current_tenant', true))
+```
+
+- `brain_app` role: RLS enforced (used by service)
+- `brain_admin` role: BYPASSRLS (used by ContextView dashboard)
+- Wildcard `'*'` for admin access (ContextView)
+
+### Storage Layer
+
+`tenant_connection()` context manager:
+- Sets `app.current_tenant` on every connection from the pool
+- Fails closed — empty `tenant_id` raises `ValueError`
+- All store mixins use this for every database operation
+
 ## ContextUnity Ecosystem
 
-ContextBrain is part of the [ContextUnity](https://github.com/ContextUnity) platform:
+ContextBrain is the semantic memory layer of the [ContextUnity](https://contextunity.dev) service mesh:
 
 | Service | Role | Documentation |
-|---------|------|---------------|
-| **ContextCore** | Shared types and gRPC contracts | [contextcore.dev](https://contextcore.dev) |
-| **ContextRouter** | AI agent orchestration | [contextrouter.dev](https://contextrouter.dev) |
-| **ContextWorker** | Background task execution | [contextworker.dev](https://contextworker.dev) |
+|---|---|---|
+| [ContextCore](https://contextcore.dev) | Shared kernel — types, protocols, contracts | [contextcore.dev](https://contextcore.dev) |
+| **ContextBrain** | Semantic memory — knowledge & vector storage | *you are here* |
+| [ContextRouter](https://contextrouter.dev) | Agent orchestration — LangGraph + plugins | [contextrouter.dev](https://contextrouter.dev) |
+| [ContextWorker](https://contextworker.dev) | Durable workflows — Temporal infrastructure | [contextworker.dev](https://contextworker.dev) |
+| ContextZero | Privacy proxy — PII anonymization | — |
+| ContextView | Observability dashboard — admin UI, MCP | — |
 
 ## License
 

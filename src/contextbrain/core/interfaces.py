@@ -40,7 +40,8 @@ def secured(permission: str | None = None) -> Callable:
     def decorator(func: Callable):
         @functools.wraps(func)
         async def wrapper(self, *args, **kwargs):
-            from contextbrain.core.exceptions import SecurityError
+            from contextcore.exceptions import SecurityError
+
             from contextbrain.core.tokens import AccessManager
 
             token = kwargs.get("token")

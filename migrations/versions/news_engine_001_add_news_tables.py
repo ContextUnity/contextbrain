@@ -1,15 +1,15 @@
 """Add news_engine tables for news pipeline
 
 Revision ID: news_engine_001
-Revises: 
+Revises:
 Create Date: 2026-01-28
 
 """
+
 from alembic import op
-import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = 'news_engine_001'
+revision = "news_engine_001"
 down_revision = None  # Set this to the latest migration if needed
 branch_labels = None
 depends_on = None
@@ -34,7 +34,7 @@ def upgrade() -> None:
     op.execute("CREATE INDEX IF NOT EXISTS news_raw_tenant_idx ON news_raw (tenant_id);")
     op.execute("CREATE INDEX IF NOT EXISTS news_raw_harvested_idx ON news_raw (harvested_at DESC);")
     op.execute("CREATE INDEX IF NOT EXISTS news_raw_category_idx ON news_raw (category);")
-    
+
     # Create news_facts table
     op.execute("""
         CREATE TABLE IF NOT EXISTS news_facts (
@@ -62,7 +62,7 @@ def upgrade() -> None:
         CREATE INDEX IF NOT EXISTS news_facts_embedding_hnsw
           ON news_facts USING hnsw (embedding vector_cosine_ops);
     """)
-    
+
     # Create news_posts table
     op.execute("""
         CREATE TABLE IF NOT EXISTS news_posts (

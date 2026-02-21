@@ -23,8 +23,7 @@ class GraphMixin:
         if not tenant_id:
             raise ValueError("tenant_id is required")
 
-        pool = await self._get_pool()
-        async with pool.connection() as conn:
+        async with await self.tenant_connection(tenant_id) as conn:
             async with conn.transaction():
                 for node in nodes:
                     await execute(
@@ -77,3 +76,29 @@ class GraphMixin:
                             "metadata": edge.metadata,
                         },
                     )
+
+    async def graph_search(
+        self,
+        *,
+        tenant_id: str,
+        entrypoint_ids: list[str],
+        max_hops: int = 2,
+        allowed_relations: list[str] | None = None,
+        max_results: int = 200,
+    ) -> dict:
+        """Structural graph traversal.
+
+        Walks knowledge_edges from entrypoint_ids up to max_hops.
+        Returns dict with 'nodes' and 'edges'.
+        """
+        from ..kg_queries import graph_search as _graph_search
+
+        async with await self.tenant_connection(tenant_id) as conn:
+            return await _graph_search(
+                conn=conn,
+                tenant_id=tenant_id,
+                entrypoint_ids=entrypoint_ids,
+                allowed_relations=allowed_relations,
+                max_hops=max_hops,
+                max_results=max_results,
+            )

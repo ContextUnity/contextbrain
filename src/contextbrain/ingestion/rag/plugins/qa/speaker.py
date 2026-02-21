@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 
+from contextcore.exceptions import IngestionError
+
 from contextbrain.core import Config
-from contextbrain.core.exceptions import IngestionError
 
 from ...utils.llm import llm_generate
 

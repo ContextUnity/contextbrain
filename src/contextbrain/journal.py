@@ -1,9 +1,11 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 import duckdb
 from pydantic import BaseModel, Field
+
+__all__ = ["ReflectionEntry", "Journal"]
 
 
 class ReflectionEntry(BaseModel):
@@ -26,7 +28,7 @@ class ReflectionEntry(BaseModel):
     decision_summary: str
     feedback: str  # Human comment
     score: float  # -1.0 to 1.0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Journal:

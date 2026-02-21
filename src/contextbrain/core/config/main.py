@@ -74,6 +74,17 @@ class Config(BaseModel):
     debug: bool = False
     log_level: str = "INFO"
 
+    # Server / service settings
+    port: int = 50051
+    instance_name: str = "shared"
+    schema_name: str = "brain"
+    database_url: str = ""
+    tenants: list[str] = Field(default_factory=list)
+    news_engine: bool = False
+    embedder_type: str = ""  # "openai", "local", or "" (auto-detect)
+    redis_url: str = ""  # Redis URL for embedding cache (fallback: in-memory)
+    project_path: str = ""
+
     # Sub-configurations
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -296,8 +307,8 @@ class Config(BaseModel):
         if langfuse_service := get_env("LANGFUSE_SERVICE_NAME"):
             self.langfuse.service_name = langfuse_service
 
-        # Security configuration
-        if security_enabled := get_bool_env("CONTEXTBRAIN_SECURITY_ENABLED"):
+        # Security configuration — uses unified SECURITY_ENABLED from contextcore
+        if security_enabled := get_bool_env("SECURITY_ENABLED"):
             self.security.enabled = security_enabled
         if private_key_path := get_env("CONTEXTBRAIN_PRIVATE_KEY_PATH"):
             self.security.private_key_path = private_key_path
@@ -307,6 +318,29 @@ class Config(BaseModel):
             self.debug = debug_val
         if log_level := get_env("CONTEXTBRAIN_LOG_LEVEL"):
             self.log_level = log_level
+
+        # Server / service settings
+        if v := get_env("BRAIN_PORT"):
+            try:
+                self.port = int(v)
+            except ValueError:
+                pass
+        if v := get_env("BRAIN_INSTANCE_NAME"):
+            self.instance_name = v
+        if v := get_env("BRAIN_SCHEMA"):
+            self.schema_name = v
+        if v := get_env("BRAIN_DATABASE_URL") or get_env("DATABASE_URL"):
+            self.database_url = v
+        if v := get_env("BRAIN_TENANTS"):
+            self.tenants = [t.strip() for t in v.split(",") if t.strip()]
+        if get_bool_env("BRAIN_NEWS_ENGINE"):
+            self.news_engine = True
+        if v := get_env("EMBEDDER_TYPE"):
+            self.embedder_type = v.lower()
+        if v := get_env("REDIS_URL"):
+            self.redis_url = v
+        if v := get_env("CONTEXTBRAIN_PROJECT_PATH"):
+            self.project_path = v
 
 
 # ---- Global config management ----

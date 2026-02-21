@@ -19,45 +19,45 @@ depends_on = None
 
 def upgrade() -> None:
     """Add search_vector and keywords_vector columns if they don't exist."""
-    
+
     # Check if columns exist and add them if not
     # PostgreSQL 12+ supports "IF NOT EXISTS" for columns indirectly via DO block
-    
+
     op.execute("""
         DO $$
         BEGIN
             -- Add search_vector column if it doesn't exist
             IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
+                SELECT 1 FROM information_schema.columns
                 WHERE table_name = 'knowledge_nodes' AND column_name = 'search_vector'
             ) THEN
-                ALTER TABLE knowledge_nodes 
-                ADD COLUMN search_vector TSVECTOR 
+                ALTER TABLE knowledge_nodes
+                ADD COLUMN search_vector TSVECTOR
                 GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED;
-                
+
                 RAISE NOTICE 'Added search_vector column';
             END IF;
-            
+
             -- Add keywords_vector column if it doesn't exist
             IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns 
+                SELECT 1 FROM information_schema.columns
                 WHERE table_name = 'knowledge_nodes' AND column_name = 'keywords_vector'
             ) THEN
-                ALTER TABLE knowledge_nodes 
-                ADD COLUMN keywords_vector TSVECTOR 
+                ALTER TABLE knowledge_nodes
+                ADD COLUMN keywords_vector TSVECTOR
                 GENERATED ALWAYS AS (to_tsvector('simple', COALESCE(keywords_text, ''))) STORED;
-                
+
                 RAISE NOTICE 'Added keywords_vector column';
             END IF;
         END $$;
     """)
-    
+
     # Create GIN indexes for full-text search
     op.execute("""
         CREATE INDEX IF NOT EXISTS knowledge_nodes_search_vector_gin
           ON knowledge_nodes USING GIN (search_vector);
     """)
-    
+
     op.execute("""
         CREATE INDEX IF NOT EXISTS knowledge_nodes_keywords_vector_gin
           ON knowledge_nodes USING GIN (keywords_vector);

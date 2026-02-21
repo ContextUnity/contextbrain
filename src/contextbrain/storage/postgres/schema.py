@@ -11,12 +11,22 @@ from __future__ import annotations
 from typing import List, Sequence
 
 
+def _extension_statements() -> List[str]:
+    """Extensions required by Brain — need superuser privileges.
+
+    These are separated from table DDL because they may require
+    elevated privileges. If they fail, ensure_schema logs a clear
+    message instead of aborting all table creation.
+    """
+    return [
+        "CREATE EXTENSION IF NOT EXISTS vector;",
+        "CREATE EXTENSION IF NOT EXISTS ltree;",
+    ]
+
+
 def _core_schema(vector_dim: int) -> List[str]:
     """Core Brain tables - always required."""
     return [
-        # Extensions
-        "CREATE EXTENSION IF NOT EXISTS vector;",
-        "CREATE EXTENSION IF NOT EXISTS ltree;",
         # Nodes table
         """
         CREATE TABLE IF NOT EXISTS knowledge_nodes (
@@ -25,7 +35,7 @@ def _core_schema(vector_dim: int) -> List[str]:
             user_id         TEXT NULL,
             node_kind       TEXT NOT NULL CHECK (node_kind IN ('chunk', 'concept')),
 
-            source_type     TEXT NULL CHECK (source_type IN ('video','book','qa','web','knowledge')),
+            source_type     TEXT NULL CHECK (source_type IN ('video','book','qa','web','knowledge','documentation')),
             source_id       TEXT NULL,
             title           TEXT NULL,
             content         TEXT NOT NULL,
@@ -118,6 +128,7 @@ def _core_schema(vector_dim: int) -> List[str]:
         % int(vector_dim),
         "CREATE INDEX IF NOT EXISTS episodic_events_user_idx ON episodic_events (user_id);",
         "CREATE INDEX IF NOT EXISTS episodic_events_session_idx ON episodic_events (session_id);",
+        "CREATE INDEX IF NOT EXISTS episodic_events_tenant_idx ON episodic_events (tenant_id);",
         """
         CREATE INDEX IF NOT EXISTS episodic_events_embedding_hnsw
           ON episodic_events USING hnsw (embedding vector_cosine_ops);
@@ -125,16 +136,41 @@ def _core_schema(vector_dim: int) -> List[str]:
         # Entity Memory (User Facts / Profile)
         """
         CREATE TABLE IF NOT EXISTS user_facts (
+            tenant_id   TEXT NOT NULL DEFAULT 'default',
             user_id     TEXT NOT NULL,
             fact_key    TEXT NOT NULL,
             fact_value  JSONB NOT NULL,
             confidence  DOUBLE PRECISION NOT NULL DEFAULT 1.0,
             source_id   UUID NULL REFERENCES episodic_events(id) ON DELETE SET NULL,
             updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            PRIMARY KEY (user_id, fact_key)
+            PRIMARY KEY (tenant_id, user_id, fact_key)
         );
         """,
         "CREATE INDEX IF NOT EXISTS user_facts_user_idx ON user_facts (user_id);",
+        "CREATE INDEX IF NOT EXISTS user_facts_tenant_idx ON user_facts (tenant_id);",
+        # Agent Traces (Observability)
+        """
+        CREATE TABLE IF NOT EXISTS agent_traces (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id       TEXT NOT NULL,
+            agent_id        TEXT NOT NULL,
+            session_id      TEXT NULL,
+            user_id         TEXT NULL,
+            graph_name      TEXT NULL,
+            tool_calls      JSONB NOT NULL DEFAULT '[]'::jsonb,
+            token_usage     JSONB NOT NULL DEFAULT '{}'::jsonb,
+            timing_ms       INTEGER NULL,
+            security_flags  JSONB NOT NULL DEFAULT '{}'::jsonb,
+            metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+            provenance      TEXT[] NULL,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS agent_traces_tenant_idx ON agent_traces (tenant_id);",
+        "CREATE INDEX IF NOT EXISTS agent_traces_agent_idx ON agent_traces (agent_id);",
+        "CREATE INDEX IF NOT EXISTS agent_traces_session_idx ON agent_traces (session_id);",
+        "CREATE INDEX IF NOT EXISTS agent_traces_created_idx ON agent_traces (created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS agent_traces_tenant_created_idx ON agent_traces (tenant_id, created_at DESC);",
     ]
 
 
@@ -251,6 +287,147 @@ def _news_engine_schema(vector_dim: int) -> List[str]:
     ]
 
 
+def _column_backfill() -> List[str]:
+    """Idempotent column additions for tables that already exist.
+
+    Problem: ``CREATE TABLE IF NOT EXISTS`` skips the entire statement when
+    the table exists, so columns added in later code versions never appear.
+
+    Solution: each entry here is an ``ALTER TABLE … ADD COLUMN IF NOT EXISTS``
+    that runs on every startup. PostgreSQL executes it as a no-op when the
+    column is already present.
+
+    When you add a new column to a CREATE TABLE, also add the matching
+    ALTER TABLE here so existing deployments pick it up automatically.
+    """
+    return [
+        # agent_traces — provenance tracking (added after initial trace system)
+        "ALTER TABLE agent_traces ADD COLUMN IF NOT EXISTS provenance TEXT[] NULL;",
+        # user_facts — tenant isolation (changed PK from (user_id, fact_key)
+        # to (tenant_id, user_id, fact_key); the column default handles existing rows)
+        "ALTER TABLE user_facts ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';",
+    ]
+
+
+def _constraint_upgrades() -> List[str]:
+    """Idempotent constraint updates for evolved schemas.
+
+    CHECK constraints and other DDL that may need updating on existing tables.
+    Each statement is wrapped to be safe on re-run.
+    """
+    return [
+        # knowledge_nodes — added 'documentation' to source_type enum
+        # DROP + re-ADD is idempotent:  IF EXISTS prevents error on first run
+        "ALTER TABLE knowledge_nodes DROP CONSTRAINT IF EXISTS knowledge_nodes_source_type_check;",
+        """ALTER TABLE knowledge_nodes ADD CONSTRAINT knowledge_nodes_source_type_check
+           CHECK (source_type IN ('video','book','qa','web','knowledge','documentation'));""",
+    ]
+
+
+def _rls_policies() -> List[str]:
+    """Row-Level Security policies for tenant isolation.
+
+    Defence-in-depth (Layer 2): even if application-level tenant checks
+    are bypassed, PostgreSQL itself blocks cross-tenant data access.
+
+    Architecture:
+        - ``brain_app`` role: used by gRPC handlers, RLS enforced
+        - ``brain_admin`` role: used by ContextView dashboard, bypasses RLS
+        - Every query sets ``SET LOCAL app.current_tenant = '<tenant_id>'``
+          before executing — this is done in the Brain gRPC interceptor.
+
+    All statements are idempotent (IF NOT EXISTS / OR REPLACE / DROP IF EXISTS).
+    """
+    # All tables that have tenant_id column
+    tenant_tables = [
+        "knowledge_nodes",
+        "knowledge_edges",
+        "knowledge_aliases",
+        "episodic_events",
+        "user_facts",
+        "agent_traces",
+        "catalog_taxonomy",
+        "news_raw",
+        "news_facts",
+        "news_posts",
+    ]
+
+    stmts: list[str] = []
+
+    # 1. Create app role (non-superuser, no BYPASSRLS)
+    stmts.append("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_app') THEN
+                CREATE ROLE brain_app NOLOGIN;
+                RAISE NOTICE 'Created role brain_app';
+            END IF;
+        END
+        $$;
+    """)
+
+    # 2. Create admin role (bypasses RLS for ContextView dashboard)
+    stmts.append("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_admin') THEN
+                CREATE ROLE brain_admin NOLOGIN BYPASSRLS;
+                RAISE NOTICE 'Created role brain_admin';
+            END IF;
+        END
+        $$;
+    """)
+
+    # 3. Enable RLS and create policies for each tenant table
+    for table in tenant_tables:
+        policy_name = f"{table}_tenant_isolation"
+
+        # Enable RLS (idempotent — no-op if already enabled)
+        stmts.append(f"ALTER TABLE IF EXISTS {table} ENABLE ROW LEVEL SECURITY;")
+
+        # Force RLS even for table owner (important!)
+        stmts.append(f"ALTER TABLE IF EXISTS {table} FORCE ROW LEVEL SECURITY;")
+
+        # Drop old policy (idempotent) then create
+        stmts.append(f"DROP POLICY IF EXISTS {policy_name} ON {table};")
+
+        # Policy: rows visible only when tenant_id matches session variable
+        # current_setting('app.current_tenant', true) returns NULL if not set,
+        # which means NO rows visible (fail-closed).
+        stmts.append(f"""
+            CREATE POLICY {policy_name} ON {table}
+                USING (
+                    tenant_id = current_setting('app.current_tenant', true)
+                    OR current_setting('app.current_tenant', true) = '*'
+                )
+                WITH CHECK (
+                    tenant_id = current_setting('app.current_tenant', true)
+                );
+        """)
+
+        # Grant table access to brain_app role
+        stmts.append(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO brain_app;")
+
+        # Grant full access to brain_admin (bypasses RLS via BYPASSRLS flag)
+        stmts.append(f"GRANT ALL ON {table} TO brain_admin;")
+
+    return stmts
+
+
+def build_rls_sql() -> Sequence[str]:
+    """Return RLS policy statements for tenant isolation.
+
+    Called as a separate step in ensure_schema AFTER table creation.
+    Requires the connection user to be a superuser or table owner.
+    """
+    return _rls_policies()
+
+
+def build_extension_sql() -> Sequence[str]:
+    """Return CREATE EXTENSION statements (require superuser)."""
+    return _extension_statements()
+
+
 def build_schema_sql(
     *,
     vector_dim: int,
@@ -284,4 +461,16 @@ def build_schema_sql(
     return statements
 
 
-__all__ = ["build_schema_sql"]
+def build_column_backfill_sql() -> Sequence[str]:
+    """Return ALTER TABLE statements that add columns missing from existing tables.
+
+    Called as a separate step in ensure_schema AFTER the main DDL.
+    Idempotent — safe to run on every startup.
+    """
+    stmts: list[str] = []
+    stmts.extend(_column_backfill())
+    stmts.extend(_constraint_upgrades())
+    return stmts
+
+
+__all__ = ["build_extension_sql", "build_schema_sql", "build_column_backfill_sql", "build_rls_sql"]

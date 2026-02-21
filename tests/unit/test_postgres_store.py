@@ -24,17 +24,13 @@ def test_build_scope_filters_basic():
 
 def test_fuse_results_weighted_handles_missing_scores():
     store = _store()
-    ranked = store._fuse_results(
-        {"a": 0.9}, {"b": 0.8}, "weighted", 60, 0.8, 0.2, 2
-    )
+    ranked = store._fuse_results({"a": 0.9}, {"b": 0.8}, "weighted", 60, 0.8, 0.2, 2)
     ids = [rid for rid, _ in ranked]
     assert set(ids) == {"a", "b"}
 
 
 def test_fuse_results_rrf_is_deterministic():
     store = _store()
-    ranked = store._fuse_results(
-        {"a": 0.9, "b": 0.5}, {"b": 0.9, "a": 0.2}, "rrf", 10, 0.8, 0.2, 2
-    )
+    ranked = store._fuse_results({"a": 0.9, "b": 0.5}, {"b": 0.9, "a": 0.2}, "rrf", 10, 0.8, 0.2, 2)
     ids = [rid for rid, _ in ranked]
     assert set(ids) == {"a", "b"}
