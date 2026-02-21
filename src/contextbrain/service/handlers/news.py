@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextcore import get_context_unit_logger
 from contextcore.exceptions import grpc_error_handler, grpc_stream_error_handler
+from contextcore.permissions import Permissions
 
 from ...payloads import (
     CheckNewsPostExistsPayload,
@@ -11,7 +12,14 @@ from ...payloads import (
     UpsertNewsItemPayload,
     UpsertNewsPostPayload,
 )
-from ..helpers import make_response, parse_unit
+from ..helpers import (
+    extract_token_from_context,
+    make_response,
+    parse_unit,
+    validate_tenant_access,
+    validate_token_for_read,
+    validate_token_for_write,
+)
 
 logger = get_context_unit_logger(__name__)
 
@@ -23,7 +31,10 @@ class NewsHandlersMixin:
     async def UpsertNewsItem(self, request, context):
         """Upsert news item (raw or fact) to Brain storage."""
         unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
         params = UpsertNewsItemPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         try:
             if params.item_type == "raw":
@@ -68,7 +79,10 @@ class NewsHandlersMixin:
     async def GetNewsItems(self, request, context):
         """Get news items (raw or facts) from Brain."""
         unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = GetNewsItemsPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         try:
             if params.item_type == "fact":
@@ -100,7 +114,10 @@ class NewsHandlersMixin:
     async def UpsertNewsPost(self, request, context):
         """Upsert a generated post to Brain storage."""
         unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
         params = UpsertNewsPostPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         try:
             embedding = await self.embedder.embed_async(f"{params.headline} {params.content}")
@@ -136,7 +153,10 @@ class NewsHandlersMixin:
     async def CheckNewsPostExists(self, request, context):
         """Check if a news post with given URL already exists."""
         unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = CheckNewsPostExistsPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         try:
             exists = await self.news_store.check_url_exists(

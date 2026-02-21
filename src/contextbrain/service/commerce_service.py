@@ -15,6 +15,7 @@ from .helpers import (
     extract_token_from_context,
     make_response,
     parse_unit,
+    validate_tenant_access,
     validate_token_for_read,
     validate_token_for_write,
 )
@@ -39,6 +40,7 @@ try:
             token = extract_token_from_context(context)
             validate_token_for_read(unit, token, context)
             params = GetProductsPayload(**unit.payload)
+            validate_tenant_access(token, params.tenant_id, context)
 
             if hasattr(self._brain.storage, "get_products_by_ids"):
                 raw_products = await self._brain.storage.get_products_by_ids(
@@ -64,7 +66,10 @@ try:
         async def UpsertDealerProduct(self, request, context):
             """Upsert dealer product from Harvester."""
             unit = parse_unit(request)
+            token = extract_token_from_context(context)
+            validate_token_for_write(unit, token, context)
             params = UpsertDealerProductPayload(**unit.payload)
+            validate_tenant_access(token, params.tenant_id, context)
 
             try:
                 if hasattr(self._brain.storage, "upsert_dealer_product"):
@@ -112,6 +117,7 @@ try:
             token = extract_token_from_context(context)
             validate_token_for_write(unit, token, context)
             params = UpdateEnrichmentPayload(**unit.payload)
+            validate_tenant_access(token, params.tenant_id, context)
 
             if hasattr(self._brain.storage, "update_product_enrichment"):
                 await self._brain.storage.update_product_enrichment(

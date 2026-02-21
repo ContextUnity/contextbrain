@@ -17,6 +17,7 @@ from ..helpers import (
     extract_token_from_context,
     make_response,
     parse_unit,
+    validate_tenant_access,
     validate_token_for_read,
     validate_token_for_write,
 )
@@ -34,6 +35,7 @@ class KnowledgeHandlersMixin:
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = SearchPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         query_vec = (
             await self.embedder.embed_async(params.query_text)
@@ -73,6 +75,7 @@ class KnowledgeHandlersMixin:
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = GraphSearchPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         result = await self.storage.graph_search(
             tenant_id=params.tenant_id,
@@ -107,6 +110,7 @@ class KnowledgeHandlersMixin:
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
         params = CreateKGRelationPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         from ..storage.postgres.models import GraphEdge
 
@@ -140,6 +144,7 @@ class KnowledgeHandlersMixin:
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
         params = UpsertPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         from contextbrain.ingest import IngestionService
 
@@ -165,6 +170,7 @@ class KnowledgeHandlersMixin:
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = QueryMemoryPayload(**unit.payload)
+        validate_tenant_access(token, params.tenant_id, context)
 
         query_vec = (
             await self.embedder.embed_async(params.content) if params.content else [0.1] * 1536
