@@ -22,7 +22,7 @@ class EpisodesMixin:
         session_id: str | None = None,
     ) -> None:
         """Add an episodic event."""
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             await execute(
                 conn,
                 """
@@ -44,7 +44,7 @@ class EpisodesMixin:
         self, *, user_id: str, tenant_id: str, limit: int = 5
     ) -> List[dict]:
         """Get recent episodes for a user."""
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             return await fetch_all(
                 conn,
                 """
@@ -66,7 +66,7 @@ class EpisodesMixin:
         source_id: str | None = None,
     ) -> None:
         """Upsert a user fact."""
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             await execute(
                 conn,
                 """
@@ -96,7 +96,7 @@ class EpisodesMixin:
 
         Returns list of dicts with: fact_key, fact_value, confidence, updated_at.
         """
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             return await fetch_all(
                 conn,
                 """

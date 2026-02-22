@@ -40,7 +40,7 @@ class SearchMixin:
         if not tenant_id or candidate_k <= 0 or limit <= 0:
             return []
 
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             conn.row_factory = dict_row
 
             where, params = self._build_scope_filters(

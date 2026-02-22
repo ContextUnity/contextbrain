@@ -25,7 +25,7 @@ async def fetch_all(conn, query: str, params: dict) -> List[dict]:
     return await result.fetchall()
 
 
-async def set_tenant_context(conn, tenant_id: str) -> None:
+async def set_tenant_context(conn, tenant_id: str, user_id: str | None = None) -> None:
     """Set the RLS tenant context for the current transaction.
 
     Must be called INSIDE a transaction (autocommit=False) so that
@@ -36,6 +36,8 @@ async def set_tenant_context(conn, tenant_id: str) -> None:
         conn: psycopg async connection (must be in a transaction)
         tenant_id: The tenant/project ID to scope queries to.
             Use '*' for admin/dashboard access (bypasses RLS via policy).
+        user_id: Optional user identifier for intra-tenant isolation.
+            If None, sets to '*' (bypasses user-level RLS).
 
     Raises:
         ValueError: If tenant_id is empty (fail-closed — prevents
@@ -52,6 +54,13 @@ async def set_tenant_context(conn, tenant_id: str) -> None:
     await conn.execute(
         "SELECT set_config('app.current_tenant', %s, true)",
         [tenant_id],
+    )
+
+    # Set app.current_user for fine-grained user-level RLS inside the tenant
+    actual_user = user_id if user_id is not None else "*"
+    await conn.execute(
+        "SELECT set_config('app.current_user', %s, true)",
+        [actual_user],
     )
 
 

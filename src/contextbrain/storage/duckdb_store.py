@@ -18,7 +18,14 @@ class DuckDBStore:
 
     def import_parquet(self, table_name: str, file_path: str):
         """Import Parquet files for analysis."""
-        self.conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{file_path}')")
+        import re
+
+        if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
+            raise ValueError(f"Invalid table name: {table_name}")
+        self.conn.execute(
+            f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet(?)",  # noqa: S608
+            [file_path],
+        )
         logger.info(f"Imported Parquet data to table {table_name}")
 
     def query(self, sql: str) -> List[Dict]:

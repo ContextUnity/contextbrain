@@ -20,6 +20,7 @@ from ..helpers import (
     validate_tenant_access,
     validate_token_for_read,
     validate_token_for_write,
+    validate_user_access,
 )
 
 logger = get_context_unit_logger(__name__)
@@ -36,6 +37,7 @@ class MemoryHandlersMixin:
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
         params = AddEpisodePayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         # Ensure trace_id is stored in metadata for traceability
         metadata = params.metadata.copy() if params.metadata else {}
@@ -66,6 +68,7 @@ class MemoryHandlersMixin:
         validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
         params = GetRecentEpisodesPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         rows = await self.storage.get_recent_episodes(
             user_id=params.user_id,
@@ -93,6 +96,7 @@ class MemoryHandlersMixin:
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
         params = UpsertFactPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         await self.storage.upsert_fact(
             user_id=params.user_id,
@@ -116,6 +120,7 @@ class MemoryHandlersMixin:
         validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
         params = GetUserFactsPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         rows = await self.storage.get_user_facts(
             user_id=params.user_id,
@@ -145,6 +150,7 @@ class MemoryHandlersMixin:
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
         params = RetentionCleanupPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, None, context)  # Must be an admin/system token
 
         deleted = await self.storage.delete_old_episodes(
             tenant_id=params.tenant_id,

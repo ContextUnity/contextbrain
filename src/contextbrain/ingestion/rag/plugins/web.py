@@ -447,7 +447,7 @@ class WebPlugin(IngestionPlugin):
             },
         )
         final_url = url
-        with urlopen(req, timeout=timeout_s) as resp:
+        with urlopen(req, timeout=timeout_s) as resp:  # nosec B310
             # Get final URL after redirects
             final_url = resp.geturl()
             raw = resp.read()

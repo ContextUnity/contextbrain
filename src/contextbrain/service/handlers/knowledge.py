@@ -20,6 +20,7 @@ from ..helpers import (
     validate_tenant_access,
     validate_token_for_read,
     validate_token_for_write,
+    validate_user_access,
 )
 
 logger = get_context_unit_logger(__name__)
@@ -36,6 +37,7 @@ class KnowledgeHandlersMixin:
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = SearchPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         query_vec = (
             await self.embedder.embed_async(params.query_text)
@@ -47,6 +49,7 @@ class KnowledgeHandlersMixin:
             query_text=params.query_text,
             query_vec=query_vec,
             tenant_id=params.tenant_id,
+            user_id=params.user_id,
             limit=params.limit,
             source_types=params.source_types if params.source_types else None,
         )
@@ -76,9 +79,11 @@ class KnowledgeHandlersMixin:
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = GraphSearchPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         result = await self.storage.graph_search(
             tenant_id=params.tenant_id,
+            user_id=params.user_id,
             entrypoint_ids=params.entrypoint_ids,
             max_hops=params.max_hops,
             allowed_relations=params.allowed_relations or None,
@@ -111,6 +116,7 @@ class KnowledgeHandlersMixin:
         validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
         params = CreateKGRelationPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         from ..storage.postgres.models import GraphEdge
 
@@ -126,6 +132,7 @@ class KnowledgeHandlersMixin:
             nodes=[],
             edges=[edge],
             tenant_id=params.tenant_id,
+            user_id=params.user_id,
         )
 
         logger.info(
@@ -145,6 +152,7 @@ class KnowledgeHandlersMixin:
         validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
         params = UpsertPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         from contextbrain.ingest import IngestionService
 
@@ -154,6 +162,7 @@ class KnowledgeHandlersMixin:
             metadata=params.metadata,
             embedder=self.embedder,
             tenant_id=params.tenant_id,
+            user_id=params.user_id,
             source_type=params.source_type,
         )
 
@@ -171,6 +180,7 @@ class KnowledgeHandlersMixin:
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
         params = QueryMemoryPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         query_vec = (
             await self.embedder.embed_async(params.content) if params.content else [0.1] * 1536
@@ -180,6 +190,7 @@ class KnowledgeHandlersMixin:
             query_text=params.content,
             query_vec=query_vec,
             tenant_id=params.tenant_id,
+            user_id=params.user_id,
         )
 
         for res in results:

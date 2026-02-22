@@ -23,7 +23,7 @@ class GraphMixin:
         if not tenant_id:
             raise ValueError("tenant_id is required")
 
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             async with conn.transaction():
                 for node in nodes:
                     await execute(

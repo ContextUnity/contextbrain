@@ -72,20 +72,21 @@ class PostgresStoreBase(KnowledgeStoreInterface):
         await conn.set_autocommit(False)
         logger.debug("Connection configured with schema: %s", self._schema)
 
-    async def tenant_connection(self, tenant_id: str):
+    async def tenant_connection(self, tenant_id: str, user_id: str | None = None):
         """Async context manager: pool connection with RLS tenant context.
 
         Usage::
 
-            async with self.tenant_connection("nszu") as conn:
+            async with self.tenant_connection("nszu", "patient_123") as conn:
                 await execute(conn, "SELECT ...", params)
 
-        Sets ``app.current_tenant`` for PostgreSQL RLS policies.
+        Sets ``app.current_tenant`` and ``app.current_user`` for PostgreSQL RLS policies.
         The setting is transaction-scoped (SET LOCAL via set_config)
         and reverts automatically on COMMIT/ROLLBACK.
 
         Args:
-            tenant_id: Project/tenant ID.  Use '*' for admin access.
+            tenant_id: Project/tenant ID. Use '*' for admin access.
+            user_id: Optional user ID for intra-tenant isolation.
         """
         from contextlib import asynccontextmanager
 
@@ -96,7 +97,7 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                 try:
                     from .helpers import set_tenant_context
 
-                    await set_tenant_context(conn, tenant_id)
+                    await set_tenant_context(conn, tenant_id, user_id)
                 except Exception as e:
                     # RLS is defence-in-depth — don't block operations
                     # if set_tenant_context fails.  Application-level

@@ -378,6 +378,14 @@ def _rls_policies() -> List[str]:
         $$;
     """)
 
+    # Tables that require user-level isolation (B2C) inside a tenant
+    user_isolated_tables = {
+        "knowledge_nodes": "user_id IS NULL OR user_id = current_setting('app.current_user', true)",
+        "episodic_events": "user_id = current_setting('app.current_user', true)",
+        "user_facts": "user_id = current_setting('app.current_user', true)",
+        "agent_traces": "user_id IS NULL OR user_id = current_setting('app.current_user', true)",
+    }
+
     # 3. Enable RLS and create policies for each tenant table
     for table in tenant_tables:
         policy_name = f"{table}_tenant_isolation"
@@ -391,17 +399,41 @@ def _rls_policies() -> List[str]:
         # Drop old policy (idempotent) then create
         stmts.append(f"DROP POLICY IF EXISTS {policy_name} ON {table};")
 
-        # Policy: rows visible only when tenant_id matches session variable
-        # current_setting('app.current_tenant', true) returns NULL if not set,
-        # which means NO rows visible (fail-closed).
+        # Check if table requires user isolation
+        user_condition = user_isolated_tables.get(table)
+
+        if user_condition:
+            # Policy: rows visible/writable only when BOTH tenant_id AND user_id match session variables
+            # '*' bypasses the specific user check (for admins or backend tasks)
+            using_clause = f"""
+                (tenant_id = current_setting('app.current_tenant', true) OR current_setting('app.current_tenant', true) = '*')
+                AND (
+                    current_setting('app.current_user', true) = '*'
+                    OR ({user_condition})
+                )
+            """
+            check_clause = f"""
+                (tenant_id = current_setting('app.current_tenant', true) OR current_setting('app.current_tenant', true) = '*')
+                AND (
+                    current_setting('app.current_user', true) = '*'
+                    OR ({user_condition})
+                )
+            """
+        else:
+            # Policy: rows visible only when tenant_id matches session variable
+            using_clause = """
+                tenant_id = current_setting('app.current_tenant', true)
+                OR current_setting('app.current_tenant', true) = '*'
+            """
+            check_clause = using_clause
+
         stmts.append(f"""
             CREATE POLICY {policy_name} ON {table}
                 USING (
-                    tenant_id = current_setting('app.current_tenant', true)
-                    OR current_setting('app.current_tenant', true) = '*'
+                    {using_clause}
                 )
                 WITH CHECK (
-                    tenant_id = current_setting('app.current_tenant', true)
+                    {check_clause}
                 );
         """)
 

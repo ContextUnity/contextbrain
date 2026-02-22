@@ -128,7 +128,8 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
             continue
         try:
             row = json.loads(line)
-        except Exception:
+        except Exception as e:
+            logger.debug("Failed to decode JSON line: %s", e)
             continue
         if isinstance(row, dict):
             rows.append(row)

@@ -168,8 +168,8 @@ class TestSetTenantContext:
         await set_tenant_context(mock_conn, "project_a")
 
         # Should have called execute with SET LOCAL
-        mock_conn.execute.assert_called_once()
-        call_args = str(mock_conn.execute.call_args)
+        assert mock_conn.execute.call_count == 2
+        call_args = str(mock_conn.execute.call_args_list)
         assert "app.current_tenant" in call_args or "project_a" in call_args
 
     @pytest.mark.asyncio
@@ -179,4 +179,4 @@ class TestSetTenantContext:
 
         mock_conn = AsyncMock()
         await set_tenant_context(mock_conn, "*")
-        mock_conn.execute.assert_called_once()
+        assert mock_conn.execute.call_count == 2

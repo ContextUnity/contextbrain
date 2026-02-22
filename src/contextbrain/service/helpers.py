@@ -150,6 +150,43 @@ def validate_tenant_access(
         )
 
 
+def validate_user_access(
+    token: Optional[ContextToken],
+    user_id: str | None,
+    context: grpc.ServicerContext,
+) -> None:
+    """Validate the token grants access to the specified user_id.
+
+    Args:
+        token: The ContextToken to validate.
+        user_id: Target user_id from the request payload.
+        context: gRPC servicer context.
+
+    Raises:
+        grpc.RpcError with PERMISSION_DENIED if cross-user access attempted.
+    """
+    from contextbrain.core import get_core_config
+
+    config = get_core_config()
+    if not config.security.enabled:
+        return
+
+    if token is None:
+        return  # No token → handled by validate_token_for_*
+
+    if hasattr(token, "user_id") and token.user_id is not None:
+        if user_id is None:
+            raise ContextUnityError(
+                code="PERMISSION_DENIED",
+                message="Tenant-wide access denied for user-bound token. Must specify matching user_id.",
+            )
+        if token.user_id != user_id:
+            raise ContextUnityError(
+                code="PERMISSION_DENIED",
+                message=f"Cross-user access denied. Token user: {token.user_id}, Requested: {user_id}",
+            )
+
+
 def make_response(
     payload: dict,
     trace_id: str | UUID | None = None,

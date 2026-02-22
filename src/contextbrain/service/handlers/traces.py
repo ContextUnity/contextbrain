@@ -14,6 +14,7 @@ from ..helpers import (
     validate_tenant_access,
     validate_token_for_read,
     validate_token_for_write,
+    validate_user_access,
 )
 
 logger = get_context_unit_logger(__name__)
@@ -30,15 +31,9 @@ class TraceHandlersMixin:
         validate_token_for_write(unit, token, context, required_permission=Permissions.TRACE_WRITE)
         params = LogTracePayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
-        # Use payload user_id; override only if the gRPC token carries a
-        # non-empty user_id (service-to-service tokens have user_id="" which
-        # must NOT overwrite the real user_id from the payload).
         user_id = params.user_id
-        if token is not None:
-            token_uid = getattr(token, "user_id", None)
-            if token_uid:
-                user_id = token_uid
 
         # Build complete provenance chain:
         # payload provenance (from the graph/agent) + brain storage label
@@ -81,9 +76,11 @@ class TraceHandlersMixin:
         validate_token_for_read(unit, token, context, required_permission=Permissions.TRACE_READ)
         params = GetTracesPayload(**unit.payload)
         validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, params.user_id, context)
 
         rows = await self.storage.get_traces(
             tenant_id=params.tenant_id,
+            user_id=params.user_id,
             agent_id=params.agent_id,
             session_id=params.session_id,
             limit=params.limit,

@@ -25,6 +25,7 @@ class SearchPayload(BaseModel):
     """Payload for Search RPC."""
 
     tenant_id: str
+    user_id: Optional[str] = None
     query_text: str
     limit: int = 10
     min_score: float = 0.0
@@ -39,6 +40,7 @@ class GraphSearchPayload(BaseModel):
     """
 
     tenant_id: str
+    user_id: Optional[str] = None
     entrypoint_ids: list[str]
     max_hops: int = Field(default=2, ge=1, le=10)
     allowed_relations: list[str] = Field(default_factory=list)
@@ -49,6 +51,7 @@ class CreateKGRelationPayload(BaseModel):
     """Payload for CreateKGRelation RPC."""
 
     tenant_id: str
+    user_id: Optional[str] = None
     source_type: str
     source_id: str
     relation: str
@@ -60,6 +63,7 @@ class UpsertPayload(BaseModel):
     """Payload for Upsert RPC."""
 
     tenant_id: str
+    user_id: Optional[str] = None
     content: str
     source_type: str
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -69,6 +73,7 @@ class QueryMemoryPayload(BaseModel):
     """Payload for QueryMemory RPC."""
 
     tenant_id: str = "default"
+    user_id: Optional[str] = None
     content: str
     filters: dict[str, Any] = Field(default_factory=dict)
 
@@ -197,6 +202,7 @@ class GetTracesPayload(BaseModel):
     tenant_id: str
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
+    user_id: Optional[str] = None
     limit: int = 20
     since: Optional[str] = None  # ISO datetime
 

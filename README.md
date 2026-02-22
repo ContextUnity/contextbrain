@@ -250,19 +250,23 @@ data cannot leak between tenants:
 ```sql
 -- Every query is scoped by:
 SET LOCAL app.current_tenant = '{tenant_id}';
+SET LOCAL app.current_user = '{user_id}';
 
 -- RLS policy on all 10 tenant tables:
 USING (tenant_id = current_setting('app.current_tenant', true))
+
+-- Plus, Dual-Dimensional RLS for Personal Data (e.g. episodic_events, knowledge_nodes):
+USING (... AND (user_id IS NULL OR user_id = current_setting('app.current_user', true)))
 ```
 
 - `brain_app` role: RLS enforced (used by service)
 - `brain_admin` role: BYPASSRLS (used by ContextView dashboard)
-- Wildcard `'*'` for admin access (ContextView)
+- Wildcard `'*'` for admin access (ContextView) or bypassing user isolation
 
 ### Storage Layer
 
 `tenant_connection()` context manager:
-- Sets `app.current_tenant` on every connection from the pool
+- Sets `app.current_tenant` and `app.current_user` on every connection from the pool
 - Fails closed — empty `tenant_id` raises `ValueError`
 - All store mixins use this for every database operation
 

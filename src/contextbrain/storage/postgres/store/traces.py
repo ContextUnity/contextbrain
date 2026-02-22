@@ -32,7 +32,7 @@ class TracesMixin:
             Generated trace UUID.
         """
         trace_id = str(uuid.uuid4())
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             await execute(
                 conn,
                 """
@@ -66,6 +66,7 @@ class TracesMixin:
         self,
         *,
         tenant_id: str,
+        user_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
         limit: int = 20,
@@ -75,6 +76,7 @@ class TracesMixin:
 
         Args:
             tenant_id: Required tenant filter.
+            user_id: Target user_id for RLS isolation.
             agent_id: Optional filter by agent.
             session_id: Optional filter by session.
             limit: Max results (default 20).
@@ -85,6 +87,10 @@ class TracesMixin:
         """
         conditions = ["tenant_id = %(tenant_id)s"]
         params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+
+        if user_id:
+            conditions.append("user_id = %(user_id)s")
+            params["user_id"] = user_id
 
         if agent_id:
             conditions.append("agent_id = %(agent_id)s")
@@ -100,18 +106,19 @@ class TracesMixin:
 
         where = " AND ".join(conditions)
 
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
+            query = [
+                "SELECT id, tenant_id, agent_id, session_id, user_id, graph_name,",
+                "       tool_calls, token_usage, timing_ms, security_flags,",
+                "       metadata, provenance, created_at",
+                "FROM agent_traces",
+                "WHERE " + where,
+                "ORDER BY created_at DESC",
+                "LIMIT %(limit)s",
+            ]
             return await fetch_all(
                 conn,
-                f"""
-                SELECT id, tenant_id, agent_id, session_id, user_id, graph_name,
-                       tool_calls, token_usage, timing_ms, security_flags,
-                       metadata, provenance, created_at
-                FROM agent_traces
-                WHERE {where}
-                ORDER BY created_at DESC
-                LIMIT %(limit)s
-                """,
+                "\n".join(query),
                 params,
             )
 
