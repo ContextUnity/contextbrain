@@ -1,9 +1,9 @@
 [project]
 name = "contextbrain"
-version = "0.16.1"
+version = "0.16.2"
 description = "Semantic Memory service for ContextUnity — knowledge storage, vector search, RAG retrieval, and gRPC-native API with PostgreSQL + pgvector"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = "==3.13.*"
 authors = [
     { name = "Pylypchuk Oleksii", email = "oleksii.pylypchuk@tuta.com" },
 ]
@@ -95,7 +95,7 @@ observability = [
 ]
 # Alternative LLM providers
 models-openai = [
-    "langchain-openai>=0.1.0",
+
 ]
 models-anthropic = [
     "langchain-anthropic>=0.1.0",
@@ -169,6 +169,7 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
+    "-p", "no:django",
 ]
 
 markers = [

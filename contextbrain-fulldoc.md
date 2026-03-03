@@ -159,17 +159,17 @@ Defined in `contextcore/protos/brain.proto`:
 service BrainService {
     // Semantic search
     rpc Search(SearchRequest) returns (stream SearchResult);
-    
+
     // Graph traversal
     rpc GraphSearch(GraphSearchRequest) returns (stream GraphSearchResult);
-    
+
     // Taxonomy operations
     rpc GetTaxonomy(TaxonomyRequest) returns (TaxonomyResponse);
     rpc SyncTaxonomy(stream TaxonomyNode) returns (SyncResult);
-    
+
     // Entity resolution
     rpc ResolveEntity(EntityRequest) returns (EntityResponse);
-    
+
     // Ingestion
     rpc IngestDocument(IngestRequest) returns (IngestResult);
 }
@@ -873,4 +873,3 @@ All data flows through `ContextUnit` (from `contextcore`) for provenance trackin
 
 
 ---
-

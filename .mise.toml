@@ -6,6 +6,8 @@
 python = "3.13"
 uv = "latest"
 
+env_shell_expand = true
+
 [env]
 _.file = { path = ".env", tools = true }
 PYTHON = "$(mise which python)"
@@ -46,7 +48,7 @@ run = "mise run lint && mise run test-unit"
 # Server Commands
 # =============================================================================
 
-[tasks.serve]
+[tasks.brain]
 description = "Start Brain gRPC service (port from BRAIN_PORT env, default 50051)"
 run = "uv run python -m contextbrain"
 

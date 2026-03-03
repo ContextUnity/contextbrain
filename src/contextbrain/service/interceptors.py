@@ -42,6 +42,7 @@ RPC_PERMISSION_MAP: dict[str, str] = {
     "UpsertNewsPost": Permissions.BRAIN_WRITE,
     "GetNewsFeed": Permissions.BRAIN_READ,
     "CheckNewsPostExists": Permissions.BRAIN_READ,
+    "MatchDuckDB": Permissions.BRAIN_READ,
 }
 
 

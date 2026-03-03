@@ -307,17 +307,26 @@ class Config(BaseModel):
         if langfuse_service := get_env("LANGFUSE_SERVICE_NAME"):
             self.langfuse.service_name = langfuse_service
 
+        # Use shared configuration from contextcore where applicable
+        from contextcore.config import get_core_config as get_shared_core_config
+
+        shared_config = get_shared_core_config()
+
         # Security configuration — uses unified SECURITY_ENABLED from contextcore
-        if security_enabled := get_bool_env("SECURITY_ENABLED"):
-            self.security.enabled = security_enabled
+        if shared_config.security.enabled is not None:
+            self.security.enabled = shared_config.security.enabled
         if private_key_path := get_env("CONTEXTBRAIN_PRIVATE_KEY_PATH"):
             self.security.private_key_path = private_key_path
 
         # Debug/Logging
         if debug_val := get_bool_env("CONTEXTBRAIN_DEBUG"):
             self.debug = debug_val
+
+        # ContextBrain specific log level overrides shared core log level
         if log_level := get_env("CONTEXTBRAIN_LOG_LEVEL"):
             self.log_level = log_level
+        else:
+            self.log_level = shared_config.log_level
 
         # Server / service settings
         if v := get_env("BRAIN_PORT"):
@@ -337,8 +346,11 @@ class Config(BaseModel):
             self.news_engine = True
         if v := get_env("EMBEDDER_TYPE"):
             self.embedder_type = v.lower()
-        if v := get_env("REDIS_URL"):
-            self.redis_url = v
+
+        # Redis config (from shared core)
+        if shared_config.redis_url:
+            self.redis_url = shared_config.redis_url
+
         if v := get_env("CONTEXTBRAIN_PROJECT_PATH"):
             self.project_path = v
 

@@ -76,7 +76,7 @@ src/contextbrain/
    - Edit `protos/brain.proto`
    - Add request/response messages
    - Add method to `BrainService`
-   
+
 2. **Regenerate stubs**:
    ```bash
    cd contextcore

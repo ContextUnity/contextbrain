@@ -108,7 +108,13 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                         tenant_id,
                         e,
                     )
-                yield conn
+
+                try:
+                    yield conn
+                    await conn.commit()
+                except Exception:
+                    await conn.rollback()
+                    raise
 
         return _ctx()
 

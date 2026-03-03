@@ -23,7 +23,7 @@ class DuckDBStore:
         if not re.match(r"^[a-zA-Z0-9_]+$", table_name):
             raise ValueError(f"Invalid table name: {table_name}")
         self.conn.execute(
-            f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet(?)",  # noqa: S608
+            f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet(?)",  # noqa: S608  # nosec B608 — table_name validated by regex above
             [file_path],
         )
         logger.info(f"Imported Parquet data to table {table_name}")

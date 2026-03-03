@@ -107,7 +107,7 @@ import asyncio
 async def main():
     store = PostgresKnowledgeStore(dsn="postgres://...")
     await store.connect()
-    
+
     # Store knowledge
     await store.upsert_knowledge(
         tenant_id="my_app",
@@ -115,7 +115,7 @@ async def main():
         source_type="document",
         embedding=[0.1, 0.2, ...],  # 1536 dims (OpenAI) or 768 (local)
     )
-    
+
     # Semantic search
     results = await store.search(
         tenant_id="my_app",

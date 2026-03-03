@@ -35,10 +35,8 @@ class TraceHandlersMixin:
 
         user_id = params.user_id
 
-        # Build complete provenance chain:
-        # payload provenance (from the graph/agent) + brain storage label
+        # Provenance: use caller-provided chain as-is (storage is infra, not data journey)
         provenance = list(params.provenance or [])
-        provenance.append("brain:log_trace")
 
         trace_id = await self.storage.log_trace(
             tenant_id=params.tenant_id,
