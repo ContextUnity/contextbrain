@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import html
 import json
-import logging
 import re
 from pathlib import Path
 from typing import Any, Callable
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 
@@ -32,7 +33,7 @@ from ..utils.records import (
     generate_id,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def extract_youtube_id_from_filename(filename: str) -> tuple[str | None, str]:

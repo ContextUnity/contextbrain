@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import get_core_config, get_env
 from contextbrain.retrieval.rag.settings import resolve_data_store_id
@@ -15,7 +16,7 @@ from .base import (
     UploadResult,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class GCloudUploadProvider(UploadProvider):

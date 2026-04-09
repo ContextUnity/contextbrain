@@ -5,7 +5,6 @@ Usage:
 
 Options:
     --include-commerce     Include commerce/taxonomy tables
-    --include-news-engine  Include news pipeline news tables
     --vector-dim DIM       Vector dimension (default: from BRAIN_VECTOR_DIM or 1536)
 """
 
@@ -24,9 +23,6 @@ async def main():
     parser.add_argument(
         "--include-commerce", action="store_true", help="Include commerce/taxonomy tables"
     )
-    parser.add_argument(
-        "--include-news-engine", action="store_true", help="Include news pipeline news tables"
-    )
     parser.add_argument("--vector-dim", type=int, default=None, help="Vector dimension")
     args = parser.parse_args()
 
@@ -43,7 +39,6 @@ async def main():
     statements = build_schema_sql(
         vector_dim=vector_dim,
         include_commerce=args.include_commerce,
-        include_news_engine=args.include_news_engine,
     )
 
     # Connect and execute
@@ -54,7 +49,6 @@ async def main():
     print(f"Connecting to {host_info}...")
     print(f"Vector dimension: {vector_dim}")
     print(f"Include commerce: {args.include_commerce}")
-    print(f"Include news_engine: {args.include_news_engine}")
 
     async with AsyncConnectionPool(dsn, open=False) as pool:
         await pool.open()

@@ -81,6 +81,7 @@ class GraphMixin:
         self,
         *,
         tenant_id: str,
+        user_id: str | None = None,
         entrypoint_ids: list[str],
         max_hops: int = 2,
         allowed_relations: list[str] | None = None,
@@ -93,7 +94,7 @@ class GraphMixin:
         """
         from ..kg_queries import graph_search as _graph_search
 
-        async with await self.tenant_connection(tenant_id) as conn:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             return await _graph_search(
                 conn=conn,
                 tenant_id=tenant_id,

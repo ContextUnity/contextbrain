@@ -1,10 +1,9 @@
 """Main configuration class that combines all config modules."""
 
-import logging
 import tomllib
 from pathlib import Path
-from typing import Any
 
+from contextcore import get_context_unit_logger
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,49 +12,12 @@ from .ingestion import RAGConfig
 from .models import LLMConfig, ModelsConfig, RouterConfig
 from .paths import ConfigPaths
 from .providers import (
-    AnthropicConfig,
-    GoogleCSEConfig,
-    GroqConfig,
-    HuggingFaceHubConfig,
-    LangfuseConfig,
     LocalOpenAIConfig,
     OpenAIConfig,
-    OpenRouterConfig,
-    PluginsConfig,
     PostgresConfig,
-    RunPodConfig,
     VertexConfig,
 )
 from .security import SecurityConfig
-
-
-class FlowConfig(BaseModel):
-    """Configuration for a specific data processing flow.
-
-    This is used by the flow manager to execute custom processing pipelines.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    # Flow identification
-    name: str = ""
-    description: str = ""
-
-    # Source configuration
-    source: str = ""  # e.g., "web", "file", "api"
-    source_params: dict[str, Any] = Field(default_factory=dict)
-
-    # Processing pipeline
-    logic: list[str] = Field(default_factory=list)  # Transformer names
-    logic_params: dict[str, Any] = Field(default_factory=dict)
-
-    # Sink configuration
-    sink: str = ""  # e.g., "vertex", "postgres"
-    sink_params: dict[str, Any] = Field(default_factory=dict)
-
-    # Execution controls
-    overwrite: bool = True
-    workers: int = 1
 
 
 class Config(BaseModel):
@@ -80,7 +42,6 @@ class Config(BaseModel):
     schema_name: str = "brain"
     database_url: str = ""
     tenants: list[str] = Field(default_factory=list)
-    news_engine: bool = False
     embedder_type: str = ""  # "openai", "local", or "" (auto-detect)
     redis_url: str = ""  # Redis URL for embedding cache (fallback: in-memory)
     project_path: str = ""
@@ -90,7 +51,6 @@ class Config(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
     rag: RAGConfig = Field(default_factory=RAGConfig)
-    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     ingestion: RAGConfig = Field(default_factory=RAGConfig)
 
@@ -98,14 +58,7 @@ class Config(BaseModel):
     vertex: VertexConfig = Field(default_factory=VertexConfig)
     postgres: PostgresConfig = Field(default_factory=PostgresConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
-    anthropic: AnthropicConfig = Field(default_factory=AnthropicConfig)
-    openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
-    groq: GroqConfig = Field(default_factory=GroqConfig)
-    runpod: RunPodConfig = Field(default_factory=RunPodConfig)
-    hf_hub: HuggingFaceHubConfig = Field(default_factory=HuggingFaceHubConfig)
     local: LocalOpenAIConfig = Field(default_factory=LocalOpenAIConfig)
-    google_cse: GoogleCSEConfig = Field(default_factory=GoogleCSEConfig)
-    langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
 
     # Internal state
     paths_cache: ConfigPaths | None = None
@@ -174,7 +127,7 @@ class Config(BaseModel):
                 config.paths_cache = paths
                 config.loaded_from.append(toml_path)
             except Exception as e:
-                logger = logging.getLogger(__name__)
+                logger = get_context_unit_logger(__name__)
                 logger.warning(f"Failed to load TOML config from {toml_path}: {e}")
 
         # Override with environment variables
@@ -252,34 +205,8 @@ class Config(BaseModel):
             self.openai.api_key = openai_key
         if openai_org := get_env("OPENAI_ORGANIZATION"):
             self.openai.organization = openai_org
-
-        # Anthropic configuration
-        if anthropic_key := get_env("ANTHROPIC_API_KEY"):
-            self.anthropic.api_key = anthropic_key
-
-        # OpenRouter configuration
-        if openrouter_key := get_env("OPENROUTER_API_KEY"):
-            self.openrouter.api_key = openrouter_key
-        if openrouter_base_url := get_env("OPENROUTER_BASE_URL"):
-            self.openrouter.base_url = openrouter_base_url
-
-        # Groq configuration
-        if groq_key := get_env("GROQ_API_KEY"):
-            self.groq.api_key = groq_key
-        if groq_base_url := get_env("GROQ_BASE_URL"):
-            self.groq.base_url = groq_base_url
-
-        # RunPod configuration
-        if runpod_key := get_env("RUNPOD_API_KEY"):
-            self.runpod.api_key = runpod_key
-        if runpod_base_url := get_env("RUNPOD_BASE_URL"):
-            self.runpod.base_url = runpod_base_url
-
-        # HuggingFace Hub configuration
-        if hf_key := get_env("HF_TOKEN"):
-            self.hf_hub.api_key = hf_key
-        if hf_base_url := get_env("HF_BASE_URL"):
-            self.hf_hub.base_url = hf_base_url
+        if openai_embedding_model := get_env("OPENAI_EMBEDDING_MODEL"):
+            self.openai.embedding_model = openai_embedding_model
 
         # Local OpenAI-compatible servers (vLLM/Ollama)
         if v := get_env("LOCAL_OLLAMA_BASE_URL"):
@@ -287,36 +214,13 @@ class Config(BaseModel):
         if v := get_env("LOCAL_VLLM_BASE_URL"):
             self.local.vllm_base_url = v
 
-        # Google CSE configuration
-        if cse_enabled := get_bool_env("GOOGLE_CSE_ENABLED"):
-            self.google_cse.enabled = cse_enabled
-        if cse_key := get_env("GOOGLE_CSE_API_KEY"):
-            self.google_cse.api_key = cse_key
-        if cse_cx := get_env("GOOGLE_CSE_CX"):
-            self.google_cse.search_engine_id = cse_cx
-
-        # Langfuse configuration
-        if langfuse_secret := get_env("LANGFUSE_SECRET_KEY"):
-            self.langfuse.secret_key = langfuse_secret
-        if langfuse_public := get_env("LANGFUSE_PUBLIC_KEY"):
-            self.langfuse.public_key = langfuse_public
-        if langfuse_host := get_env("LANGFUSE_HOST"):
-            self.langfuse.host = langfuse_host
-        if langfuse_env := get_env("LANGFUSE_ENVIRONMENT"):
-            self.langfuse.environment = langfuse_env
-        if langfuse_service := get_env("LANGFUSE_SERVICE_NAME"):
-            self.langfuse.service_name = langfuse_service
-
         # Use shared configuration from contextcore where applicable
         from contextcore.config import get_core_config as get_shared_core_config
 
         shared_config = get_shared_core_config()
 
-        # Security configuration — uses unified SECURITY_ENABLED from contextcore
-        if shared_config.security.enabled is not None:
-            self.security.enabled = shared_config.security.enabled
-        if private_key_path := get_env("CONTEXTBRAIN_PRIVATE_KEY_PATH"):
-            self.security.private_key_path = private_key_path
+        # Security: private_key_path removed — signing is
+        # handled by contextcore.signing backends (auto-detected).
 
         # Debug/Logging
         if debug_val := get_bool_env("CONTEXTBRAIN_DEBUG"):
@@ -342,8 +246,6 @@ class Config(BaseModel):
             self.database_url = v
         if v := get_env("BRAIN_TENANTS"):
             self.tenants = [t.strip() for t in v.split(",") if t.strip()]
-        if get_bool_env("BRAIN_NEWS_ENGINE"):
-            self.news_engine = True
         if v := get_env("EMBEDDER_TYPE"):
             self.embedder_type = v.lower()
 

@@ -6,6 +6,7 @@
 python = "3.13"
 uv = "latest"
 
+[settings]
 env_shell_expand = true
 
 [env]

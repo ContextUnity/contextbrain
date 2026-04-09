@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 
-from contextcore import ContextUnit
+from contextcore import ContextUnit, get_context_unit_logger
 
 from contextbrain.core import Config
 from contextbrain.ingestion.rag.config import get_assets_paths
@@ -19,7 +18,7 @@ from contextbrain.ingestion.rag.stages.store import (
 from contextbrain.transformers.keyphrases import KeyphraseTransformer
 from contextbrain.transformers.ner import NERTransformer
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def _merge_keywords(existing: object, new: object) -> list[str]:

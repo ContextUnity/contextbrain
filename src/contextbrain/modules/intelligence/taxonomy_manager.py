@@ -1,10 +1,10 @@
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+from contextcore import get_context_unit_logger
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class TaxonomyManager:

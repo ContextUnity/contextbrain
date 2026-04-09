@@ -11,7 +11,6 @@ from contextcore import (
     load_shared_config_from_env,
     setup_logging,
 )
-from contextcore.security import get_security_interceptors
 
 from .brain_service import BrainService
 from .commerce_service import HAS_COMMERCE
@@ -40,8 +39,8 @@ async def serve():
     # Build interceptor list: security + domain permission checks
     from .interceptors import BrainPermissionInterceptor
 
-    interceptors = list(get_security_interceptors())
-    interceptors.append(BrainPermissionInterceptor())
+    interceptors = []
+    interceptors.append(BrainPermissionInterceptor(shield_url=config.shield_url))
 
     server = grpc.aio.server(
         interceptors=interceptors,
@@ -58,7 +57,6 @@ async def serve():
     include_commerce = HAS_COMMERCE
     await brain.storage.ensure_schema(
         include_commerce=include_commerce,
-        include_news_engine=brain_config.news_engine,
         vector_dim=brain_config.postgres.vector_dim,
     )
 

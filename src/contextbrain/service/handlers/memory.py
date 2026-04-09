@@ -43,8 +43,6 @@ class MemoryHandlersMixin:
         metadata = params.metadata.copy() if params.metadata else {}
         if unit.trace_id:
             metadata["trace_id"] = str(unit.trace_id)
-        if unit.provenance:
-            metadata["provenance"] = list(unit.provenance)
 
         await self.storage.add_episode(
             id=str(unit.unit_id),
@@ -57,7 +55,6 @@ class MemoryHandlersMixin:
         return make_response(
             payload={"success": True},
             parent_unit=unit,
-            provenance=["brain:add_episode"],
         )
 
     @grpc_stream_error_handler
@@ -85,7 +82,6 @@ class MemoryHandlersMixin:
                     "created_at": str(row.get("created_at", "")),
                 },
                 parent_unit=unit,
-                provenance=["brain:get_recent_episodes"],
             )
 
     @grpc_error_handler
@@ -109,7 +105,6 @@ class MemoryHandlersMixin:
         return make_response(
             payload={"success": True},
             parent_unit=unit,
-            provenance=["brain:upsert_fact"],
         )
 
     @grpc_stream_error_handler
@@ -136,7 +131,6 @@ class MemoryHandlersMixin:
                     "updated_at": str(row.get("updated_at", "")),
                 },
                 parent_unit=unit,
-                provenance=["brain:get_user_facts"],
             )
 
     @grpc_error_handler
@@ -166,7 +160,6 @@ class MemoryHandlersMixin:
         return make_response(
             payload={"deleted_count": deleted, "tenant_id": params.tenant_id},
             parent_unit=unit,
-            provenance=["brain:retention_cleanup"],
         )
 
     @grpc_error_handler
@@ -187,7 +180,6 @@ class MemoryHandlersMixin:
                 "tenant_id": tenant_id,
             },
             parent_unit=unit,
-            provenance=["brain:get_episode_stats"],
         )
 
 

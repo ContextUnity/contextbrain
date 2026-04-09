@@ -8,7 +8,7 @@ from alembic import op
 
 # revision identifiers
 revision = "0004_taxonomy_gender"
-down_revision = ("0003_taxonomy_embedding", "news_engine_001")  # Merge heads
+down_revision = "0003_taxonomy_embedding"
 branch_labels = None
 depends_on = None
 

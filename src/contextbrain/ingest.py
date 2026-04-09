@@ -1,12 +1,11 @@
-import logging
 from typing import Any, Dict
 
-from contextcore import ContextUnit
+from contextcore import ContextUnit, get_context_unit_logger
 from contextcore.sdk.models import UnitMetrics
 
 from .storage import PostgresKnowledgeStore
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class IngestionService:
@@ -39,6 +38,7 @@ class IngestionService:
         modality: str = "text",
         embedder: Any = None,
         tenant_id: str = "default",
+        user_id: str | None = None,
         source_type: str = "document",
     ) -> str:
         """
@@ -50,6 +50,7 @@ class IngestionService:
                 metadata,
                 embedder=embedder,
                 tenant_id=tenant_id,
+                user_id=user_id,
                 source_type=source_type,
             )
         elif modality == "image":
@@ -66,6 +67,7 @@ class IngestionService:
         metadata: Dict[str, Any],
         embedder: Any = None,
         tenant_id: str = "default",
+        user_id: str | None = None,
         source_type: str = "document",
     ) -> str:
         # Enrichment step (The "Smart Brain" part)
@@ -113,6 +115,7 @@ class IngestionService:
                 nodes=[node],
                 edges=[],
                 tenant_id=tenant_id,
+                user_id=user_id,
             )
             await self.graph.add_data(unit, enriched_metadata.get("entities", []))
 

@@ -63,7 +63,6 @@ class TraceHandlersMixin:
         return make_response(
             payload={"id": trace_id, "success": True},
             parent_unit=unit,
-            provenance=provenance,
         )
 
     @grpc_stream_error_handler
@@ -102,7 +101,6 @@ class TraceHandlersMixin:
                     "created_at": str(row.get("created_at", "")),
                 },
                 parent_unit=unit,
-                provenance=["brain:get_traces"],
             )
 
 

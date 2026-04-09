@@ -78,55 +78,6 @@ class QueryMemoryPayload(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
 
 
-# =====================================================
-# NewsEngine Operations
-# =====================================================
-
-
-class UpsertNewsItemPayload(BaseModel):
-    """Payload for UpsertNewsItem RPC."""
-
-    tenant_id: str
-    item_type: str = "raw"  # "raw" or "fact"
-    url: str
-    headline: str
-    summary: str = ""
-    category: str = ""
-    source_api: str = ""
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    harvested_at: Optional[str] = None
-
-
-class GetNewsItemsPayload(BaseModel):
-    """Payload for GetNewsItems RPC."""
-
-    tenant_id: str
-    item_type: str = "fact"  # "raw" or "fact"
-    limit: int = 20
-    since: Optional[str] = None  # ISO datetime
-
-
-class UpsertNewsPostPayload(BaseModel):
-    """Payload for UpsertNewsPost RPC."""
-
-    tenant_id: str
-    headline: str
-    content: str
-    agent: str
-    emoji: str = "📰"
-    fact_url: str = ""
-    fact_id: str = ""
-    scheduled_at: Optional[str] = None
-
-
-class CheckNewsPostExistsPayload(BaseModel):
-    """Payload for CheckNewsPostExists RPC."""
-
-    tenant_id: str
-    fact_url: str
-
-
-# =====================================================
 # Episodic & Entity Memory
 # =====================================================
 

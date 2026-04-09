@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from pathlib import Path
 from typing import Any
 
+from contextcore import get_context_unit_logger
 from psycopg_pool import AsyncConnectionPool
 
 from contextbrain.core import get_core_config
@@ -16,7 +16,7 @@ from contextbrain.storage.postgres import GraphEdge, GraphNode, PostgresKnowledg
 from ..config import get_assets_paths
 from ..settings import RagIngestionConfig
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def load_postgres_kg(*, config: RagIngestionConfig) -> dict[str, str]:

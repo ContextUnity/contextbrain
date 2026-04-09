@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from contextcore.permissions import Permissions
 from contextcore.security import (
-    EnforcementMode,
     ServicePermissionInterceptor,
 )
 
@@ -35,13 +34,10 @@ RPC_PERMISSION_MAP: dict[str, str] = {
     # Traces
     "LogTrace": Permissions.TRACE_WRITE,
     "GetTraces": Permissions.TRACE_READ,
-    # Commerce (via CommerceService — same server)
-    "GetProduct": Permissions.BRAIN_READ,
-    "UpsertProduct": Permissions.BRAIN_WRITE,
-    "SearchProducts": Permissions.BRAIN_READ,
-    "UpsertNewsPost": Permissions.BRAIN_WRITE,
-    "GetNewsFeed": Permissions.BRAIN_READ,
-    "CheckNewsPostExists": Permissions.BRAIN_READ,
+    # Taxonomy
+    "UpsertTaxonomy": Permissions.BRAIN_WRITE,
+    "CreateKGRelation": Permissions.BRAIN_WRITE,
+    # Other
     "MatchDuckDB": Permissions.BRAIN_READ,
 }
 
@@ -54,15 +50,15 @@ class BrainPermissionInterceptor(ServicePermissionInterceptor):
 
     Usage::
 
-        interceptor = BrainPermissionInterceptor(enforcement=EnforcementMode.WARN)
+        interceptor = BrainPermissionInterceptor()
         server = grpc.aio.server(interceptors=[interceptor])
     """
 
-    def __init__(self, *, enforcement: EnforcementMode | None = None) -> None:
+    def __init__(self, *, shield_url: str = "") -> None:
         super().__init__(
             RPC_PERMISSION_MAP,
             service_name="Brain",
-            enforcement=enforcement,
+            shield_url=shield_url,
         )
 
 

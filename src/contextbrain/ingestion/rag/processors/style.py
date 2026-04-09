@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import logging
 import random
 from pathlib import Path
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 
 from ..core.types import RawData
 from ..utils.llm import llm_generate
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def generate_persona_profile(

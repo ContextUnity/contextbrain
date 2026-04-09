@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Iterable, List
 
+from contextcore import get_context_unit_logger
 from contextcore.exceptions import StorageError
 from psycopg import errors as pg_errors
 from psycopg import sql
@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 from ..models import GraphNode, SearchResult, TaxonomyPath
 from .helpers import vec
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class SearchMixin:

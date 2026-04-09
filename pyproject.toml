@@ -121,9 +121,9 @@ nlp = [
     "spacy>=3.7.0",
     "keybert>=0.8.0",
 ]
-# Everything (for development/testing)
+# Everything (for development/testing, excludes torch-dependent extras)
 all = [
-    "contextbrain[vertex,storage,integrations,ingestion,observability,nlp]"
+    "contextbrain[vertex,storage,integrations,ingestion,observability]"
 ]
 
 # Experimental / optional bundle (may be unsatisfiable depending on resolver + platform)
@@ -169,7 +169,6 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
-    "-p", "no:django",
 ]
 
 markers = [

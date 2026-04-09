@@ -14,15 +14,16 @@ Priority: CONTEXTBRAIN_CONFIG_PATH > CONTEXTBRAIN_ASSETS_PATH > package default
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import get_env
 
 from .settings import RagIngestionConfig
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 # Environment variable names
 ENV_CONFIG_PATH = "CONTEXTBRAIN_CONFIG_PATH"

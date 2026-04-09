@@ -8,13 +8,12 @@ from __future__ import annotations
 from contextcore import brain_pb2_grpc, get_context_unit_logger
 
 from ..storage.duckdb_store import DuckDBStore
-from ..storage.postgres import NewsStore, PostgresKnowledgeStore
+from ..storage.postgres import PostgresKnowledgeStore
 from .embedders import get_embedder
 from .handlers import (
     CommerceHandlersMixin,
     KnowledgeHandlersMixin,
     MemoryHandlersMixin,
-    NewsHandlersMixin,
     TaxonomyHandlersMixin,
     TraceHandlersMixin,
 )
@@ -27,7 +26,6 @@ class BrainService(
     MemoryHandlersMixin,
     TraceHandlersMixin,
     TaxonomyHandlersMixin,
-    NewsHandlersMixin,
     CommerceHandlersMixin,
     brain_pb2_grpc.BrainServiceServicer,
 ):
@@ -38,7 +36,6 @@ class BrainService(
     - MemoryHandlersMixin: episodes, facts
     - TraceHandlersMixin: agent execution traces
     - TaxonomyHandlersMixin: taxonomy CRUD
-    - NewsHandlersMixin: news items and posts
     - CommerceHandlersMixin: verifications
     """
 
@@ -56,7 +53,6 @@ class BrainService(
             dsn=dsn,
             schema=config.schema_name,
         )
-        self.news_store = NewsStore(dsn=dsn)
         self.duckdb = DuckDBStore()
         self.embedder = get_embedder(config)
 

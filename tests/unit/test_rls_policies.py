@@ -27,9 +27,6 @@ class TestRLSPolicies:
         "user_facts",
         "agent_traces",
         "catalog_taxonomy",
-        "news_raw",
-        "news_facts",
-        "news_posts",
     ]
 
     def test_rls_policies_cover_all_tenant_tables(self):
@@ -131,8 +128,8 @@ class TestRLSPolicies:
         assert stmts1 == stmts2
 
     def test_expected_table_count(self):
-        """Exactly 10 tenant-scoped tables are configured."""
-        assert len(self.EXPECTED_TENANT_TABLES) == 10
+        """Exactly 7 tenant-scoped tables are configured."""
+        assert len(self.EXPECTED_TENANT_TABLES) == 7
 
 
 # ── set_tenant_context Tests ─────────────────────────────────────

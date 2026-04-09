@@ -1,6 +1,6 @@
 """Provider configurations for external services."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 class VertexConfig(BaseModel):
@@ -37,19 +37,7 @@ class OpenAIConfig(BaseModel):
 
     api_key: str = ""
     organization: str | None = None
-
-
-class AnthropicConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    api_key: str = ""
-
-
-class OpenRouterConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    api_key: str = ""
-    base_url: str = "https://openrouter.ai/api/v1"
+    embedding_model: str | None = None
 
 
 class LocalOpenAIConfig(BaseModel):
@@ -59,60 +47,3 @@ class LocalOpenAIConfig(BaseModel):
 
     ollama_base_url: str = "http://localhost:11434/v1"
     vllm_base_url: str = "http://localhost:8000/v1"
-
-
-class GroqConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    api_key: str = ""
-    base_url: str = "https://api.groq.com/openai/v1"
-
-
-class RunPodConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    api_key: str = ""
-    # Usually: https://api.runpod.ai/v2/<endpoint_id>/openai/v1
-    base_url: str = ""
-
-
-class HuggingFaceHubConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    api_key: str = ""  # HF_TOKEN
-    base_url: str = "https://api-inference.huggingface.co/v1"
-
-
-class GoogleCSEConfig(BaseModel):
-    # Support `cx` key in TOML (`google_cse.cx`) while keeping a more descriptive field name internally.
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-
-    enabled: bool = False
-    api_key: str = ""
-    search_engine_id: str = Field(default="", alias="cx")
-
-    @property
-    def cx(self) -> str:
-        """Compatibility alias for Google CSE search engine id (cx)."""
-        return self.search_engine_id
-
-    @cx.setter
-    def cx(self, v: str) -> None:
-        self.search_engine_id = v
-
-
-class LangfuseConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    secret_key: str = ""
-    public_key: str = ""
-    host: str = "https://cloud.langfuse.com"
-    environment: str = "development"
-    service_name: str = "contextbrain"
-
-
-class PluginsConfig(BaseModel):
-    """User plugin directories to scan eagerly (explicit opt-in)."""
-
-    model_config = ConfigDict(extra="ignore")
-    paths: list[str] = Field(default_factory=list)

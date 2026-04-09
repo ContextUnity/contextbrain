@@ -10,17 +10,18 @@ Used as guardrails to make ingestion iterations measurable and predictable.
 from __future__ import annotations
 
 import json
-import logging
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from contextcore import get_context_unit_logger
+
 from ..config import get_assets_paths
 from ..graph.serialization import load_graph_secure
 from ..settings import RagIngestionConfig
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def _count_jsonl_lines(path: Path, *, hard_cap: int = 2_000_000) -> int:

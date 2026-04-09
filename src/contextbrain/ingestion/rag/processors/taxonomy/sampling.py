@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core.types import StructData, StructDataValue
 
@@ -15,7 +16,7 @@ from .common import (
     windowed_snippets,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def collect_clean_text_samples_from_dir(

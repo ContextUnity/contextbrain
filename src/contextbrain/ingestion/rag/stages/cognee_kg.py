@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from pathlib import Path
+
+from contextcore import get_context_unit_logger
 
 from ...tools.cognee import CogneeGraphBuilder
 from ..config import get_assets_paths
@@ -13,7 +14,7 @@ from ..core.utils import parallel_map, resolve_workers
 from ..settings import RagIngestionConfig
 from ..stages.store import read_raw_data_jsonl
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def extract_cognee_kg(

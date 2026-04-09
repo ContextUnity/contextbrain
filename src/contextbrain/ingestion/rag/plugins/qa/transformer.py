@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 from contextbrain.core.types import StructData
@@ -12,7 +13,7 @@ from .analyzer import QuestionAnalyzer
 from .speaker import SpeakerProcessor
 from .taxonomy_mapper import TaxonomyMapper
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class QATransformer:

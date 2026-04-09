@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Iterable
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 
@@ -16,7 +17,7 @@ from ..processors.style import (
 from ..settings import RagIngestionConfig
 from .store import read_raw_data_jsonl
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def build_persona(*, config: RagIngestionConfig, core_cfg: Config) -> Path | None:

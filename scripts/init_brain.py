@@ -8,7 +8,7 @@ Usage:
     # With env vars:
     BRAIN_DATABASE_URL=postgresql://brain:brain_dev@localhost:5433/brain \
     PGVECTOR_DIM=1536 \
-    uv run python -m scripts.init_brain --commerce --news
+    uv run python -m scripts.init_brain --commerce
 
     # Or from docker-compose entrypoint:
     python -m scripts.init_brain && python -m contextbrain
@@ -29,7 +29,6 @@ async def init_brain(
     dsn: str,
     *,
     include_commerce: bool = False,
-    include_news: bool = False,
 ) -> None:
     """Create Brain schema and all tables."""
     from contextbrain.storage.postgres import PostgresKnowledgeStore
@@ -41,11 +40,9 @@ async def init_brain(
     print(f"   Schema: {store.schema}")
     print(f"   Vector dim: {os.getenv('PGVECTOR_DIM', '1536')}")
     print(f"   Commerce: {include_commerce}")
-    print(f"   News: {include_news}")
 
     await store.ensure_schema(
         include_commerce=include_commerce,
-        include_news_engine=include_news,
     )
 
     print("✅ Brain schema initialized successfully!")
@@ -58,11 +55,6 @@ def main() -> None:
         "--commerce",
         action="store_true",
         help="Include commerce/taxonomy tables",
-    )
-    parser.add_argument(
-        "--news",
-        action="store_true",
-        help="Include news engine tables",
     )
     parser.add_argument(
         "--dsn",
@@ -80,7 +72,6 @@ def main() -> None:
         init_brain(
             dsn,
             include_commerce=args.commerce,
-            include_news=args.news,
         )
     )
 

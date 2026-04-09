@@ -9,10 +9,11 @@ Design:
 from __future__ import annotations
 
 import json
-import logging
 import re
 from pathlib import Path
 from typing import Any
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 
@@ -28,7 +29,7 @@ from .taxonomy.sampling import (
     collect_clean_text_samples_from_dir,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 _META_TERM_RE = re.compile(
     r"\b(public domain|original text|author'?s|preface|foreword|appendix|"

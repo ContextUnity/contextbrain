@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core.types import StructData, StructDataValue
 
 from ..core import RawData, ShadowRecord
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def write_raw_data_jsonl(items: list[RawData], path: Path, *, overwrite: bool = True) -> int:

@@ -9,13 +9,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from contextcore import get_context_unit_logger
+
+logger = get_context_unit_logger(__name__)
 
 # Silence noisy httpx logger (logs every OpenAI API call at INFO level)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+get_context_unit_logger("httpx").setLevel(logging.WARNING)
 
 
 # ─── Embedding Cache ─────────────────────────────────────────────────────────
@@ -138,7 +139,9 @@ def get_embedding_cache(redis_url: Optional[str] = None) -> EmbeddingCache:
     """Get or create the singleton embedding cache."""
     global _cache
     if _cache is None:
-        url = redis_url or os.getenv("REDIS_URL")
+        from contextcore.config import get_core_config
+
+        url = redis_url or get_core_config().redis_url
         _cache = EmbeddingCache(redis_url=url)
     return _cache
 
@@ -153,7 +156,9 @@ class OpenAIEmbedder:
 
     def __init__(self, model_name: str = "text-embedding-3-small"):
         self._model_name = model_name
-        self._api_key = os.getenv("OPENAI_API_KEY")
+        from contextbrain.core.config.main import Config
+
+        self._api_key = Config.load().openai.api_key
         self._dim = 1536 if "small" in model_name or "ada" in model_name else 3072
         self._cache = get_embedding_cache()
         if not self._api_key:
@@ -162,7 +167,9 @@ class OpenAIEmbedder:
     @classmethod
     def get_instance(cls) -> "OpenAIEmbedder":
         if cls._instance is None:
-            model = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+            from contextbrain.core.config.main import Config
+
+            model = Config.load().openai.embedding_model or "text-embedding-3-small"
             cls._instance = cls(model_name=model)
         return cls._instance
 
@@ -278,8 +285,11 @@ def get_embedder(config=None):
     redis_url = getattr(config, "redis_url", None) if config else None
     get_embedding_cache(redis_url=redis_url)
 
-    embedder_type = (config.embedder_type if config else os.getenv("EMBEDDER_TYPE", "")).lower()
-    openai_key = config.openai.api_key if config else os.getenv("OPENAI_API_KEY", "")
+    from contextbrain.core.config.main import Config
+
+    brain_cfg = config or Config.load()
+    embedder_type = brain_cfg.embedder_type.lower()
+    openai_key = brain_cfg.openai.api_key
 
     if embedder_type == "openai":
         return OpenAIEmbedder.get_instance()

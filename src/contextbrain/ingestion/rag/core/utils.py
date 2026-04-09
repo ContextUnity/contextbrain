@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import html
 import json
-import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Iterable, TypeVar
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 from contextbrain.core.types import StructData, StructDataValue
@@ -20,7 +21,7 @@ from ..config import DEFAULT_TAXONOMY_PATH
 from ..settings import RagIngestionConfig
 from .types import GraphEnrichmentResult
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")

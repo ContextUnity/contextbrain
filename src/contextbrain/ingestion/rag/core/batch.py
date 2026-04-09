@@ -31,6 +31,7 @@ This module provides reusable helpers for batch LLM calls during ingestion:
 **Example Usage**:
 
 ```python
+from contextcore import get_context_unit_logger
 from contextbrain.ingestion.rag.core.batch import batch_validate, filter_by_indices
 
 def build_prompt(batch: list[tuple[int, str]]) -> str:
@@ -49,16 +50,17 @@ filtered = filter_by_indices(records, valid_indices)
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 
 from ..utils.llm import llm_generate
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")

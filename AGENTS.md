@@ -26,7 +26,7 @@ When modifying or extending this service, update documentation strictly across t
 
 ## Rules specific to ContextBrain
 - Any direct interaction with PostgreSQL MUST be conducted through the abstracted layers in `storage/`, never through naked SQL execution outside of dedicated repositories.
-- `ContextToken` validation is non-negotiable. Do not expose `storage/` methods via gRPC without ensuring the `TokenValidationInterceptor` and `BrainPermissionInterceptor` are active.
+- `ContextToken` validation is non-negotiable. Do not expose `storage/` methods via gRPC without ensuring the `BrainPermissionInterceptor` is active.
 - Rely on `contextcore` for `ContextUnit` protobuf manipulation.
 
 

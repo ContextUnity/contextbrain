@@ -6,13 +6,14 @@ Default provider: gcloud (GCS + Vertex AI Search).
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
+
+from contextcore import get_context_unit_logger
 
 from ..settings import RagIngestionConfig
 from ..upload_providers import UploadResult, get_provider
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def deploy_jsonl_files(

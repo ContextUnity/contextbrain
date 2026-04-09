@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import Any
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 from contextbrain.core.types import StructData
@@ -14,7 +15,7 @@ from .analyzer import BookAnalyzer
 from .extractor import PDFExtractor
 from .normalizer import ContentNormalizer
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class BookTransformer:

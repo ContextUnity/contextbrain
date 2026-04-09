@@ -64,7 +64,6 @@ class KnowledgeHandlersMixin:
                     "metadata": {k: str(v) for k, v in (res.node.metadata or {}).items()},
                 },
                 parent_unit=unit,  # Inherit trace_id and extend provenance
-                provenance=["brain:search"],
             )
 
     @grpc_error_handler
@@ -105,7 +104,6 @@ class KnowledgeHandlersMixin:
                 "edges": result.get("edges", []),
             },
             parent_unit=unit,
-            provenance=["brain:graph_search"],
         )
 
     @grpc_error_handler
@@ -141,7 +139,6 @@ class KnowledgeHandlersMixin:
         return make_response(
             payload={"success": True},
             parent_unit=unit,  # Inherit trace_id and extend provenance
-            provenance=["brain:create_kg"],
         )
 
     @grpc_error_handler
@@ -169,7 +166,6 @@ class KnowledgeHandlersMixin:
         return make_response(
             payload={"id": doc_id, "success": True},
             parent_unit=unit,  # Inherit trace_id and extend provenance
-            provenance=["brain:upsert"],
         )
 
     @grpc_stream_error_handler
@@ -201,7 +197,6 @@ class KnowledgeHandlersMixin:
                     "score": res.score,
                 },
                 parent_unit=unit,  # Inherit trace_id and extend provenance
-                provenance=["brain:query_memory"],
             )
 
 

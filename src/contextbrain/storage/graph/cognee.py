@@ -1,10 +1,9 @@
-import logging
 from typing import Any, Dict, List
 
-from contextcore import ContextUnit
+from contextcore import ContextUnit, get_context_unit_logger
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class GraphNode(BaseModel):

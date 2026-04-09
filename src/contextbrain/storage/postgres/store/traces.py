@@ -5,7 +5,11 @@ from __future__ import annotations
 import uuid
 from typing import Any, List
 
+from contextcore.logging import get_context_unit_logger
+
 from .helpers import Json, execute, fetch_all
+
+logger = get_context_unit_logger(__name__)
 
 
 class TracesMixin:
@@ -32,6 +36,7 @@ class TracesMixin:
             Generated trace UUID.
         """
         trace_id = str(uuid.uuid4())
+
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             await execute(
                 conn,
@@ -60,6 +65,7 @@ class TracesMixin:
                     "provenance": provenance,
                 },
             )
+
         return trace_id
 
     async def get_traces(

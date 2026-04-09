@@ -237,8 +237,8 @@ See [Security Architecture](../../docs/security_architecture.md) for the full mo
 
 ### Token Verification
 
-Every gRPC call is verified via `TokenValidationInterceptor`:
-- Signature verification (Ed25519 / UnsignedBackend)
+Every gRPC call is verified via `ServicePermissionInterceptor`:
+- Signature verification (Ed25519 / HmacBackend)
 - `token.allowed_tenants` must include the requested `tenant_id`
 - `BrainPermissionInterceptor` enforces domain-level permissions (`brain:read`, `brain:write`)
 

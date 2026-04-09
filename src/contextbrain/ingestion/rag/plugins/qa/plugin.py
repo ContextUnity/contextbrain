@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
+
+from contextcore import get_context_unit_logger
 
 if TYPE_CHECKING:
     from .transformer import QATransformer
@@ -39,7 +40,7 @@ from ...core.utils import (
 from ...settings import RagIngestionConfig
 from ...utils.llm import llm_generate
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 # Minimum words for a speaker turn to be considered a standalone segment
 # Shorter turns (like "Right", "Yeah") are merged with the previous segment

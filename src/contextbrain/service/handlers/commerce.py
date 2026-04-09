@@ -34,7 +34,6 @@ class CommerceHandlersMixin:
         yield make_response(
             payload={"id": "", "content": "", "context_json": "{}"},
             parent_unit=unit,  # Inherit trace_id and extend provenance
-            provenance=["brain:get_pending"],
         )
 
     @grpc_error_handler
@@ -54,7 +53,6 @@ class CommerceHandlersMixin:
         return make_response(
             payload={"success": True},
             parent_unit=unit,  # Inherit trace_id and extend provenance
-            provenance=["brain:submit_verification"],
         )
 
     @grpc_error_handler
@@ -161,7 +159,6 @@ class CommerceHandlersMixin:
                 "duckdb_leftovers_count": len(leftovers_dict),
             },
             parent_unit=unit,
-            provenance=["brain:commerce:match_duckdb"],
         )
 
 

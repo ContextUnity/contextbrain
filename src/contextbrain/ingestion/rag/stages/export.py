@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import time
 from datetime import datetime
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core.types import StructData
 
@@ -16,7 +17,7 @@ from ..core.utils import parallel_map, resolve_workers
 from ..settings import RagIngestionConfig
 from .store import read_shadow_records_jsonl
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def export_jsonl_per_type(

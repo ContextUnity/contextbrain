@@ -1,11 +1,11 @@
 import json
-import logging
 import re
 from typing import Any, List, Optional
 
+from contextcore import get_context_unit_logger
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class Entity(BaseModel):

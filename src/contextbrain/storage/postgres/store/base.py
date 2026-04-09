@@ -14,7 +14,7 @@ logger = get_context_unit_logger(__name__)
 
 # psycopg.pool emits WARNING per pool-worker on every connection issue;
 # one error-level message is enough — suppress repetitive warnings.
-logging.getLogger("psycopg.pool").setLevel(logging.ERROR)
+get_context_unit_logger("psycopg.pool").setLevel(logging.ERROR)
 
 
 class PostgresStoreBase(KnowledgeStoreInterface):
@@ -51,7 +51,14 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                 max_size=self._pool_max_size,
                 timeout=60.0,
                 open=False,
+                check=AsyncConnectionPool.check_connection,
                 configure=self._configure_connection,
+                kwargs={
+                    "keepalives": 1,
+                    "keepalives_idle": 60,
+                    "keepalives_interval": 10,
+                    "keepalives_count": 5,
+                },
             )
         if not self._pool._opened:
             await self._pool.open()
@@ -99,6 +106,11 @@ class PostgresStoreBase(KnowledgeStoreInterface):
 
                     await set_tenant_context(conn, tenant_id, user_id)
                 except Exception as e:
+                    import psycopg
+
+                    if getattr(conn, "closed", False) or isinstance(e, psycopg.OperationalError):
+                        raise  # Connection is dead, do not swallow
+
                     # RLS is defence-in-depth — don't block operations
                     # if set_tenant_context fails.  Application-level
                     # WHERE tenant_id = %s still provides isolation.
@@ -111,9 +123,11 @@ class PostgresStoreBase(KnowledgeStoreInterface):
 
                 try:
                     yield conn
-                    await conn.commit()
+                    if not conn.closed:
+                        await conn.commit()
                 except Exception:
-                    await conn.rollback()
+                    if not conn.closed:
+                        await conn.rollback()
                     raise
 
         return _ctx()
@@ -122,7 +136,6 @@ class PostgresStoreBase(KnowledgeStoreInterface):
         self,
         *,
         include_commerce: bool = False,
-        include_news_engine: bool = False,
         vector_dim: int = 768,
     ) -> None:
         """Ensure database schema and tables exist.
@@ -140,7 +153,6 @@ class PostgresStoreBase(KnowledgeStoreInterface):
 
         Args:
             include_commerce: Create commerce/taxonomy tables
-            include_news_engine: Create news pipeline tables
             vector_dim: Embedding vector dimension (must match embedder output)
         """
 
@@ -171,7 +183,6 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                 statements = build_schema_sql(
                     vector_dim=vector_dim,
                     include_commerce=include_commerce,
-                    include_news_engine=include_news_engine,
                 )
                 for stmt in statements:
                     await conn.execute(stmt)
@@ -198,10 +209,9 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                         )
 
                 logger.info(
-                    "Schema ensured: %s (core=yes, commerce=%s, news=%s, rls=yes)",
+                    "Schema ensured: %s (core=yes, commerce=%s, rls=yes)",
                     self._schema,
                     include_commerce,
-                    include_news_engine,
                 )
             except Exception:
                 logger.error("Failed to ensure schema '%s'", self._schema, exc_info=True)

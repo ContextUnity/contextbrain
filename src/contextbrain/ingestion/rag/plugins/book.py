@@ -7,10 +7,11 @@ header parsing if TOC is not available.
 
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import Any, Callable
+
+from contextcore import get_context_unit_logger
 
 # Try to import and activate pymupdf_layout BEFORE importing pymupdf4llm
 # This suppresses the warning and improves PDF parsing quality
@@ -56,7 +57,7 @@ from ..core.utils import (
 from ..settings import RagIngestionConfig
 from ..utils.records import generate_id
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 # NOTE: pymupdf4llm does NOT reliably emit <page: N> markers. In practice it emits
 # separators like: "--- end of page=12 ---". Some parts of the pipeline still

@@ -35,7 +35,7 @@ def _core_schema(vector_dim: int) -> List[str]:
             user_id         TEXT NULL,
             node_kind       TEXT NOT NULL CHECK (node_kind IN ('chunk', 'concept')),
 
-            source_type     TEXT NULL CHECK (source_type IN ('video','book','qa','web','knowledge','documentation')),
+            source_type     TEXT NULL CHECK (source_type IN ('video','book','qa','web','knowledge','documentation','product','dealer_product')),
             source_id       TEXT NULL,
             title           TEXT NULL,
             content         TEXT NOT NULL,
@@ -207,86 +207,6 @@ def _commerce_schema(vector_dim: int) -> List[str]:
     ]
 
 
-def _news_engine_schema(vector_dim: int) -> List[str]:
-    """NewsEngine tables - for news pipeline news pipeline."""
-    return [
-        # Raw news items (direct from harvest)
-        """
-        CREATE TABLE IF NOT EXISTS news_raw (
-            id              TEXT PRIMARY KEY,
-            tenant_id       TEXT NOT NULL,
-            url             TEXT NOT NULL,
-            headline        TEXT NOT NULL,
-            summary         TEXT NOT NULL,
-            category        TEXT NULL,
-            source_api      TEXT NOT NULL,
-            metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
-            harvested_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-            UNIQUE (tenant_id, url)
-        );
-        """,
-        "CREATE INDEX IF NOT EXISTS news_raw_tenant_idx ON news_raw (tenant_id);",
-        "CREATE INDEX IF NOT EXISTS news_raw_harvested_idx ON news_raw (harvested_at DESC);",
-        "CREATE INDEX IF NOT EXISTS news_raw_category_idx ON news_raw (category);",
-        # Validated facts (after archivist filter)
-        """
-        CREATE TABLE IF NOT EXISTS news_facts (
-            id              TEXT PRIMARY KEY,
-            tenant_id       TEXT NOT NULL,
-            url             TEXT NOT NULL,
-            headline        TEXT NOT NULL,
-            summary         TEXT NOT NULL,
-            category        TEXT NULL,
-            suggested_agent TEXT NULL,
-            significance    DOUBLE PRECISION DEFAULT 0.5,
-            atomic_facts    TEXT[] DEFAULT '{}',
-            irony_potential TEXT NULL,
-            embedding       VECTOR(%d) NULL,
-            metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
-            raw_id          TEXT NULL REFERENCES news_raw(id) ON DELETE SET NULL,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-            UNIQUE (tenant_id, url)
-        );
-        """
-        % int(vector_dim),
-        "CREATE INDEX IF NOT EXISTS news_facts_tenant_idx ON news_facts (tenant_id);",
-        "CREATE INDEX IF NOT EXISTS news_facts_created_idx ON news_facts (created_at DESC);",
-        "CREATE INDEX IF NOT EXISTS news_facts_category_idx ON news_facts (category);",
-        """
-        CREATE INDEX IF NOT EXISTS news_facts_embedding_hnsw
-          ON news_facts USING hnsw (embedding vector_cosine_ops);
-        """,
-        # Generated posts (ready for publish)
-        """
-        CREATE TABLE IF NOT EXISTS news_posts (
-            id              TEXT PRIMARY KEY,
-            tenant_id       TEXT NOT NULL,
-            fact_id         TEXT NULL REFERENCES news_facts(id) ON DELETE SET NULL,
-            agent           TEXT NOT NULL,
-            headline        TEXT NOT NULL,
-            content         TEXT NOT NULL,
-            emoji           TEXT DEFAULT '📰',
-            fact_url        TEXT NULL,
-            embedding       VECTOR(%d) NULL,
-            scheduled_at    TIMESTAMPTZ NULL,
-            published_at    TIMESTAMPTZ NULL,
-            telegram_msg_id BIGINT NULL,
-            created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-        );
-        """
-        % int(vector_dim),
-        "CREATE INDEX IF NOT EXISTS news_posts_tenant_idx ON news_posts (tenant_id);",
-        "CREATE INDEX IF NOT EXISTS news_posts_scheduled_idx ON news_posts (scheduled_at);",
-        "CREATE INDEX IF NOT EXISTS news_posts_published_idx ON news_posts (published_at);",
-        # Unique constraint for deduplication by fact_url
-        "ALTER TABLE news_posts ADD CONSTRAINT IF NOT EXISTS news_posts_tenant_fact_url_uq UNIQUE (tenant_id, fact_url);",
-        """
-        CREATE INDEX IF NOT EXISTS news_posts_embedding_hnsw
-          ON news_posts USING hnsw (embedding vector_cosine_ops);
-        """,
-    ]
-
-
 def _column_backfill() -> List[str]:
     """Idempotent column additions for tables that already exist.
 
@@ -320,7 +240,7 @@ def _constraint_upgrades() -> List[str]:
         # DROP + re-ADD is idempotent:  IF EXISTS prevents error on first run
         "ALTER TABLE knowledge_nodes DROP CONSTRAINT IF EXISTS knowledge_nodes_source_type_check;",
         """ALTER TABLE knowledge_nodes ADD CONSTRAINT knowledge_nodes_source_type_check
-           CHECK (source_type IN ('video','book','qa','web','knowledge','documentation'));""",
+           CHECK (source_type IN ('video','book','qa','web','knowledge','documentation','product','dealer_product'));""",
     ]
 
 
@@ -347,9 +267,6 @@ def _rls_policies() -> List[str]:
         "user_facts",
         "agent_traces",
         "catalog_taxonomy",
-        "news_raw",
-        "news_facts",
-        "news_posts",
     ]
 
     stmts: list[str] = []
@@ -464,7 +381,6 @@ def build_schema_sql(
     *,
     vector_dim: int,
     include_commerce: bool = False,
-    include_news_engine: bool = False,
 ) -> Sequence[str]:
     """Build schema SQL statements.
 
@@ -474,7 +390,6 @@ def build_schema_sql(
             - 1536 for OpenAI text-embedding-3-small
             - 3072 for OpenAI text-embedding-3-large
         include_commerce: Include commerce/taxonomy tables
-        include_news_engine: Include news pipeline news tables
 
     Returns:
         List of SQL statements to execute
@@ -486,9 +401,6 @@ def build_schema_sql(
 
     if include_commerce:
         statements.extend(_commerce_schema(vector_dim))
-
-    if include_news_engine:
-        statements.extend(_news_engine_schema(vector_dim))
 
     return statements
 

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from contextcore import ContextUnit
+from contextcore import ContextToken, ContextUnit
 
 from contextbrain.core import get_core_config
 from contextbrain.core.interfaces import BaseProvider, IRead, IWrite
 from contextbrain.core.models import RetrievedDoc
-from contextbrain.core.tokens import AccessManager, ContextToken
 from contextbrain.core.types import coerce_struct_data
 
 # NOTE: Router-specific logic (model_registry, get_rag_retrieval_settings) removed.
@@ -43,7 +42,6 @@ def _flatten_keywords(metadata: dict[str, Any]) -> str | None:
 class PostgresProvider(BaseProvider, IRead, IWrite):
     def __init__(self, *, store: PostgresKnowledgeStore | None = None) -> None:
         cfg = get_core_config()
-        self._access = AccessManager.from_core_config()
         if store is not None:
             self._store = store
         else:
@@ -68,14 +66,9 @@ class PostgresProvider(BaseProvider, IRead, IWrite):
         NOTE: This is a simplified version for brain. Full retrieval logic
         (reranking, fusion, etc.) belongs in router.
         """
-        self._access.verify_read(token)
-        cfg = get_core_config()
-
         tenant_id = (filters or {}).get("tenant_id")
-        if cfg.security.enabled and not tenant_id:
-            raise PermissionError("tenant_id is required for Postgres retrieval")
         if not tenant_id:
-            tenant_id = "public"
+            raise PermissionError("tenant_id is required for Postgres retrieval")
 
         # TODO: Embeddings should come from a simpler interface in brain
         # Router-specific logic (model_registry, rag_cfg) removed.
@@ -86,8 +79,6 @@ class PostgresProvider(BaseProvider, IRead, IWrite):
         )
 
     async def write(self, data: ContextUnit, *, token: ContextToken) -> None:
-        self._access.verify_envelope_write(data, token)
-        cfg = get_core_config()
         payload = data.payload or {}
         content = payload.get("content")
         if isinstance(content, RetrievedDoc):
@@ -99,10 +90,8 @@ class PostgresProvider(BaseProvider, IRead, IWrite):
 
         metadata = payload.get("metadata", {})
         tenant_id = metadata.get("tenant_id") if isinstance(metadata, dict) else None
-        if cfg.security.enabled and not tenant_id:
-            raise PermissionError("tenant_id is required for Postgres write")
         if not tenant_id:
-            tenant_id = "public"
+            raise PermissionError("tenant_id is required for Postgres write")
         user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
 
         node_id = str(data.unit_id)

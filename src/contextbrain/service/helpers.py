@@ -17,11 +17,8 @@ from contextcore import (
     ContextToken,
     ContextUnit,
     context_unit_pb2,
-    extract_token_from_grpc_metadata,
 )
 from contextcore.exceptions import ContextUnityError
-
-from contextbrain.core.tokens import AccessManager
 
 
 def parse_unit(request) -> ContextUnit:
@@ -29,8 +26,12 @@ def parse_unit(request) -> ContextUnit:
     return ContextUnit.from_protobuf(request)
 
 
-# Re-export from contextcore for backward compatibility
-extract_token_from_context = extract_token_from_grpc_metadata
+# Fetch from verified auth context instead of re-parsing metadata
+def extract_token_from_context(context=None) -> Optional[ContextToken]:
+    from contextcore.authz.context import get_auth_context
+
+    auth_ctx = get_auth_context()
+    return auth_ctx.token if auth_ctx else None
 
 
 def validate_token_for_read(
@@ -42,21 +43,25 @@ def validate_token_for_read(
 ) -> None:
     """Validate ContextToken for read operations.
 
+    Prefers ``VerifiedAuthContext`` from interceptor when available.
+    Falls back to provided token for backward compatibility.
+
     Args:
         unit: The ContextUnit being read.
-        token: The ContextToken to validate.
+        token: The ContextToken to validate (legacy path).
         context: gRPC servicer context.
         required_permission: Specific permission to check (e.g. ``memory:read``).
-            Falls back to ``config.security.policies.read_permission``.
+            Defaults to ``brain:read``.
 
     Raises:
-        grpc.RpcError if token is invalid or missing required permissions
+        ContextUnityError if token is invalid or missing required permissions
     """
-    from contextbrain.core import get_core_config
+    from contextcore.authz import authorize, get_auth_context
 
-    config = get_core_config()
-    if not config.security.enabled:
-        return  # Security disabled, skip validation
+    # Prefer verified auth context from interceptor
+    auth_ctx = get_auth_context()
+    if auth_ctx is not None:
+        token = auth_ctx.token
 
     if token is None:
         raise ContextUnityError(code="UNAUTHENTICATED", message="Missing ContextToken")
@@ -64,16 +69,14 @@ def validate_token_for_read(
     if token.is_expired():
         raise ContextUnityError(code="UNAUTHENTICATED", message="ContextToken expired")
 
-    access = AccessManager.from_core_config()
-    try:
-        if required_permission:
-            # Domain-specific: check only the required permission
-            access.verify_read(token, permission=required_permission)
-        else:
-            # Generic: check default brain:read + unit-level scopes
-            access.verify_unit_read(unit, token)
-    except PermissionError as e:
-        raise ContextUnityError(code="PERMISSION_DENIED", message=str(e)) from e
+    # Use canonical authorize() engine
+    decision = authorize(
+        auth_ctx if auth_ctx is not None else token,
+        permission=required_permission or "brain:read",
+        service="brain",
+    )
+    if decision.denied:
+        raise ContextUnityError(code="PERMISSION_DENIED", message=decision.reason)
 
 
 def validate_token_for_write(
@@ -85,21 +88,25 @@ def validate_token_for_write(
 ) -> None:
     """Validate ContextToken for write operations.
 
+    Prefers ``VerifiedAuthContext`` from interceptor when available.
+    Falls back to provided token for backward compatibility.
+
     Args:
         unit: The ContextUnit being written.
-        token: The ContextToken to validate.
+        token: The ContextToken to validate (legacy path).
         context: gRPC servicer context.
         required_permission: Specific permission to check (e.g. ``memory:write``).
-            Falls back to ``config.security.policies.write_permission``.
+            Defaults to ``brain:write``.
 
     Raises:
-        grpc.RpcError if token is invalid or missing required permissions
+        ContextUnityError if token is invalid or missing required permissions
     """
-    from contextbrain.core import get_core_config
+    from contextcore.authz import authorize, get_auth_context
 
-    config = get_core_config()
-    if not config.security.enabled:
-        return  # Security disabled, skip validation
+    # Prefer verified auth context from interceptor
+    auth_ctx = get_auth_context()
+    if auth_ctx is not None:
+        token = auth_ctx.token
 
     if token is None:
         raise ContextUnityError(code="UNAUTHENTICATED", message="Missing ContextToken")
@@ -107,16 +114,14 @@ def validate_token_for_write(
     if token.is_expired():
         raise ContextUnityError(code="UNAUTHENTICATED", message="ContextToken expired")
 
-    access = AccessManager.from_core_config()
-    try:
-        if required_permission:
-            # Domain-specific: check only the required permission
-            access.verify_write(token, permission=required_permission)
-        else:
-            # Generic: check default brain:write + unit-level scopes
-            access.verify_unit_write(unit, token)
-    except PermissionError as e:
-        raise ContextUnityError(code="PERMISSION_DENIED", message=str(e)) from e
+    # Use canonical authorize() engine
+    decision = authorize(
+        auth_ctx if auth_ctx is not None else token,
+        permission=required_permission or "brain:write",
+        service="brain",
+    )
+    if decision.denied:
+        raise ContextUnityError(code="PERMISSION_DENIED", message=decision.reason)
 
 
 def validate_tenant_access(
@@ -134,11 +139,7 @@ def validate_tenant_access(
     Raises:
         grpc.RpcError with PERMISSION_DENIED if tenant access denied.
     """
-    from contextbrain.core import get_core_config
-
-    config = get_core_config()
-    if not config.security.enabled:
-        return
+    # Security is always enforced.
 
     if token is None:
         return  # No token → handled by validate_token_for_*
@@ -165,11 +166,7 @@ def validate_user_access(
     Raises:
         grpc.RpcError with PERMISSION_DENIED if cross-user access attempted.
     """
-    from contextbrain.core import get_core_config
-
-    config = get_core_config()
-    if not config.security.enabled:
-        return
+    # Security is always enforced.
 
     if token is None:
         return  # No token → handled by validate_token_for_*
@@ -190,7 +187,6 @@ def validate_user_access(
 def make_response(
     payload: dict,
     trace_id: str | UUID | None = None,
-    provenance: list[str] | None = None,
     parent_unit: ContextUnit | None = None,
 ) -> bytes:
     """Create ContextUnit response protobuf.
@@ -198,8 +194,7 @@ def make_response(
     Args:
         payload: Response payload data
         trace_id: Trace identifier (inherited from parent_unit if None)
-        provenance: Provenance chain (extended from parent_unit if None)
-        parent_unit: Optional parent ContextUnit to inherit trace_id/provenance from
+        parent_unit: Optional parent ContextUnit to inherit trace_id from
 
     Returns:
         Serialized protobuf bytes
@@ -214,20 +209,9 @@ def make_response(
     elif trace_id is None:
         trace_id = uuid.uuid4()
 
-    # Extend provenance from parent if provided
-    if provenance is None:
-        if parent_unit:
-            provenance = list(parent_unit.provenance) + ["brain:response"]
-        else:
-            provenance = ["brain:response"]
-    elif parent_unit:
-        # Extend parent provenance if both provided
-        provenance = list(parent_unit.provenance) + provenance
-
     unit = ContextUnit(
         payload=payload,
         trace_id=trace_id,
-        provenance=provenance,
     )
     return unit.to_protobuf(context_unit_pb2)
 

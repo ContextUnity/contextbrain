@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import logging
 from pathlib import Path
 from typing import Any, Iterable
 
+from contextcore import get_context_unit_logger
 from psycopg_pool import AsyncConnectionPool
 
 from contextbrain.core import get_core_config
@@ -18,7 +18,7 @@ from contextbrain.core.types import coerce_struct_data
 # from contextbrain.modules.models import model_registry
 from .base import UploadProvider, UploadResult
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class PostgresUploadProvider(UploadProvider):

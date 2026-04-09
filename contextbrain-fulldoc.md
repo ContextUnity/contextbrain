@@ -50,7 +50,7 @@ ContextBrain acts as the centralized memory for the ContextUnity ecosystem. It s
 │  (token/tenant validation)       ├── config/                              │
 │                                  │   ├── main.py      (redis_url, etc.)   │
 │                                  │   └── security.py                      │
-│                                  ├── tokens.py  (AccessManager)           │
+│                                  ├── tokens.py  (legacy compat)          │
 │                                  └── exceptions.py                        │
 │                                                                            │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -273,10 +273,27 @@ This calls `token.can_access_tenant(tenant_id)` and aborts with `PERMISSION_DENI
 
 ```python
 interceptors = [
-    TokenValidationInterceptor(security_config),  # Extract & validate token
-    BrainPermissionInterceptor(security_config),   # Check RPC permissions
+    BrainPermissionInterceptor(),   # RPC-level permission check
 ]
+# Creates VerifiedAuthContext → available via get_auth_context()
 ```
+
+### Handler-Level Authorization
+
+Handlers use `validate_token_for_read/write()` which delegates to
+the canonical `authorize()` engine from `contextcore.authz`:
+
+```python
+from contextbrain.service.helpers import validate_token_for_read
+
+async def Search(self, request, context):
+    token = validate_token_for_read(context, params.tenant_id)
+    # ... perform search ...
+```
+
+This provides two-layer defense:
+1. **Interceptor** — RPC-level permission gate
+2. **Handler** — tenant binding + resource-level authorization
 
 ---
 
@@ -600,7 +617,7 @@ uv run pytest --cov=contextbrain
 | `payloads.py` | Pydantic validation models |
 | `core/config/main.py` | Configuration management (`redis_url`, embeddings, etc.) |
 | `core/config/security.py` | Security policies (permissions) |
-| `core/tokens.py` | AccessManager for permission verification |
+| `core/tokens.py` | Legacy AccessManager (delegating to contextcore.authz) |
 
 ---
 
@@ -841,17 +858,6 @@ from contextrouter.modules.ingestion.rag import load_config, preprocess_to_clean
 
 cfg = load_config()
 preprocess_to_clean_text(config=cfg, only_types=["book", "video"], overwrite=True)
-```
-
-### Flow-based usage (via FlowManager)
-
-The ingestion stages can also be used as transformers in a Flow:
-
-```toml
-[flows.ingestion_rag]
-source = "file"
-logic = ["ingestion.preprocess", "ingestion.taxonomy", "ingestion.graph", "ingestion.shadow"]
-sink = "vertex"
 ```
 
 ## Architecture

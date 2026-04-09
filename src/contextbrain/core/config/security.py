@@ -17,16 +17,13 @@ class SecurityPoliciesConfig(BaseModel):
 
 
 class SecurityConfig(BaseModel):
-    """Security settings for the application."""
+    """Security settings for ContextBrain.
+
+    Security is always enforced — there is no toggle.
+    Token signing/verification is handled by contextcore.signing backends
+    (auto-detected: HmacBackend or SessionTokenBackend).
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    enabled: bool = False  # Disabled by default; enable in production
     policies: SecurityPoliciesConfig = Field(default_factory=SecurityPoliciesConfig)
-
-    # Basic token settings
-    token_ttl_seconds: int = 3600  # 1 hour
-    token_issuer: str = "contextbrain"
-
-    # ContextUnit protocol token settings
-    private_key_path: str = ""  # Path to private key for token signing

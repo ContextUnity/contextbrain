@@ -42,7 +42,6 @@ class TaxonomyHandlersMixin:
         return make_response(
             payload={"success": True},
             parent_unit=unit,
-            provenance=["brain:upsert_taxonomy"],
         )
 
     @grpc_stream_error_handler
@@ -68,7 +67,6 @@ class TaxonomyHandlersMixin:
                         "metadata": dict(tax["metadata"]),
                     },
                     parent_unit=unit,
-                    provenance=["brain:get_taxonomy"],
                 )
 
 

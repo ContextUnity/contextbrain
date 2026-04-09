@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 
 from ...utils.llm import llm_generate
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 class QuestionAnalyzer:

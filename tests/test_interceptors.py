@@ -136,33 +136,13 @@ class TestCheckPermission:
 
 
 class TestValidateTenantAccess:
-    def test_security_disabled_skips(self):
-        """When security is disabled, tenant validation is skipped."""
-        from contextbrain.service.helpers import validate_tenant_access
-
-        mock_context = MagicMock()
-        token = ContextToken(
-            token_id="t1",
-            permissions=("brain:read",),
-            allowed_tenants=("other",),
-        )
-
-        with patch("contextbrain.core.get_core_config") as mock_cfg:
-            mock_cfg.return_value.security.enabled = False
-            # Should not abort even with mismatched tenant
-            validate_tenant_access(token, "tenant-1", mock_context)
-            mock_context.abort.assert_not_called()
-
     def test_no_token_skips(self):
         """When token is None, tenant validation is skipped."""
         from contextbrain.service.helpers import validate_tenant_access
 
         mock_context = MagicMock()
-
-        with patch("contextbrain.core.get_core_config") as mock_cfg:
-            mock_cfg.return_value.security.enabled = True
-            validate_tenant_access(None, "tenant-1", mock_context)
-            mock_context.abort.assert_not_called()
+        validate_tenant_access(None, "tenant-1", mock_context)
+        mock_context.abort.assert_not_called()
 
 
 # ── validate_token_for_read with required_permission ──
@@ -185,22 +165,8 @@ class TestValidateTokenForReadWithPermission:
         )
 
         with patch("contextbrain.core.get_core_config") as mock_cfg:
-            mock_cfg.return_value.security.enabled = True
             mock_cfg.return_value.security.policies.read_permission = "brain:read"
             mock_cfg.return_value.security.policies.write_permission = "brain:write"
-            mock_cfg.return_value.security.private_key_path = ""
 
             validate_token_for_read(unit, token, mock_context, required_permission="memory:read")
-            mock_context.abort.assert_not_called()
-
-    def test_security_disabled_skips_all(self):
-        """When security is disabled, all validation is skipped."""
-        from contextbrain.service.helpers import validate_token_for_read
-
-        mock_context = MagicMock()
-        unit = MagicMock()
-
-        with patch("contextbrain.core.get_core_config") as mock_cfg:
-            mock_cfg.return_value.security.enabled = False
-            validate_token_for_read(unit, None, mock_context, required_permission="memory:read")
             mock_context.abort.assert_not_called()

@@ -7,11 +7,12 @@ Functions will raise NotImplementedError until model registry is available.
 from __future__ import annotations
 
 import asyncio
-import logging
+
+from contextcore import get_context_unit_logger
 
 from contextbrain.core import Config
 
-logger = logging.getLogger(__name__)
+logger = get_context_unit_logger(__name__)
 
 
 def _resolve_json_model(core_cfg: Config, model: str) -> str:

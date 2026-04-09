@@ -4,15 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from contextcore import ContextUnit
+from contextcore import ContextToken, ContextUnit
 
 from contextbrain.core.interfaces import BaseProvider, IWrite
-from contextbrain.core.tokens import AccessManager, ContextToken
 
 
 class GCSProvider(BaseProvider, IWrite):
     async def write(self, data: ContextUnit, *, token: ContextToken) -> None:
-        AccessManager.from_core_config().verify_envelope_write(data, token)
         _ = data, token
         raise NotImplementedError("GCSProvider.write is not implemented yet")
 
