@@ -1,6 +1,6 @@
 [project]
 name = "contextbrain"
-version = "0.16.2"
+version = "0.17.0"
 description = "Semantic Memory service for ContextUnity — knowledge storage, vector search, RAG retrieval, and gRPC-native API with PostgreSQL + pgvector"
 readme = "README.md"
 requires-python = "==3.13.*"
