@@ -13,7 +13,7 @@ env_file = Path(__file__).parent.parent / ".env"
 if env_file.exists():
     load_dotenv(env_file)
 
-from contextbrain.core.config import get_env  # noqa: E402
+from contextunity.brain.core.config import get_env  # noqa: E402
 
 config = context.config
 

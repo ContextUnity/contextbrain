@@ -1,25 +1,25 @@
-"""Contract tests for contextbrain exception hierarchy.
+"""Contract tests for cu.brain exception hierarchy.
 
 Verifies that:
 1. ContextbrainError inherits from ContextUnityError (centralized hierarchy)
 2. All error subclasses have stable error codes
 3. ErrorRegistry contains expected base codes
-4. gRPC error handlers are importable from contextcore
+4. gRPC error handlers are importable from contextunity.core
 """
 
 from __future__ import annotations
 
-from contextcore.exceptions import ContextUnityError, error_registry
+from contextunity.core.exceptions import ContextUnityError, error_registry
 
-from contextbrain.core.exceptions import ContextbrainError
+from contextunity.brain.core.exceptions import ContextbrainError
 
 
-def test_contextbrain_error_inherits_from_core() -> None:
+def test_cu_brain_error_inherits_from_core() -> None:
     """ContextbrainError must be a subclass of ContextUnityError."""
     assert issubclass(ContextbrainError, ContextUnityError)
 
 
-def test_contextbrain_error_has_code() -> None:
+def test_cu_brain_error_has_code() -> None:
     """ContextbrainError must have a valid code from parent."""
     code = getattr(ContextbrainError, "code", None)
     assert isinstance(code, str) and code.strip()
@@ -42,8 +42,8 @@ def test_error_registry_contains_base_codes() -> None:
 
 
 def test_grpc_handlers_importable() -> None:
-    """gRPC error handlers must be importable from contextcore."""
-    from contextcore.exceptions import grpc_error_handler, grpc_stream_error_handler
+    """gRPC error handlers must be importable from contextunity.core."""
+    from contextunity.core.exceptions import grpc_error_handler, grpc_stream_error_handler
 
     assert callable(grpc_error_handler)
     assert callable(grpc_stream_error_handler)

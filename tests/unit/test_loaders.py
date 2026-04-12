@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from contextbrain.ingestion.rag import (
+from contextunity.brain.ingestion.rag import (
     FileLoaderMixin,
     LoadedFile,
     iter_files,
     load_text_files,
     read_text_file,
 )
-from contextbrain.ingestion.rag.core.loaders import (
+from contextunity.brain.ingestion.rag.core.loaders import (
     _should_skip,
     find_alternative_dir,
 )

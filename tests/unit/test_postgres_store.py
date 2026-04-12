@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextbrain.storage.postgres import PostgresKnowledgeStore, TaxonomyPath
+from contextunity.brain.storage.postgres import PostgresKnowledgeStore, TaxonomyPath
 
 
 def _store() -> PostgresKnowledgeStore:

@@ -13,7 +13,7 @@ VECTOR_DIM = 768
 
 
 def upgrade() -> None:
-    # catalog_taxonomy is created by ContextCommerce — skip if not deployed
+    # catalog_taxonomy is created by cu.commerce — skip if not deployed
     conn = op.get_bind()
     table_exists = conn.execute(
         sa.text("SELECT to_regclass('public.catalog_taxonomy') IS NOT NULL")

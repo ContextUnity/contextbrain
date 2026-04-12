@@ -6,15 +6,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from contextbrain.core.config import Config
-from contextbrain.ingestion.rag import (
+from contextunity.brain.core.config import Config
+from contextunity.brain.ingestion.rag import (
     BatchResult,
     batch_transform,
     batch_validate,
     chunked,
     filter_by_indices,
 )
-from contextbrain.ingestion.rag.core.batch import _parse_validation_response
+from contextunity.brain.ingestion.rag.core.batch import _parse_validation_response
 
 
 @pytest.fixture()
@@ -113,7 +113,7 @@ class TestBatchValidate:
         )
         assert result == set()
 
-    @patch("contextbrain.ingestion.rag.core.batch.llm_generate")
+    @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_validates_items_in_batches(self, mock_llm: MagicMock, core_cfg: Config) -> None:
         mock_llm.return_value = "0\tVALUABLE\n1\tNOT_VALUABLE\n2\tVALUABLE"
         items = ["item0", "item1", "item2"]
@@ -130,7 +130,7 @@ class TestBatchValidate:
         assert result == {0, 2}
         mock_llm.assert_called_once()
 
-    @patch("contextbrain.ingestion.rag.core.batch.llm_generate")
+    @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_splits_into_batches(self, mock_llm: MagicMock, core_cfg: Config) -> None:
         # First batch: all valid, second batch: one valid
         mock_llm.side_effect = [
@@ -151,7 +151,7 @@ class TestBatchValidate:
         assert result == {0, 1, 3}
         assert mock_llm.call_count == 2
 
-    @patch("contextbrain.ingestion.rag.core.batch.llm_generate")
+    @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_on_error_keep_preserves_all(self, mock_llm: MagicMock, core_cfg: Config) -> None:
         mock_llm.side_effect = Exception("LLM error")
         items = ["item0", "item1"]
@@ -166,7 +166,7 @@ class TestBatchValidate:
 
         assert result == {0, 1}
 
-    @patch("contextbrain.ingestion.rag.core.batch.llm_generate")
+    @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_on_error_drop_removes_all(self, mock_llm: MagicMock, core_cfg: Config) -> None:
         mock_llm.side_effect = Exception("LLM error")
         items = ["item0", "item1"]
@@ -195,7 +195,7 @@ class TestBatchTransform:
         )
         assert result == {}
 
-    @patch("contextbrain.ingestion.rag.core.batch.llm_generate")
+    @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_transforms_items_and_parses_results(
         self, mock_llm: MagicMock, core_cfg: Config
     ) -> None:
@@ -216,7 +216,7 @@ class TestBatchTransform:
 
         assert result == {0: "summary_0", 1: "summary_1"}
 
-    @patch("contextbrain.ingestion.rag.core.batch.llm_generate")
+    @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_skips_items_when_parser_returns_none(
         self, mock_llm: MagicMock, core_cfg: Config
     ) -> None:

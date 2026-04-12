@@ -1,5 +1,5 @@
 [project]
-name = "contextbrain"
+name = "contextunity-brain"
 version = "0.17.0"
 description = "Semantic Memory service for ContextUnity — knowledge storage, vector search, RAG retrieval, and gRPC-native API with PostgreSQL + pgvector"
 readme = "README.md"
@@ -32,7 +32,7 @@ dependencies = [
     "protobuf>=4.25.0",
     "networkx>=3.0",
     "PyYAML>=6.0",
-    "contextcore>=0.5.1",
+    "contextunity-core>=0.5.1",
     "psycopg[binary]>=3.1.0",
     "psycopg-pool>=3.2.0",
     "duckdb>=1.0.0",
@@ -43,7 +43,7 @@ dependencies = [
 Homepage = "https://contextbrain.dev"
 Documentation = "https://contextbrain.dev"
 Repository = "https://github.com/ContextUnity/contextbrain"
-Issues = "https://github.com/ContextUnity/contextbrain/issues"
+Issues = "https://github.com/ContextUnity/cu/brain/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -105,7 +105,7 @@ models-hf-hub = [
 ]
 # Convenience bundle (all non-Vertex LLM providers we ship today)
 models = [
-    "contextbrain[models-openai,models-anthropic,models-hf-hub]",
+    "contextunity-brain[models-openai,models-anthropic,models-hf-hub]",
 ]
 # CPU-only local inference (heavy dependencies, development only)
 hf-transformers = [
@@ -123,23 +123,23 @@ nlp = [
 ]
 # Everything (for development/testing, excludes torch-dependent extras)
 all = [
-    "contextbrain[vertex,storage,integrations,ingestion,observability]"
+    "contextunity-brain[vertex,storage,integrations,ingestion,observability]"
 ]
 
 # Experimental / optional bundle (may be unsatisfiable depending on resolver + platform)
 all_experimental = [
-    "contextbrain[all]"
+    "contextunity-brain[all]"
 ]
 
 [project.scripts]
-contextbrain = "contextbrain.cli.app:main"
+contextbrain = "contextunity.brain.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/contextbrain"]
+packages = ["src/contextunity"]
 
 [tool.ruff]
 target-version = "py313"

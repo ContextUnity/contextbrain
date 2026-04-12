@@ -1,6 +1,6 @@
 import json
 
-from contextbrain.ingestion.rag.settings import RagIngestionConfig, TaxonomySection
+from contextunity.brain.ingestion.rag.settings import RagIngestionConfig, TaxonomySection
 
 
 def _write_jsonl(path, rows):
@@ -12,8 +12,8 @@ def _write_jsonl(path, rows):
 
 def test_taxonomy_sampling_doc_coverage_is_deterministic(tmp_path):
     # Import module directly to avoid side-effect imports from
-    # contextbrain.ingestion.rag.processors.__init__ (keeps test hermetic).
-    import contextbrain.ingestion.rag.processors.taxonomy_builder as tb
+    # cu.brain.ingestion.rag.processors.__init__ (keeps test hermetic).
+    import contextunity.brain.ingestion.rag.processors.taxonomy_builder as tb
 
     clean_text_dir = tmp_path / "clean_text"
     book_path = clean_text_dir / "book.jsonl"
@@ -58,7 +58,7 @@ def test_taxonomy_sampling_doc_coverage_is_deterministic(tmp_path):
 
 def test_parse_concepts_tsv_strips_prefix():
     """Test that _parse_concepts_tsv strips concepts[N] prefix from terms."""
-    import contextbrain.ingestion.rag.processors.taxonomy_builder as tb
+    import contextunity.brain.ingestion.rag.processors.taxonomy_builder as tb
 
     # Simulated LLM output with the bad format
     raw = """concepts[0]term:Self-belief\tmindset\t\tBelief in oneself
@@ -81,7 +81,7 @@ Persistence\taction\t\tKeeping going despite obstacles"""
 
 def test_parse_concepts_tsv_rejects_garbage():
     """Test that _parse_concepts_tsv rejects garbage terms."""
-    import contextbrain.ingestion.rag.processors.taxonomy_builder as tb
+    import contextunity.brain.ingestion.rag.processors.taxonomy_builder as tb
 
     raw = """buyiton_amazon\tpromo\t\tBuy it
 FREE\tpromo\t\tFree stuff

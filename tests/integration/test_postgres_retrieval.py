@@ -5,8 +5,8 @@ import os
 import pytest
 from psycopg_pool import AsyncConnectionPool
 
-from contextbrain.storage.postgres.schema import build_schema_sql
-from contextbrain.storage.postgres.store import PostgresKnowledgeStore
+from contextunity.brain.storage.postgres.schema import build_schema_sql
+from contextunity.brain.storage.postgres.store import PostgresKnowledgeStore
 
 
 @pytest.mark.asyncio

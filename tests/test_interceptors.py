@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from contextcore import ContextToken
-from contextcore.security import check_permission
-from contextcore.security.interceptors import _extract_rpc_name, _should_skip
+from contextunity.core import ContextToken
+from contextunity.core.security import check_permission
+from contextunity.core.security.interceptors import _extract_rpc_name, _should_skip
 
-from contextbrain.service.interceptors import (
+from contextunity.brain.service.interceptors import (
     RPC_PERMISSION_MAP,
 )
 
@@ -138,7 +138,7 @@ class TestCheckPermission:
 class TestValidateTenantAccess:
     def test_no_token_skips(self):
         """When token is None, tenant validation is skipped."""
-        from contextbrain.service.helpers import validate_tenant_access
+        from contextunity.brain.service.helpers import validate_tenant_access
 
         mock_context = MagicMock()
         validate_tenant_access(None, "tenant-1", mock_context)
@@ -151,7 +151,7 @@ class TestValidateTenantAccess:
 class TestValidateTokenForReadWithPermission:
     def test_passes_with_correct_permission(self):
         """Validation passes when token has the required permission."""
-        from contextbrain.service.helpers import validate_token_for_read
+        from contextunity.brain.service.helpers import validate_token_for_read
 
         mock_context = MagicMock()
         unit = MagicMock()
@@ -164,7 +164,7 @@ class TestValidateTokenForReadWithPermission:
             permissions=("brain:read", "memory:read"),
         )
 
-        with patch("contextbrain.core.get_core_config") as mock_cfg:
+        with patch("contextunity.brain.core.get_core_config") as mock_cfg:
             mock_cfg.return_value.security.policies.read_permission = "brain:read"
             mock_cfg.return_value.security.policies.write_permission = "brain:write"
 

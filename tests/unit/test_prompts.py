@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextbrain.ingestion.rag import (
+from contextunity.brain.ingestion.rag import (
     qa_rephrase_question_prompt,
     qa_validate_answer_prompt,
     qa_validate_question_prompt,

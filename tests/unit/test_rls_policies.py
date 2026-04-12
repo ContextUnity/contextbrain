@@ -31,7 +31,7 @@ class TestRLSPolicies:
 
     def test_rls_policies_cover_all_tenant_tables(self):
         """Step 6.4: RLS policies cover all tenant-scoped tables."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -42,7 +42,7 @@ class TestRLSPolicies:
 
     def test_rls_policies_have_wildcard_for_admin(self):
         """Admin dashboard can see all projects via wildcard '*'."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -51,7 +51,7 @@ class TestRLSPolicies:
 
     def test_rls_creates_brain_app_role(self):
         """brain_app role (non-superuser, RLS enforced) is created."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -61,7 +61,7 @@ class TestRLSPolicies:
 
     def test_rls_creates_brain_admin_role(self):
         """brain_admin role (BYPASSRLS for dashboard) is created."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -71,7 +71,7 @@ class TestRLSPolicies:
 
     def test_rls_force_rls_on_all_tables(self):
         """FORCE ROW LEVEL SECURITY ensures RLS applies to table owner too."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -83,7 +83,7 @@ class TestRLSPolicies:
 
     def test_rls_grants_to_brain_app(self):
         """brain_app gets SELECT/INSERT/UPDATE/DELETE on tenant tables."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -93,7 +93,7 @@ class TestRLSPolicies:
 
     def test_rls_grants_all_to_brain_admin(self):
         """brain_admin gets ALL on tenant tables (with BYPASSRLS)."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -103,7 +103,7 @@ class TestRLSPolicies:
 
     def test_rls_policy_uses_current_setting(self):
         """RLS USING clause references app.current_tenant session variable."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -112,7 +112,7 @@ class TestRLSPolicies:
 
     def test_rls_policy_with_check_clause(self):
         """RLS WITH CHECK clause prevents cross-tenant INSERT/UPDATE."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts = build_rls_sql()
         sql_text = "\n".join(stmts)
@@ -121,7 +121,7 @@ class TestRLSPolicies:
 
     def test_rls_statements_are_idempotent(self):
         """Running build_rls_sql() twice produces identical statements."""
-        from contextbrain.storage.postgres.schema import build_rls_sql
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         stmts1 = build_rls_sql()
         stmts2 = build_rls_sql()
@@ -141,7 +141,7 @@ class TestSetTenantContext:
     @pytest.mark.asyncio
     async def test_empty_tenant_id_raises_value_error(self):
         """Fail-closed: empty tenant_id → ValueError."""
-        from contextbrain.storage.postgres.store.helpers import set_tenant_context
+        from contextunity.brain.storage.postgres.store.helpers import set_tenant_context
 
         mock_conn = AsyncMock()
         with pytest.raises(ValueError, match="tenant_id"):
@@ -150,7 +150,7 @@ class TestSetTenantContext:
     @pytest.mark.asyncio
     async def test_none_tenant_id_raises_value_error(self):
         """Fail-closed: None tenant_id → ValueError."""
-        from contextbrain.storage.postgres.store.helpers import set_tenant_context
+        from contextunity.brain.storage.postgres.store.helpers import set_tenant_context
 
         mock_conn = AsyncMock()
         with pytest.raises((ValueError, TypeError)):
@@ -159,7 +159,7 @@ class TestSetTenantContext:
     @pytest.mark.asyncio
     async def test_valid_tenant_id_sets_config(self):
         """Valid tenant_id calls SET on the connection."""
-        from contextbrain.storage.postgres.store.helpers import set_tenant_context
+        from contextunity.brain.storage.postgres.store.helpers import set_tenant_context
 
         mock_conn = AsyncMock()
         await set_tenant_context(mock_conn, "project_a")
@@ -172,7 +172,7 @@ class TestSetTenantContext:
     @pytest.mark.asyncio
     async def test_wildcard_tenant_id_for_admin(self):
         """Wildcard '*' is accepted for admin/dashboard access."""
-        from contextbrain.storage.postgres.store.helpers import set_tenant_context
+        from contextunity.brain.storage.postgres.store.helpers import set_tenant_context
 
         mock_conn = AsyncMock()
         await set_tenant_context(mock_conn, "*")

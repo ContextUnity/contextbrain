@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextbrain.ingestion.rag import normalize_clean_text
+from contextunity.brain.ingestion.rag import normalize_clean_text
 
 
 def test_normalize_clean_text_unescapes_html_entities() -> None:

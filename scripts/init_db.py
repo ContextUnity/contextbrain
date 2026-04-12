@@ -34,7 +34,7 @@ async def main():
     vector_dim = args.vector_dim or int(os.getenv("BRAIN_VECTOR_DIM", "1536"))
 
     # Import schema builder
-    from contextbrain.storage.postgres.schema import build_schema_sql
+    from contextunity.brain.storage.postgres.schema import build_schema_sql
 
     statements = build_schema_sql(
         vector_dim=vector_dim,
