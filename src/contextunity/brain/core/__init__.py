@@ -1,4 +1,4 @@
-"""Core framework primitives for cu.brain.
+"""Core framework primitives for contextunity.brain.
 
 This package is the long-term home for:
 - configuration (Pydantic settings, layered sources)
@@ -6,7 +6,7 @@ This package is the long-term home for:
 - shared interfaces and state models
 
 During migration this module must remain non-breaking: existing production entry
-points continue to live in `cu.brain.cortex.*` until the final cleanup phase.
+points continue to live in `contextunity.brain.cortex.*` until the final cleanup phase.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ __all__ = [
     # Registry
     "agent_registry",  # Direct access for compatibility
     "graph_registry",  # Direct access for compatibility
-    "registry",  # Access via cu.brain.core.registry
+    "registry",  # Access via contextunity.brain.core.registry
     # Security
     "ContextToken",
     "TokenBuilder",

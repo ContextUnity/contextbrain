@@ -252,7 +252,7 @@ def _rls_policies() -> List[str]:
 
     Architecture:
         - ``brain_app`` role: used by gRPC handlers, RLS enforced
-        - ``brain_admin`` role: used by cu.view dashboard, bypasses RLS
+        - ``brain_admin`` role: used by contextunity.view dashboard, bypasses RLS
         - Every query sets ``SET LOCAL app.current_tenant = '<tenant_id>'``
           before executing — this is done in the Brain gRPC interceptor.
 
@@ -283,7 +283,7 @@ def _rls_policies() -> List[str]:
         $$;
     """)
 
-    # 2. Create admin role (bypasses RLS for cu.view dashboard)
+    # 2. Create admin role (bypasses RLS for contextunity.view dashboard)
     stmts.append("""
         DO $$
         BEGIN

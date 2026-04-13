@@ -10,7 +10,7 @@ logger = get_contextunit_logger(__name__)
 
 class IngestionService:
     """
-    Handles the ETL pipeline for ingesting knowledge into cu.brain.
+    Handles the ETL pipeline for ingesting knowledge into contextunity.brain.
 
     Responsibilities:
     1. Parse raw content (text, markdown).

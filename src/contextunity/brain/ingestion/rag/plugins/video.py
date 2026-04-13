@@ -475,7 +475,7 @@ class VideoPlugin(IngestionPlugin):
         _ = taxonomy_path, kwargs
         if core_cfg is None:
             raise ValueError(
-                "VideoPlugin.transform requires core_cfg (cu.brain.core.config.Config)"
+                "VideoPlugin.transform requires core_cfg (contextunity.brain.core.config.Config)"
             )
         shadow_records: list[ShadowRecord] = []
 

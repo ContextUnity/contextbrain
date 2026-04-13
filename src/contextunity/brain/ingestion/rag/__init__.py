@@ -1,7 +1,7 @@
 """RAG ingestion module (staged pipeline + helpers).
 
 This package includes optional heavy dependencies (parsing, graph building, etc.).
-To keep `cu.brain --help` and non-ingestion usage lightweight, we lazy-import
+To keep `contextunity.brain --help` and non-ingestion usage lightweight, we lazy-import
 public symbols on demand (similar to `modules.retrieval.rag`).
 """
 
@@ -136,6 +136,6 @@ def __getattr__(name: str) -> Any:
         # Provide a more helpful error for optional ingestion deps.
         raise ModuleNotFoundError(
             f"{e}. You may need to install ingestion extras: "
-            "`pip install 'contextunity.brain[ingestion]'` (or `cu.brain[all]`)."
+            "`pip install 'contextunity.brain[ingestion]'` (or `contextunity.brain[all]`)."
         ) from e
     return getattr(mod, attr)

@@ -1,4 +1,4 @@
-"""Modular configuration system for cu.brain."""
+"""Modular configuration system for contextunity.brain."""
 
 from .base import (
     DEFAULT_READ_PERMISSION,

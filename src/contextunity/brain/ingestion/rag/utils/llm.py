@@ -95,7 +95,7 @@ async def _llm_generate_impl(
 
     # TODO: Implement model registry or use alternative LLM interface
     raise NotImplementedError(
-        "LLM generation requires model registry which is not yet implemented in cu.brain. "
+        "LLM generation requires model registry which is not yet implemented in contextunity.brain. "
         f"Requested model: {model}. "
         "This functionality will be available once model registry is implemented."
     )

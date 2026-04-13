@@ -1,7 +1,7 @@
-"""Exception hierarchy for cu.brain.
+"""Exception hierarchy for contextunity.brain.textunity.brain.
 
 Service-specific base class. All shared exceptions, ErrorRegistry, and gRPC
-error handlers live in cu.core.exceptions — import them directly from there.
+error handlers live in contextunity.core.exceptions — import them directly from there.
 
 Usage:
     from contextunity.brain.core.exceptions import ContextbrainError
@@ -14,10 +14,10 @@ from contextunity.core.exceptions import ContextUnityError
 
 
 class ContextbrainError(ContextUnityError):
-    """Base exception for cu.brain.
+    """Base exception for contextunity.brain.
 
     Inherits from ContextUnityError so that centralized gRPC error handlers
-    in cu.core catch brain-specific exceptions automatically.
+    in contextunity.core catch brain-specific exceptions automatically.
     """
 
     pass

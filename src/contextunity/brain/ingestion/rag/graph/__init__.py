@@ -2,7 +2,7 @@
 
 IMPORTANT: keep imports in this module **lazy**.
 
-The runtime cortex imports `cu.brain.ingestion.rag.graph.serialization` to load the
+The runtime cortex imports `contextunity.brain.ingestion.rag.graph.serialization` to load the
 persisted graph. Importing heavy ingestion dependencies (like `networkx`) at package import time
 breaks minimal installs (e.g., API-only deployments).
 """

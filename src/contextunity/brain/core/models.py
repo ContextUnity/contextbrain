@@ -1,4 +1,4 @@
-"""Core data models for cu.brain.
+"""Core data models for contextunity.brain.
 
 This module defines Pydantic models used throughout the brain for retrieval,
 citations, and state management.

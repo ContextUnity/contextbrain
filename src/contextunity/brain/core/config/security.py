@@ -1,4 +1,4 @@
-"""Security configuration for cu.brain."""
+"""Security configuration for contextunity.brain."""
 
 from contextunity.core.permissions import Permissions
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,10 +17,10 @@ class SecurityPoliciesConfig(BaseModel):
 
 
 class SecurityConfig(BaseModel):
-    """Security settings for cu.brain.
+    """Security settings for contextunity.brain.
 
     Security is always enforced — there is no toggle.
-    Token signing/verification is handled by cu.core.signing backends
+    Token signing/verification is handled by contextunity.core.signing backends
     (auto-detected: HmacBackend or SessionTokenBackend).
     """
 

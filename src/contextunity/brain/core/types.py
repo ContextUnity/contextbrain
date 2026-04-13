@@ -1,7 +1,7 @@
-"""Core type definitions and utilities for cu.brain.
+"""Core type definitions and utilities for contextunity.brain.
 
 This module provides shared type definitions and utilities used across
-the cu.brain codebase, including StructData for JSON-serializable data.
+the contextunity.brain codebase, including StructData for JSON-serializable data.
 """
 
 from __future__ import annotations

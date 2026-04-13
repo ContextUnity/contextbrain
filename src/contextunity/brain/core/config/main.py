@@ -21,7 +21,7 @@ from .security import SecurityConfig
 
 
 class Config(BaseModel):
-    """Main configuration class for cu.brain.
+    """Main configuration class for contextunity.brain.
 
     This combines all configuration modules into a single, hierarchical structure.
     Configuration is loaded from multiple sources in priority order:
@@ -96,7 +96,7 @@ class Config(BaseModel):
         paths = config.paths
 
         # Deterministic `.env` loading: only load from the detected project root
-        # (e.g. `<repo>/cu.brain/.env`). This avoids accidental cross-repo leakage.
+        # (e.g. `<repo>/contextunity.brain/.env`). This avoids accidental cross-repo leakage.
         if paths.env_file.exists():
             load_dotenv(paths.env_file, override=False)
 
@@ -154,7 +154,7 @@ class Config(BaseModel):
         # - VERTEX_PROJECT_ID
         # - VERTEX_LOCATION
         #
-        # Optional host/embedding alias (e.g. when cu.brain is used as a library):
+        # Optional host/embedding alias (e.g. when contextunity.brain is used as a library):
         # - CU_BRAIN_VERTEX_PROJECT_ID
         # - CU_BRAIN_VERTEX_LOCATION
         if project_id := (get_env("VERTEX_PROJECT_ID") or get_env("CU_BRAIN_VERTEX_PROJECT_ID")):
@@ -217,13 +217,13 @@ class Config(BaseModel):
         shared_config = get_shared_core_config()
 
         # Security: private_key_path removed — signing is
-        # handled by cu.core.signing backends (auto-detected).
+        # handled by contextunity.core.signing backends (auto-detected).
 
         # Debug/Logging
         if debug_val := get_bool_env("CU_BRAIN_DEBUG"):
             self.debug = debug_val
 
-        # cu.brain specific log level overrides shared core log level
+        # contextunity.brain specific log level overrides shared core log level
         if log_level := get_env("CU_BRAIN_LOG_LEVEL"):
             self.log_level = log_level
         else:

@@ -4,7 +4,7 @@ Maps each Brain RPC method to the exact permission required
 (brain:read, memory:write, trace:read, etc.) and validates
 the ContextToken carries that permission + tenant access.
 
-Delegates to ``cu.core.security.ServicePermissionInterceptor``
+Delegates to ``contextunity.core.security.ServicePermissionInterceptor``
 for unified enforcement logic. Brain only owns the RPC_PERMISSION_MAP.
 """
 

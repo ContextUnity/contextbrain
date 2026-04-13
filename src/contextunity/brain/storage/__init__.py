@@ -1,4 +1,4 @@
-"""Unified Storage Layer for cu.brain."""
+"""Unified Storage Layer for contextunity.brain."""
 
 from __future__ import annotations
 

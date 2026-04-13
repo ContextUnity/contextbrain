@@ -287,7 +287,7 @@ logger = get_contextunit_logger(__name__)
 def scan(plugin_dir: Path) -> None:
     """Scan a directory for Python plugins and import them.
 
-    This allows users to extend cu.brain with custom components
+    This allows users to extend contextunity.brain with custom components
     (agents, tools, connectors, etc.) without modifying the core code.
 
     Args:

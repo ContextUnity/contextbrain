@@ -1,8 +1,8 @@
 """Base class for ingestion plugins.
 
 This defines the plugin contract for the ingestion pipeline
-(`cu.brain.ingestion.rag.*`). It is ingestion-specific and intentionally
-separate from the framework-level `cu.brain.core.interfaces`.
+(`contextunity.brain.ingestion.rag.*`). It is ingestion-specific and intentionally
+separate from the framework-level `contextunity.brain.core.interfaces`.
 """
 
 from __future__ import annotations

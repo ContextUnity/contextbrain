@@ -1,4 +1,4 @@
-"""Contract tests for cu.brain exception hierarchy.
+"""Contract tests for contextunity.brain exception hierarchy.
 
 Verifies that:
 1. ContextbrainError inherits from ContextUnityError (centralized hierarchy)

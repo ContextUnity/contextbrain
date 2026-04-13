@@ -9,7 +9,7 @@ from contextunity.core import get_contextunit_logger
 
 logger = get_contextunit_logger(__name__)
 
-# Default relative to package root (packages/cu.brain/)
+# Default relative to package root (packages/contextunity.brain/)
 DEFAULT_KEYWORDS_PATH = Path("assets/taxonomy.json")
 
 

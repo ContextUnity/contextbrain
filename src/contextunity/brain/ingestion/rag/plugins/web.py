@@ -710,7 +710,7 @@ class WebPlugin(IngestionPlugin):
             return ""
         if core_cfg is None:
             raise ValueError(
-                "WebPlugin summary generation requires core_cfg (cu.brain.core.config.Config)"
+                "WebPlugin summary generation requires core_cfg (contextunity.brain.core.config.Config)"
             )
 
         try:

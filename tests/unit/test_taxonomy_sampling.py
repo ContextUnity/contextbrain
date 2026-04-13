@@ -12,7 +12,7 @@ def _write_jsonl(path, rows):
 
 def test_taxonomy_sampling_doc_coverage_is_deterministic(tmp_path):
     # Import module directly to avoid side-effect imports from
-    # cu.brain.ingestion.rag.processors.__init__ (keeps test hermetic).
+    # contextunity.brain.ingestion.rag.processors.__init__ (keeps test hermetic).
     import contextunity.brain.ingestion.rag.processors.taxonomy_builder as tb
 
     clean_text_dir = tmp_path / "clean_text"

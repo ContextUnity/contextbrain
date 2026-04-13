@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, NotRequired, TypedDict
 
-# StructDataValue is now defined in cu.brain.core.types
+# StructDataValue is now defined in contextunity.brain.core.types
 # Import it from there to avoid circular dependencies
 from contextunity.brain.core.types import StructDataValue
 

@@ -69,7 +69,7 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
 
     def _require_core_cfg(self) -> Config:
         if self._core_cfg is None:
-            raise ValueError("QAPlugin requires core_cfg (cu.brain.core.config.Config)")
+            raise ValueError("QAPlugin requires core_cfg (contextunity.brain.core.config.Config)")
         return self._core_cfg
 
     def _get_transformer(self) -> QATransformer:

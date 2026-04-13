@@ -11,7 +11,7 @@ Usage:
     uv run python -m scripts.init_brain --commerce
 
     # Or from docker-compose entrypoint:
-    python -m scripts.init_brain && python -m cu.brain
+    python -m scripts.init_brain && python -m contextunity.brain
 
 This script is idempotent — safe to run multiple times.
 All DDL uses IF NOT EXISTS.
