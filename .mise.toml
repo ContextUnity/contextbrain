@@ -1,0 +1,88 @@
+# cu.brain — Semantic Memory Service
+# Knowledge storage, vector search, RAG retrieval, gRPC-native API
+# PostgreSQL + pgvector backend
+
+[tools]
+python = "3.13"
+uv = "latest"
+
+[settings]
+env_shell_expand = true
+
+[env]
+_.file = { path = ".env", tools = true }
+PYTHON = "$(mise which python)"
+
+[tasks.sync]
+description = "Install all dependencies (dev)"
+run = "uv sync --group dev"
+
+[tasks.lint]
+description = "Lint + format-check all code (Ruff)"
+run = "uv run ruff check src/ tests/ && uv run ruff format --check src/ tests/"
+
+[tasks.format]
+description = "Format all code (Ruff)"
+run = "uv run ruff check --fix src/ tests/ && uv run ruff format src/ tests/"
+
+[tasks.test]
+description = "Run all tests"
+run = "uv run pytest tests/ -v"
+
+[tasks.test-unit]
+description = "Run unit tests only"
+run = "uv run pytest tests/ -v -m unit"
+
+[tasks.test-integration]
+description = "Run integration tests (requires PostgreSQL)"
+run = "uv run pytest tests/ -v -m integration"
+
+[tasks.security]
+description = "Run security scan (Bandit)"
+run = "uv run bandit -r src/cu/brain/"
+
+[tasks.check]
+description = "Run all checks (lint + test)"
+run = "mise run lint && mise run test-unit"
+
+# =============================================================================
+# Server Commands
+# =============================================================================
+
+[tasks.brain]
+description = "Start Brain gRPC service (port from BRAIN_PORT env, default 50051)"
+run = "uv run contextbrain serve"
+
+[tasks.dev]
+description = "Start Brain gRPC service in dev mode"
+run = "uv run contextbrain serve"
+
+# =============================================================================
+# Database
+# =============================================================================
+
+[tasks.db-shell]
+description = "Connect to PostgreSQL database shell"
+run = "psql $BRAIN_DATABASE_URL"
+
+# =============================================================================
+# Utility
+# =============================================================================
+
+[tasks.clean]
+description = "Clean cache files and build artifacts"
+run = """
+find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name "*.pyc" -delete 2>/dev/null || true
+find . -type f -name "*.pyo" -delete 2>/dev/null || true
+find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+rm -rf .pytest_cache/ .ruff_cache/ build/ dist/ 2>/dev/null || true
+"""
+
+[tasks.build]
+description = "Build distribution packages"
+run = "uv build"
+
+[tasks.compile-protos]
+description = "Compile protobuf files (runs in contextcore)"
+run = "cd ../contextcore && ./compile_protos.sh"
