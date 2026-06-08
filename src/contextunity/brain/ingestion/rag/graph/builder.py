@@ -6,12 +6,18 @@ import json
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 import networkx as nx
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_json_dict, as_str, as_str_list
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, is_json_dict
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
+
+if TYPE_CHECKING:
+    from contextunity.brain.storage.graph.cognee import KnowledgeGraphOrchestrator
 
 from ..core.types import RawData
 from ..core.utils import (
@@ -61,6 +67,17 @@ ALLOWED_RELATION_LABELS = DEFAULT_ALLOWED_LABELS
 class GraphBuilder:
     """Builds a knowledge graph from raw ingestion data."""
 
+    max_workers: int
+    model: str
+    mode: str
+    core_cfg: BrainConfig
+    taxonomy: JsonDict | None
+    canonical_map: dict[str, str]
+    allowed_relation_labels: set[str]
+    _debug_bundles_written: int
+    _cognee_builder: KnowledgeGraphOrchestrator | None
+    graph: nx.Graph[str]
+
     def __init__(
         self,
         max_workers: int = 4,
@@ -69,7 +86,7 @@ class GraphBuilder:
         *,
         model: str | None = None,
         mode: str = "llm",  # "llm", "local", "hybrid"
-        core_cfg: Config,
+        core_cfg: BrainConfig,
     ) -> None:
         """Initialize graph builder.
 
@@ -79,13 +96,12 @@ class GraphBuilder:
                 - "local": Use cognee for local extraction (fast, free, lower quality)
                 - "hybrid": Try local first, fallback to LLM for complex content
         """
-        self.graph = nx.Graph()
         self.max_workers = max_workers
         self.model = model or core_cfg.models.ingestion.graph.model
         self.mode = mode
         self.core_cfg = core_cfg
-        self.taxonomy: dict[str, Any] | None = None
-        self.canonical_map: dict[str, str] = {}
+        self.taxonomy = None
+        self.canonical_map = {}
         self.allowed_relation_labels = set(DEFAULT_ALLOWED_LABELS)
         self._debug_bundles_written = 0
 
@@ -93,14 +109,15 @@ class GraphBuilder:
         self._cognee_builder = None
         if self.mode in ("local", "hybrid"):
             try:
-                from contextunity.brain.modules.tools.cognee import CogneeGraphBuilder
+                from contextunity.brain.storage.graph.cognee import KnowledgeGraphOrchestrator
 
-                self._cognee_builder = CogneeGraphBuilder()
+                self._cognee_builder = KnowledgeGraphOrchestrator()
             except ImportError:
                 logger.warning("Cognee not available, falling back to LLM mode")
                 if self.mode == "local":
                     self.mode = "llm"
 
+        self.graph = nx.Graph[str]()
         self._load_taxonomy(taxonomy_path)
         self._load_ontology(ontology_path)
 
@@ -110,9 +127,14 @@ class GraphBuilder:
             return
 
         try:
-            with open(path, encoding="utf-8") as f:
-                self.taxonomy = json.load(f)
-            self.canonical_map = self.taxonomy.get("canonical_map", {})
+            tax_wire = json_loads(path.read_text(encoding="utf-8"))
+            self.taxonomy = as_json_dict(tax_wire) if is_json_dict(tax_wire) else None
+            if self.taxonomy is not None:
+                raw_map = self.taxonomy.get("canonical_map")
+                if is_json_dict(raw_map):
+                    self.canonical_map = {
+                        str(key): str(val) for key, val in raw_map.items() if isinstance(val, str)
+                    }
             logger.info("Loaded taxonomy with %d canonical mappings", len(self.canonical_map))
         except Exception as e:
             logger.warning("Failed to load taxonomy: %s", e)
@@ -131,25 +153,23 @@ class GraphBuilder:
             return
 
         try:
-            with open(path, encoding="utf-8") as f:
-                onto = json.load(f)
-            rel = onto.get("relations", {}) if isinstance(onto, dict) else {}
-            labels = rel.get("allowed_labels") if isinstance(rel, dict) else None
-
-            if isinstance(labels, list):
-                parsed = {str(x).strip() for x in labels if isinstance(x, str) and str(x).strip()}
-                if parsed:
-                    self.allowed_relation_labels = parsed
-                    sample = ", ".join(sorted(parsed)[:5])
-                    logger.info(
-                        "Loaded ontology from %s: %d allowed_labels (%s%s)",
-                        path,
-                        len(parsed),
-                        sample,
-                        "..." if len(parsed) > 5 else "",
-                    )
-                else:
-                    logger.warning("Ontology file has empty allowed_labels, using defaults")
+            onto_wire = json_loads(path.read_text(encoding="utf-8"))
+            onto = as_json_dict(onto_wire)
+            rel = as_json_dict(onto.get("relations"))
+            labels = as_str_list(rel.get("allowed_labels"))
+            parsed = {label for label in labels if label.strip()}
+            if parsed:
+                self.allowed_relation_labels = parsed
+                sample = ", ".join(sorted(parsed)[:5])
+                logger.info(
+                    "Loaded ontology from %s: %d allowed_labels (%s%s)",
+                    path,
+                    len(parsed),
+                    sample,
+                    "..." if len(parsed) > 5 else "",
+                )
+            elif labels:
+                logger.warning("Ontology file has empty allowed_labels, using defaults")
             else:
                 logger.warning("Ontology file missing 'relations.allowed_labels', using defaults")
         except Exception as e:
@@ -234,10 +254,10 @@ class GraphBuilder:
         # Default: assume prompt order
         return (source, clean_entity(b_raw), c_label)
 
-    def _parse_tsv_output(self, text: str) -> tuple[list[str], list[dict]]:
+    def _parse_tsv_output(self, text: str) -> tuple[list[str], list[dict[str, str]]]:
         """Parse TSV output from LLM into entities and relations."""
         entities: list[str] = []
-        relations: list[dict] = []
+        relations: list[dict[str, str]] = []
         section = None
 
         for line in (text or "").splitlines():
@@ -260,14 +280,16 @@ class GraphBuilder:
                 if len(parts) >= 3:
                     result = self._choose_relation_columns(parts)
                     if result[0] and result[1] and result[2]:
-                        src, dst, lbl = result
-                        relations.append({"source": src, "target": dst, "label": lbl})
+                        # All three are truthy str after the guard
+                        relations.append(
+                            {"source": result[0], "target": result[1], "label": result[2]}
+                        )
 
         return (entities, relations)
 
     def _extract_from_item(
-        self, raw_data: RawData, *, output_path: Path
-    ) -> tuple[list[str], list[dict]]:
+        self, raw_data: RawData, *, _output_path: Path
+    ) -> tuple[list[str], list[dict[str, str]]]:
         """Extract entities and relations from a single RawData item."""
         content = raw_data.content
 
@@ -289,7 +311,31 @@ class GraphBuilder:
             ):
                 try:
                     logger.debug("Attempting local graph extraction with cognee")
-                    entities, relations = self._cognee_builder.build_graph(content)
+                    import asyncio
+
+                    result = asyncio.run(self._cognee_builder.build_graph(content))
+                    if result is None:
+                        return ([], [])
+                    raw_entities, raw_relations = result
+                    # Normalize cognee output to match expected return type
+                    entities: list[str] = []
+                    for entity_obj in raw_entities:
+                        if is_json_dict(entity_obj):
+                            name = as_str(entity_obj.get("name")) or as_str(entity_obj.get("id"))
+                            if name:
+                                entities.append(name)
+                        else:
+                            name = as_str(entity_obj)
+                            if name:
+                                entities.append(name)
+                    relations: list[dict[str, str]] = []
+                    for rel_obj in raw_relations:
+                        if is_json_dict(rel_obj):
+                            relations.append({key: as_str(val) for key, val in rel_obj.items()})
+                        else:
+                            label = as_str(rel_obj)
+                            if label:
+                                relations.append({"label": label})
                     logger.info(
                         f"Local extraction successful: {len(entities)} entities, {len(relations)} relations"
                     )
@@ -306,11 +352,13 @@ class GraphBuilder:
             else:
                 # Use LLM extraction (default or when cognee unavailable)
                 entities, relations = self._extract_with_llm(content)
+
+            return entities, relations
         except Exception as e:
             logger.error(f"Graph extraction failed: {e}")
             raise
 
-    def _extract_with_llm(self, content: str) -> tuple[list[str], list[dict]]:
+    def _extract_with_llm(self, content: str) -> tuple[list[str], list[dict[str, str]]]:
         """Extract entities and relations using LLM."""
         try:
             prompt = format_extraction_prompt(content, self.taxonomy)
@@ -331,7 +379,7 @@ class GraphBuilder:
             ]
 
             # Normalize relations
-            normalized_relations = []
+            normalized_relations: list[dict[str, str]] = []
             for rel in relations:
                 source = self._normalize_entity(rel.get("source", ""))
                 target = self._normalize_entity(rel.get("target", ""))
@@ -371,7 +419,7 @@ class GraphBuilder:
             debug_dir.mkdir(parents=True, exist_ok=True)
             path = debug_dir / f"graph_debug_{kind}_{ts}.json"
 
-            path.write_text(
+            _ = path.write_text(
                 json.dumps(
                     {
                         "kind": kind,
@@ -444,10 +492,12 @@ class GraphBuilder:
             if len(variants) <= 1:
                 continue
             # Prefer without article, or canonical_map, or longest
-            target = next(
-                (v for v in variants if v.lower() == no_article),
-                next((v for v in variants if v in self.canonical_map.values()), None)
-                or max(variants, key=len),
+            target = str(
+                next(
+                    (v for v in variants if v.lower() == no_article),
+                    next((v for v in variants if v in self.canonical_map.values()), None)
+                    or max(variants, key=len),
+                )
             )
             for variant in variants:
                 if variant != target and variant not in node_map:
@@ -465,8 +515,9 @@ class GraphBuilder:
         for name_key, variants in name_groups.items():
             if len(variants) <= 1:
                 continue
-            target = next((v for v in variants if v in self.canonical_map.values()), None) or max(
-                variants, key=len
+            target = str(
+                next((v for v in variants if v in self.canonical_map.values()), None)
+                or max(variants, key=len)
             )
             for variant in variants:
                 if variant != target and len(target) >= len(variant) + 3:
@@ -500,17 +551,18 @@ class GraphBuilder:
 
                 # Move edges
                 for neighbor in list(self.graph.neighbors(variant)):
-                    edge_data = self.graph.get_edge_data(variant, neighbor, {})
-                    relation = edge_data.get("relation", "RELATED_TO")
+                    edge_data = as_json_dict(self.graph.get_edge_data(variant, neighbor))
+                    relation = as_str(edge_data.get("relation"), default="RELATED_TO")
 
                     if self.graph.has_edge(canonical, neighbor):
-                        existing_label = self.graph[canonical][neighbor].get(
-                            "relation", "RELATED_TO"
+                        existing_label = as_str(
+                            as_json_dict(self.graph[canonical][neighbor]).get("relation"),
+                            default="RELATED_TO",
                         )
                         if existing_label == "RELATED_TO" and relation != "RELATED_TO":
-                            self.graph[canonical][neighbor]["relation"] = relation
+                            _ = self.graph[canonical][neighbor].update({"relation": relation})
                     else:
-                        self.graph.add_edge(canonical, neighbor, relation=relation)
+                        _ = self.graph.add_edge(canonical, neighbor, relation=relation)
 
                 self.graph.remove_node(variant)
                 merged_count += 1
@@ -534,11 +586,11 @@ class GraphBuilder:
                 continue
             # Move edges to cleaned name
             for neighbor in list(self.graph.neighbors(old_name)):
-                edge_data = self.graph.get_edge_data(old_name, neighbor, {})
-                relation = edge_data.get("relation", "RELATED_TO")
+                edge_data = as_json_dict(self.graph.get_edge_data(old_name, neighbor))
+                relation = as_str(edge_data.get("relation"), default="RELATED_TO")
                 if not self.graph.has_edge(new_name, neighbor):
-                    self.graph.add_node(new_name)  # Ensure node exists
-                    self.graph.add_edge(new_name, neighbor, relation=relation)
+                    _ = self.graph.add_node(new_name)  # Ensure node exists
+                    _ = self.graph.add_edge(new_name, neighbor, relation=relation)
             self.graph.remove_node(old_name)
 
         stats = {"cleaned_nodes": len(node_renames)}
@@ -571,7 +623,7 @@ class GraphBuilder:
         bad_edges = [
             (u, v)
             for u, v, data in self.graph.edges(data=True)
-            if (lbl := str((data or {}).get("relation", "")).strip().lower())
+            if (lbl := as_str(as_json_dict(data).get("relation")).strip().lower())
             and lbl not in allowed_labels_lower
             and lbl in node_names_lower
         ]
@@ -610,11 +662,11 @@ class GraphBuilder:
                 )
             except Exception as e:
                 logger.warning("Failed to load existing graph, starting fresh: %s", e)
-                self.graph = nx.Graph()
+                self.graph = nx.Graph[str]()
         else:
             if output_path.exists() and not incremental:
                 logger.info("Rebuilding graph from scratch (ignoring existing %s)", output_path)
-            self.graph = nx.Graph()
+            self.graph = nx.Graph[str]()
 
         logger.info(
             "Building knowledge graph from %d raw data items (workers=%d model=%s incremental=%s)",
@@ -626,11 +678,11 @@ class GraphBuilder:
 
         # Extract entities and relations in parallel
         all_entities: set[str] = set()
-        all_relations: list[dict] = []
+        all_relations: list[dict[str, str]] = []
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {
-                executor.submit(self._extract_from_item, data, output_path=output_path): data
+                executor.submit(self._extract_from_item, data, _output_path=output_path): data
                 for data in raw_data_list
             }
 
@@ -646,7 +698,7 @@ class GraphBuilder:
                 try:
                     entities, relations = future.result()
                     # Entities are already cleaned in _extract_from_item
-                    all_entities.update(e for e in entities if isinstance(e, str) and e.strip())
+                    all_entities.update(e for e in entities if e.strip())
                     all_relations.extend(relations)
                 except Exception as e:
                     logger.warning("Failed to process item: %s", e)
@@ -675,8 +727,6 @@ class GraphBuilder:
         node_set_lower = {e.lower() for e in cleaned_entities}
         cleaned_relations: list[tuple[str, str, str]] = []
         for rel in all_relations:
-            if not isinstance(rel, dict):
-                continue
             # CRITICAL: Clean source and target
             source_raw = str(rel.get("source", ""))
             target_raw = str(rel.get("target", ""))
@@ -721,13 +771,15 @@ class GraphBuilder:
             a_clean = clean_entity(a)
             b_clean = clean_entity(b)
             if a_clean and b_clean and len(a_clean) >= 3 and len(b_clean) >= 3:
-                self.graph.add_edge(a_clean, b_clean, relation=chosen)
+                _ = self.graph.add_edge(a_clean, b_clean, relation=chosen)
 
         # Remove invalid edges
         invalid_edges = [
             (u, v)
             for u, v, data in self.graph.edges(data=True)
-            if not clean_label(str((data or {}).get("relation", "")), self.allowed_relation_labels)
+            if not clean_label(
+                as_str(as_json_dict(data).get("relation")), self.allowed_relation_labels
+            )
         ]
         for u, v in invalid_edges:
             try:
@@ -761,7 +813,7 @@ class GraphBuilder:
 
         # Label distribution
         label_counts = Counter(
-            str((data or {}).get("relation", "")).strip()
+            as_str(as_json_dict(data).get("relation")).strip()
             for _, _, data in self.graph.edges(data=True)
         )
         if label_counts:
@@ -769,7 +821,7 @@ class GraphBuilder:
             logger.info("Graph relation labels (top): %s", top)
 
         if cleanup_stats:
-            parts = []
+            parts: list[str] = []
             if cleaned := cleanup_stats.get("cleaned_nodes", 0):
                 parts.append(f"cleaned {cleaned} node names")
             if merged := cleanup_stats.get("merged", 0):

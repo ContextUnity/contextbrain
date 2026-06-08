@@ -100,5 +100,5 @@ Only the `brain_admin` role can bypass RLS (used by ContextView dashboard).
 
 ## Further Reading
 
-- **Full Documentation**: [ContextBrain on Astro Site](../../docs/website/src/content/docs/brain/)
+- **Full Documentation**: [ContextBrain on Astro Site](../../website/src/content/docs/brain/)
 - **Agent Boundaries & Golden Paths**: [AGENTS.md](AGENTS.md)

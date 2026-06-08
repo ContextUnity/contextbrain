@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from contextunity.brain.core.exceptions import BrainValidationError
+
 # ── RLS Schema Tests ─────────────────────────────────────────────
 
 
@@ -144,17 +146,17 @@ class TestSetTenantContext:
         from contextunity.brain.storage.postgres.store.helpers import set_tenant_context
 
         mock_conn = AsyncMock()
-        with pytest.raises(ValueError, match="tenant_id"):
+        with pytest.raises(BrainValidationError, match="tenant_id"):
             await set_tenant_context(mock_conn, "")
 
     @pytest.mark.asyncio
     async def test_none_tenant_id_raises_value_error(self):
-        """Fail-closed: None tenant_id → ValueError."""
+        """Fail-closed: None tenant_id → BrainValidationError."""
         from contextunity.brain.storage.postgres.store.helpers import set_tenant_context
 
         mock_conn = AsyncMock()
-        with pytest.raises((ValueError, TypeError)):
-            await set_tenant_context(mock_conn, None)  # type: ignore[arg-type]
+        with pytest.raises((BrainValidationError, TypeError)):
+            await set_tenant_context(mock_conn, None)
 
     @pytest.mark.asyncio
     async def test_valid_tenant_id_sets_config(self):

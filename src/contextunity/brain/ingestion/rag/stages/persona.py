@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_str
+from contextunity.core.types import is_object_list
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ..config import get_assets_paths
 from ..core.types import RawData
@@ -20,7 +22,8 @@ from .store import read_raw_data_jsonl
 logger = get_contextunit_logger(__name__)
 
 
-def build_persona(*, config: RagIngestionConfig, core_cfg: Config) -> Path | None:
+def build_persona(*, config: RagIngestionConfig, core_cfg: BrainConfig) -> Path | None:
+    """Build persona."""
     if not config.persona.enabled:
         logger.info("persona: disabled")
         return None
@@ -45,13 +48,9 @@ def build_persona(*, config: RagIngestionConfig, core_cfg: Config) -> Path | Non
     bio_text = ""
     if bio_items:
         if bio_include_full_text:
-            bio_text = "\n\n---\n\n".join(
-                [x.content for x in bio_items if isinstance(x.content, str)]
-            )
+            bio_text = "\n\n---\n\n".join([x.content for x in bio_items])
         else:
-            bio_text = "\n\n---\n\n".join(
-                [x.content[:2000] for x in bio_items if isinstance(x.content, str)]
-            )
+            bio_text = "\n\n---\n\n".join([x.content[:2000] for x in bio_items])
 
     logger.info(
         "persona: generating (persona_name=%s tone_items=%d bio_items=%d)",
@@ -75,18 +74,22 @@ def build_persona(*, config: RagIngestionConfig, core_cfg: Config) -> Path | Non
 
 
 def _coerce_str_list(val: object) -> list[str]:
-    if isinstance(val, list):
+    """Coerce config glob values into a list of non-empty strings."""
+    if is_object_list(val):
         out: list[str] = []
         for x in val:
-            if isinstance(x, str) and x.strip():
-                out.append(x.strip())
+            text = as_str(x).strip()
+            if text:
+                out.append(text)
         return out
-    if isinstance(val, str) and val.strip():
-        return [val.strip()]
+    text = as_str(val).strip()
+    if text:
+        return [text]
     return []
 
 
 def _iter_glob_paths(root: Path, patterns: Iterable[str]) -> list[Path]:
+    """Collect unique glob matches under root."""
     out: list[Path] = []
     for pat in patterns:
         try:
@@ -94,7 +97,6 @@ def _iter_glob_paths(root: Path, patterns: Iterable[str]) -> list[Path]:
         except Exception as e:
             logger.debug("Failed to glob pattern '%s': %s", pat, e)
             continue
-    # Dedup, keep stable order
     seen: set[Path] = set()
     uniq: list[Path] = []
     for p in out:
@@ -106,6 +108,7 @@ def _iter_glob_paths(root: Path, patterns: Iterable[str]) -> list[Path]:
 
 
 def _load_rawdata_from_globs(root: Path, patterns: list[str]) -> list[RawData]:
+    """Load RawData rows from JSONL files matched by glob patterns."""
     items: list[RawData] = []
     for p in _iter_glob_paths(root, patterns):
         if p.is_file() and p.suffix.lower() == ".jsonl":

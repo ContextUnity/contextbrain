@@ -5,7 +5,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from contextunity.core.types import JsonDict
 
 
 @dataclass
@@ -15,7 +16,7 @@ class UploadResult:
     success: bool
     provider: str
     # Provider-specific details
-    details: dict[str, Any]
+    details: JsonDict
     error: str | None = None
 
 
@@ -27,6 +28,12 @@ class UploadProvider(ABC):
     - Azure: Blob Storage + Azure AI Search (future)
     - AWS: S3 + OpenSearch/Kendra (future)
     """
+
+    _config: JsonDict
+
+    def __init__(self, config: JsonDict) -> None:
+        """Initialize provider with platform-specific configuration."""
+        self._config = config
 
     @property
     @abstractmethod

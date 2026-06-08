@@ -1,3 +1,5 @@
+"""Module providing Module docstring is missing capabilities."""
+
 from __future__ import annotations
 
 import hashlib
@@ -20,19 +22,35 @@ _PAGE_MARKER_PATTERNS: tuple[tuple[str, int], ...] = (
 
 @dataclass(frozen=True)
 class TaxonomySample:
+    """Represent and manage Taxonomy Sample logic within the system."""
+
     text: str
     source_type: str
     doc_key: str
 
 
 def stable_hash_u64(s: str) -> int:
-    """Deterministic hash used for sampling (order-independent)."""
+    """Deterministic hash used for sampling (order-independent).
+
+    Args:
+        s (str): The s parameter.
+
+    Returns:
+        int: The resulting integer value.
+    """
     h = hashlib.sha256(s.encode("utf-8", errors="ignore")).digest()
     return int.from_bytes(h[:8], "big", signed=False)
 
 
 def clean_for_taxonomy_sample(text: str) -> str:
-    """Deterministic cleaning for taxonomy extraction."""
+    """Deterministic cleaning for taxonomy extraction.
+
+    Args:
+        text (str): The text parameter.
+
+    Returns:
+        str: The resulting string value.
+    """
     s = normalize_ambiguous_unicode(text or "")
     for pat, flags in _PAGE_MARKER_PATTERNS:
         s = re.sub(pat, " ", s, flags=flags)
@@ -42,7 +60,14 @@ def clean_for_taxonomy_sample(text: str) -> str:
 
 
 def windowed_snippets(text: str, *, window_chars: int, max_windows: int) -> list[str]:
-    """Deterministically sample multiple windows from long content."""
+    """Deterministically sample multiple windows from long content.
+
+    Args:
+        text (str): The text parameter.
+
+    Returns:
+        list[str]: A list of list[str].
+    """
     s = (text or "").strip()
     if not s:
         return []

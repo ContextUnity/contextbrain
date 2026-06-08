@@ -13,7 +13,7 @@ def _write_jsonl(path, rows):
 def test_taxonomy_sampling_doc_coverage_is_deterministic(tmp_path):
     # Import module directly to avoid side-effect imports from
     # contextunity.brain.ingestion.rag.processors.__init__ (keeps test hermetic).
-    import contextunity.brain.ingestion.rag.processors.taxonomy_builder as tb
+    import contextunity.brain.ingestion.rag.processors.taxonomy.sampling as sampling
 
     clean_text_dir = tmp_path / "clean_text"
     book_path = clean_text_dir / "book.jsonl"
@@ -40,10 +40,10 @@ def test_taxonomy_sampling_doc_coverage_is_deterministic(tmp_path):
 
     cfg = RagIngestionConfig(taxonomy=TaxonomySection(include_types=["book"]))
 
-    s1 = tb._collect_clean_text_samples_from_dir(
+    s1 = sampling.collect_clean_text_samples_from_dir(
         clean_text_dir=clean_text_dir, config=cfg, max_samples=50
     )
-    s2 = tb._collect_clean_text_samples_from_dir(
+    s2 = sampling.collect_clean_text_samples_from_dir(
         clean_text_dir=clean_text_dir, config=cfg, max_samples=50
     )
 
@@ -65,7 +65,7 @@ def test_parse_concepts_tsv_strips_prefix():
 concepts[1]term:Growth mindset\tmindset\t\tMindset focused on growth
 Persistence\taction\t\tKeeping going despite obstacles"""
 
-    concepts = tb._parse_concepts_tsv(raw)
+    concepts = tb._parse_terms_tsv(raw)
 
     # Should have parsed 3 concepts
     assert len(concepts) == 3
@@ -87,7 +87,7 @@ def test_parse_concepts_tsv_rejects_garbage():
 FREE\tpromo\t\tFree stuff
 Mindset principles\tmindset\t\tGood term"""
 
-    concepts = tb._parse_concepts_tsv(raw)
+    concepts = tb._parse_terms_tsv(raw)
 
     terms = [c["term"] for c in concepts]
     # Garbage should be filtered

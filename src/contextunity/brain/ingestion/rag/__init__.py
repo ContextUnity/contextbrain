@@ -8,19 +8,57 @@ public symbols on demand (similar to `modules.retrieval.rag`).
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from contextunity.core.narrowing import object_attr
 
 if TYPE_CHECKING:
-    from .core import (
-        IngestionMetadata,
-        IngestionPlugin,
-        RawData,
-        ShadowRecord,
+    from collections.abc import Callable
+
+    from .config import (
+        ensure_directories_exist,
+        get_assets_paths,
+        get_plugin_source_dir,
+        load_config,
+    )
+    from .core.batch import BatchResult, batch_transform, batch_validate, chunked, filter_by_indices
+    from .core.loaders import (
+        FileLoaderMixin,
+        LoadedFile,
+        iter_files,
+        load_text_files,
+        read_text_file,
+    )
+    from .core.plugins import IngestionPlugin
+    from .core.prompts import (
+        qa_rephrase_question_prompt,
+        qa_validate_answer_prompt,
+        qa_validate_question_prompt,
+        video_validate_segment_prompt,
+    )
+    from .core.registry import get_all_plugins, get_plugin_class, register_plugin
+    from .core.types import IngestionMetadata, RawData, ShadowRecord
+    from .core.utils import (
+        normalize_ambiguous_unicode,
+        normalize_clean_text,
+        parallel_map,
+        resolve_workers,
     )
     from .settings import RagIngestionConfig
+    from .stages.deploy import deploy_jsonl_files
+    from .stages.export import export_jsonl_per_type
+    from .stages.persona import build_persona
+    from .stages.preprocess import preprocess_to_clean_text
+    from .stages.report import build_ingestion_report
+    from .stages.store import read_raw_data_jsonl, write_shadow_records_jsonl
+
+    build_graph_from_clean_text: Callable[..., object]
+    build_ontology_from_taxonomy: Callable[..., object]
+    build_shadow_records: Callable[..., object]
+    build_taxonomy_from_clean_text: Callable[..., object]
 
 __all__ = [
-    # Config
+    # BrainConfig
     "ensure_directories_exist",
     "get_assets_paths",
     "get_plugin_source_dir",
@@ -70,62 +108,65 @@ __all__ = [
     "write_shadow_records_jsonl",
 ]
 
+_P = "contextunity.brain.ingestion.rag"  # package prefix
+_T = "contextunity.brain.transformers"  # transformers prefix
+
 _EXPORTS: dict[str, str] = {
-    # Config
-    "ensure_directories_exist": "contextunity.brain.ingestion.rag.config.ensure_directories_exist",
-    "get_assets_paths": "contextunity.brain.ingestion.rag.config.get_assets_paths",
-    "get_plugin_source_dir": "contextunity.brain.ingestion.rag.config.get_plugin_source_dir",
-    "load_config": "contextunity.brain.ingestion.rag.config.load_config",
-    "RagIngestionConfig": "contextunity.brain.ingestion.rag.settings.RagIngestionConfig",
+    # BrainConfig
+    "ensure_directories_exist": f"{_P}.config.ensure_directories_exist",
+    "get_assets_paths": f"{_P}.config.get_assets_paths",
+    "get_plugin_source_dir": f"{_P}.config.get_plugin_source_dir",
+    "load_config": f"{_P}.config.load_config",
+    "RagIngestionConfig": f"{_P}.settings.RagIngestionConfig",
     # Core
-    "IngestionMetadata": "contextunity.brain.ingestion.rag.core.types.IngestionMetadata",
-    "IngestionPlugin": "contextunity.brain.ingestion.rag.core.plugins.IngestionPlugin",
-    "RawData": "contextunity.brain.ingestion.rag.core.types.RawData",
-    "ShadowRecord": "contextunity.brain.ingestion.rag.core.types.ShadowRecord",
-    "get_all_plugins": "contextunity.brain.ingestion.rag.core.plugins.get_all_plugins",
-    "get_plugin_class": "contextunity.brain.ingestion.rag.core.plugins.get_plugin_class",
-    "register_plugin": "contextunity.brain.ingestion.rag.core.plugins.register_plugin",
+    "IngestionMetadata": f"{_P}.core.types.IngestionMetadata",
+    "IngestionPlugin": f"{_P}.core.plugins.IngestionPlugin",
+    "RawData": f"{_P}.core.types.RawData",
+    "ShadowRecord": f"{_P}.core.types.ShadowRecord",
+    "get_all_plugins": f"{_P}.core.registry.get_all_plugins",
+    "get_plugin_class": f"{_P}.core.registry.get_plugin_class",
+    "register_plugin": f"{_P}.core.registry.register_plugin",
     # Core batch
-    "BatchResult": "contextunity.brain.ingestion.rag.core.batch.BatchResult",
-    "batch_transform": "contextunity.brain.ingestion.rag.core.batch.batch_transform",
-    "batch_validate": "contextunity.brain.ingestion.rag.core.batch.batch_validate",
-    "chunked": "contextunity.brain.ingestion.rag.core.batch.chunked",
-    "filter_by_indices": "contextunity.brain.ingestion.rag.core.batch.filter_by_indices",
+    "BatchResult": f"{_P}.core.batch.BatchResult",
+    "batch_transform": f"{_P}.core.batch.batch_transform",
+    "batch_validate": f"{_P}.core.batch.batch_validate",
+    "chunked": f"{_P}.core.batch.chunked",
+    "filter_by_indices": f"{_P}.core.batch.filter_by_indices",
     # Core loaders
-    "FileLoaderMixin": "contextunity.brain.ingestion.rag.core.loaders.FileLoaderMixin",
-    "LoadedFile": "contextunity.brain.ingestion.rag.core.loaders.LoadedFile",
-    "iter_files": "contextunity.brain.ingestion.rag.core.loaders.iter_files",
-    "load_text_files": "contextunity.brain.ingestion.rag.core.loaders.load_text_files",
-    "read_text_file": "contextunity.brain.ingestion.rag.core.loaders.read_text_file",
+    "FileLoaderMixin": f"{_P}.core.loaders.FileLoaderMixin",
+    "LoadedFile": f"{_P}.core.loaders.LoadedFile",
+    "iter_files": f"{_P}.core.loaders.iter_files",
+    "load_text_files": f"{_P}.core.loaders.load_text_files",
+    "read_text_file": f"{_P}.core.loaders.read_text_file",
     # Core prompts
-    "qa_rephrase_question_prompt": "contextunity.brain.ingestion.rag.core.prompts.qa_rephrase_question_prompt",
-    "qa_validate_answer_prompt": "contextunity.brain.ingestion.rag.core.prompts.qa_validate_answer_prompt",
-    "qa_validate_question_prompt": "contextunity.brain.ingestion.rag.core.prompts.qa_validate_question_prompt",
-    "video_validate_segment_prompt": "contextunity.brain.ingestion.rag.core.prompts.video_validate_segment_prompt",
+    "qa_rephrase_question_prompt": f"{_P}.core.prompts.qa_rephrase_question_prompt",
+    "qa_validate_answer_prompt": f"{_P}.core.prompts.qa_validate_answer_prompt",
+    "qa_validate_question_prompt": f"{_P}.core.prompts.qa_validate_question_prompt",
+    "video_validate_segment_prompt": f"{_P}.core.prompts.video_validate_segment_prompt",
     # Core utils
-    "normalize_ambiguous_unicode": "contextunity.brain.ingestion.rag.core.utils.normalize_ambiguous_unicode",
-    "normalize_clean_text": "contextunity.brain.ingestion.rag.core.utils.normalize_clean_text",
-    "parallel_map": "contextunity.brain.ingestion.rag.core.utils.parallel_map",
+    "normalize_ambiguous_unicode": f"{_P}.core.utils.normalize_ambiguous_unicode",
+    "normalize_clean_text": f"{_P}.core.utils.normalize_clean_text",
+    "parallel_map": f"{_P}.core.utils.parallel_map",
     # Utils
-    "resolve_workers": "contextunity.brain.ingestion.rag.core.utils.resolve_workers",
+    "resolve_workers": f"{_P}.core.utils.resolve_workers",
     # Transformers
-    "build_graph_from_clean_text": "contextunity.brain.transformers.graph.build_graph_from_clean_text",
-    "build_ontology_from_taxonomy": "contextunity.brain.transformers.ontology.build_ontology_from_taxonomy",
-    "build_shadow_records": "contextunity.brain.transformers.shadow.build_shadow_records",
-    "build_taxonomy_from_clean_text": "contextunity.brain.transformers.taxonomy.build_taxonomy_from_clean_text",
+    "build_graph_from_clean_text": f"{_T}.graph.build_graph_from_clean_text",
+    "build_ontology_from_taxonomy": f"{_T}.ontology.build_ontology_from_taxonomy",
+    "build_shadow_records": f"{_T}.shadow.build_shadow_records",
+    "build_taxonomy_from_clean_text": f"{_T}.taxonomy.build_taxonomy_from_clean_text",
     # Stages
-    "deploy_jsonl_files": "contextunity.brain.ingestion.rag.stages.deploy.deploy_jsonl_files",
-    "export_jsonl_per_type": "contextunity.brain.ingestion.rag.stages.export.export_jsonl_per_type",
-    "build_persona": "contextunity.brain.ingestion.rag.stages.persona.build_persona",
-    "preprocess_to_clean_text": "contextunity.brain.ingestion.rag.stages.preprocess.preprocess_to_clean_text",
-    "build_ingestion_report": "contextunity.brain.ingestion.rag.stages.report.build_ingestion_report",
-    "enrich_clean_text": "contextunity.brain.ingestion.rag.stages.enrich.enrich_clean_text",
-    "read_raw_data_jsonl": "contextunity.brain.ingestion.rag.stages.store.read_raw_data_jsonl",
-    "write_shadow_records_jsonl": "contextunity.brain.ingestion.rag.stages.store.write_shadow_records_jsonl",
+    "deploy_jsonl_files": f"{_P}.stages.deploy.deploy_jsonl_files",
+    "export_jsonl_per_type": f"{_P}.stages.export.export_jsonl_per_type",
+    "build_persona": f"{_P}.stages.persona.build_persona",
+    "preprocess_to_clean_text": f"{_P}.stages.preprocess.preprocess_to_clean_text",
+    "build_ingestion_report": f"{_P}.stages.report.build_ingestion_report",
+    "enrich_clean_text": f"{_P}.stages.enrich.enrich_clean_text",
+    "read_raw_data_jsonl": f"{_P}.stages.store.read_raw_data_jsonl",
+    "write_shadow_records_jsonl": f"{_P}.stages.store.write_shadow_records_jsonl",
 }
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     if name not in _EXPORTS:
         raise AttributeError(name)
     path = _EXPORTS[name]
@@ -136,6 +177,7 @@ def __getattr__(name: str) -> Any:
         # Provide a more helpful error for optional ingestion deps.
         raise ModuleNotFoundError(
             f"{e}. You may need to install ingestion extras: "
-            "`pip install 'contextunity.brain[ingestion]'` (or `contextunity.brain[all]`)."
+            + "`pip install 'contextunity.brain[ingestion]'` (or `contextunity.brain[all]`)."
         ) from e
-    return getattr(mod, attr)
+    attr_obj = object_attr(mod, attr)
+    return attr_obj

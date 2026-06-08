@@ -10,16 +10,26 @@ breaks minimal installs (e.g., API-only deployments).
 from __future__ import annotations
 
 import importlib
-from typing import Any
+from typing import TYPE_CHECKING
+
+from contextunity.core.narrowing import object_attr
+
+if TYPE_CHECKING:
+    from .builder import GraphBuilder
+    from .lookup import GraphEnricher
+    from .prompts import GRAPH_EXTRACTION_PROMPT
 
 __all__ = ["GRAPH_EXTRACTION_PROMPT", "GraphBuilder", "GraphEnricher"]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     if name == "GraphBuilder":
-        return importlib.import_module(".builder", __name__).GraphBuilder
+        mod = importlib.import_module(".builder", __name__)
+        return object_attr(mod, "GraphBuilder")
     if name == "GraphEnricher":
-        return importlib.import_module(".lookup", __name__).GraphEnricher
+        mod = importlib.import_module(".lookup", __name__)
+        return object_attr(mod, "GraphEnricher")
     if name == "GRAPH_EXTRACTION_PROMPT":
-        return importlib.import_module(".prompts", __name__).GRAPH_EXTRACTION_PROMPT
+        mod = importlib.import_module(".prompts", __name__)
+        return object_attr(mod, "GRAPH_EXTRACTION_PROMPT")
     raise AttributeError(name)

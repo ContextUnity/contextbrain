@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Callable
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_str_list
+from typing_extensions import override
 
 from contextunity.brain.core.types import StructData
 
@@ -14,7 +16,6 @@ from ..core.plugins import IngestionPlugin
 from ..core.registry import register_plugin
 from ..core.types import (
     GraphEnrichmentResult,
-    IngestionMetadata,
     KnowledgeStructData,
     RawData,
     ShadowRecord,
@@ -40,25 +41,48 @@ class TextPlugin(IngestionPlugin, FileLoaderMixin):
     """
 
     @property
+    @override
     def source_type(self) -> str:
+        """Source type.
+
+        Returns:
+            str: The resulting string value.
+        """
         return "knowledge"
 
+    @override
     def load(self, assets_path: str) -> list[RawData]:
-        """Load .txt or .md files as-is."""
+        """Load .txt or .md files as-is.
+
+        Args:
+            assets_path (str): The assets path parameter.
+
+        Returns:
+            list[RawData]: A list of list[RawData].
+        """
         if not (source_dir := self._resolve_source_dir(assets_path)):
             return []
 
         def to_raw_data(loaded: LoadedFile) -> RawData:
+            """To raw data.
+
+            Args:
+                loaded (LoadedFile): The loaded parameter.
+
+            Returns:
+                RawData: An instance of RawData.
+            """
             return RawData(
                 content=normalize_ambiguous_unicode(loaded.content),
                 source_type="knowledge",
-                metadata=IngestionMetadata(title=loaded.path.stem),
+                metadata={"title": loaded.path.stem},
             )
 
         return [
             to_raw_data(f) for f in self._load_text_files(source_dir, extensions=(".txt", ".md"))
         ]
 
+    @override
     def transform(
         self,
         data: list[RawData],
@@ -69,13 +93,14 @@ class TextPlugin(IngestionPlugin, FileLoaderMixin):
     ) -> list[ShadowRecord]:
         """Transform text data with taxonomy term matching for enhanced retrieval.
 
-        CRITICAL: empty struct_data for RAG-only content (no UI citation cards).
+        Args:
+            data (list[RawData]): The raw data dictionary or object.
+            enrichment_func (Callable[[str], GraphEnrichmentResult]): The enrichment func parameter.
+            taxonomy_path (Path | None): The taxonomy path parameter.
+            config (RagIngestionConfig | None): The configuration settings dict or object.
 
-        Process:
-        1. Chunk by paragraphs (~1000 chars)
-        2. Scan for taxonomy terms
-        3. Append taxonomy terms to input_text for better retrieval
-        4. Create ShadowRecords with empty struct_data
+        Returns:
+            list[ShadowRecord]: A list of list[ShadowRecord].
         """
         shadow_records: list[ShadowRecord] = []
 
@@ -85,7 +110,7 @@ class TextPlugin(IngestionPlugin, FileLoaderMixin):
         taxonomy = load_taxonomy_safe(taxonomy_path)
 
         for raw in data:
-            title = raw.metadata.get("title", "Knowledge")
+            title = str(raw.metadata.get("title", "Knowledge"))
 
             # Chunk by paragraphs
             paragraphs = [p.strip() for p in raw.content.split("\n\n") if p.strip()]
@@ -127,7 +152,17 @@ class TextPlugin(IngestionPlugin, FileLoaderMixin):
         *,
         initial_keywords: list[str] | object | None = None,
     ) -> ShadowRecord:
-        """Create a ShadowRecord for a knowledge chunk."""
+        """Create a ShadowRecord for a knowledge chunk.
+
+        Args:
+            chunk (str): The chunk parameter.
+            title (str): The title parameter.
+            enrichment_func (Callable[[str], GraphEnrichmentResult]): The enrichment func parameter.
+            taxonomy (StructData | None): The taxonomy parameter.
+
+        Returns:
+            ShadowRecord: An instance of ShadowRecord.
+        """
         # Graph enrichment
         graph_keywords, summary, parent_categories = get_graph_enrichment(
             text=chunk, enrichment_func=enrichment_func
@@ -137,8 +172,10 @@ class TextPlugin(IngestionPlugin, FileLoaderMixin):
         taxonomy_terms = self._extract_taxonomy_terms(chunk, taxonomy)
 
         # Combine metadata + taxonomy + graph keywords, deduplicated
-        base = initial_keywords if isinstance(initial_keywords, list) else []
-        all_keywords = list(dict.fromkeys([*base, *taxonomy_terms, *graph_keywords]))[:15]
+        base: list[str] = as_str_list(initial_keywords)
+        all_keywords: list[str] = list(dict.fromkeys([*base, *taxonomy_terms, *graph_keywords]))[
+            :15
+        ]
 
         # Build input_text with natural language enrichment
         input_text = build_enriched_input_text(
@@ -176,7 +213,7 @@ class TextPlugin(IngestionPlugin, FileLoaderMixin):
         return ShadowRecord(
             id=record_id,
             input_text=input_text,
-            struct_data=struct_data,
+            struct_data=dict(struct_data) if struct_data else {},
             title=title,
             source_type="knowledge",
         )
@@ -188,20 +225,26 @@ class TextPlugin(IngestionPlugin, FileLoaderMixin):
     ) -> list[str]:
         """Extract matching taxonomy terms from content.
 
-        Simple case-insensitive keyword matching.
-        Returns matched terms sorted by frequency.
+        Args:
+            content (str): The content parameter.
+            taxonomy (StructData | None): The taxonomy parameter.
+
+        Returns:
+            list[str]: A list of list[str].
         """
         if not taxonomy:
             return []
 
         all_keywords = taxonomy.get("all_keywords", [])
-        if not all_keywords:
+        if not all_keywords or not isinstance(all_keywords, list):
             return []
 
         content_lower = content.lower()
         matches: list[tuple[str, int]] = []
 
         for keyword in all_keywords:
+            if not isinstance(keyword, str):
+                continue
             keyword_lower = keyword.lower()
             count = content_lower.count(keyword_lower)
             if count > 0:

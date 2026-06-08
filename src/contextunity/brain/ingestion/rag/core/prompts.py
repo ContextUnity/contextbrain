@@ -1,22 +1,17 @@
 """Centralized prompt templates for ingestion-time LLM calls.
-
 This module provides reusable prompt templates for various LLM operations
 during the ingestion pipeline:
-
 - **Content Validation**: Filter out non-valuable content before indexing
   - `qa_validate_question_prompt`: Filter non-questions (filler, promotional)
   - `qa_validate_answer_prompt`: Filter meaningless answers
   - `video_validate_segment_prompt`: Filter non-educational video segments
-
 - **Content Enhancement**: Improve content quality for search
   - `qa_rephrase_question_prompt`: Clarify unclear questions
   - `web_summary_prompt`: Generate page summaries
-
 - **Analysis**: Extract structure and metadata
   - `qa_speaker_detection_prompt`: Identify speakers in transcripts
   - `qa_batch_analysis_prompt`: Extract topics from QA content
   - `book_batch_analysis_prompt`: Extract topics from book chapters
-
 All prompts follow consistent patterns:
 - Clear input/output format specification
 - Explicit accept/reject criteria
@@ -27,6 +22,11 @@ from __future__ import annotations
 
 
 def qa_speaker_detection_prompt(*, transcript: str) -> str:
+    """Qa speaker detection prompt.
+
+    Returns:
+        str: The resulting string value.
+    """
     return f"""Analyze this conversational transcript and identify all speaker segments.
 
 TRANSCRIPT:
@@ -56,6 +56,11 @@ Speaker A\tExactly. The first principle is..."""
 def qa_batch_analysis_prompt(
     *, items_text: str, taxonomy_categories: list[str] | None = None
 ) -> str:
+    """Qa batch analysis prompt.
+
+    Returns:
+        str: The resulting string value.
+    """
     category_instruction = ""
     if taxonomy_categories:
         cat_list = ", ".join(taxonomy_categories)
@@ -84,6 +89,11 @@ Example:
 
 
 def web_summary_prompt(*, content: str, categories: list[str] | None = None) -> str:
+    """Web summary prompt.
+
+    Returns:
+        str: The resulting string value.
+    """
     taxonomy_context = ""
     if categories:
         taxonomy_context = f"\nCategories to focus on: {', '.join(categories)}"
@@ -99,15 +109,8 @@ Return ONLY the summary text (no JSON, no quotes)."""
 def qa_validate_question_prompt(*, raw_text: str, answer_context: str) -> str:
     """Prompt to validate and extract meaningful questions from conversation text.
 
-    Filters out:
-    - Non-questions (statements, declarations)
-    - Promotional/administrative content (pricing, access, signups)
-    - Conversational filler (greetings, pleasantries, acknowledgments)
-    - Meta-commentary about the session itself
-    - Auto-generated summaries / topic headers
-    - Mid-sentence fragments
-
-    Returns either a clean question or "NOT_A_QUESTION".
+    Returns:
+        str: The resulting string value.
     """
     return f"""Analyze this text and determine if it contains a GENUINE QUESTION worth indexing.
 
@@ -238,7 +241,8 @@ Example:
 def qa_validate_answer_prompt(*, answer_text: str, topic: str) -> str:
     """Prompt to validate if QA answer content is worth indexing.
 
-    Filters out meaningless answers that don't provide educational value.
+    Returns:
+        str: The resulting string value.
     """
     return f"""Evaluate if this answer content is WORTH INDEXING for search.
 
@@ -289,7 +293,8 @@ YOUR OUTPUT:"""
 def video_validate_segment_prompt(*, segment_text: str, video_title: str) -> str:
     """Prompt to validate if a video segment is worth indexing.
 
-    Filters out segments that don't provide educational value.
+    Returns:
+        str: The resulting string value.
     """
     return f"""Evaluate if this video segment is WORTH INDEXING for search.
 

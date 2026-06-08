@@ -4,12 +4,18 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import override
 
-from contextunity.brain.retrieval.rag.settings import resolve_data_store_id
 from contextunity.core import get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.narrowing import as_str
+from contextunity.core.types import JsonDict
 
 from contextunity.brain.core import get_core_config, get_env
+from contextunity.brain.ingestion.rag.protocols import (
+    discovery_engine_v1_bindings,
+    gcs_storage_client,
+)
 
 from .base import (
     UploadProvider,
@@ -17,6 +23,39 @@ from .base import (
 )
 
 logger = get_contextunit_logger(__name__)
+
+
+def _resolve_data_store_id(symbolic: str | None = None) -> str:
+    """Resolve blue/green symbolic name or default data store ID from env.
+
+    Args:
+        symbolic: Optional symbolic name ('blue' or 'green') to resolve.
+            If None, returns the default data store ID from env.
+
+    Returns:
+        Resolved data store ID.
+
+    Raises:
+        ValueError: If no data store ID can be resolved.
+    """
+    if symbolic and symbolic.lower() in ("blue", "green"):
+        env_key = f"RAG_DATASTORE_{symbolic.upper()}"
+        ds_id = get_env(env_key)
+        if ds_id:
+            return ds_id
+        raise ConfigurationError(
+            f"Cannot resolve symbolic data store '{symbolic}': env var {env_key} not set"
+        )
+
+    # Default: try common env vars
+    for key in ("RAG_DATASTORE_ID", "CU_BRAIN_DATASTORE_ID", "VERTEX_DATASTORE_ID"):
+        ds_id = get_env(key)
+        if ds_id:
+            return ds_id
+
+    raise ConfigurationError(
+        "Cannot resolve data store ID: set RAG_DATASTORE_ID or provide in config"
+    )
 
 
 class GCloudUploadProvider(UploadProvider):
@@ -29,55 +68,60 @@ class GCloudUploadProvider(UploadProvider):
     Supports blue/green symbolic names for data_store_id.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    _project_id: str | None
+    _location: str | None
+    _gcs_bucket: str | None
+    _data_store_id: str | None
+
+    def __init__(self, config: JsonDict) -> None:
         """Initialize GCloud provider.
 
         Args:
             config: Provider-specific config from [upload.gcloud] section
         """
-        # Ensure environment is loaded
-        get_core_config()
-        self._config = config
+        _ = get_core_config()
+        super().__init__(config)
 
-        # Resolve configuration with fallback to env vars
         self._project_id = (
-            config.get("project_id")
+            as_str(config.get("project_id"))
             or get_env("VERTEX_PROJECT_ID")
             or get_env("CU_BRAIN_VERTEX_PROJECT_ID")
+            or None
         )
         self._location = (
-            config.get("location")
+            as_str(config.get("location"))
             or get_env("VERTEX_LOCATION", "global")
             or get_env("CU_BRAIN_VERTEX_LOCATION", "global")
+            or None
         )
-        self._gcs_bucket = config.get("gcs_bucket") or get_env("RAG_GCS_BUCKET")
+        self._gcs_bucket = as_str(config.get("gcs_bucket")) or get_env("RAG_GCS_BUCKET") or None
 
-        # Data store ID: config > resolve from env
-        config_ds_id = config.get("data_store_id")
+        config_ds_id = as_str(config.get("data_store_id"))
         if config_ds_id:
-            # Config value might be symbolic ("blue"/"green") or actual ID
             self._data_store_id = self._resolve_symbolic(config_ds_id)
         else:
-            # Fall back to env-based resolution
-            self._data_store_id = None  # Will resolve at upload time
+            self._data_store_id = None
 
     def _resolve_symbolic(self, ds_id: str) -> str:
         """Resolve symbolic blue/green to actual datastore ID."""
         ds_lower = ds_id.lower().strip()
         if ds_lower in ("blue", "green"):
-            return resolve_data_store_id(ds_lower)
+            return _resolve_data_store_id(ds_lower)
         return ds_id
 
     @property
+    @override
     def name(self) -> str:
+        """Name."""
         return "gcloud"
 
     def _get_data_store_id(self) -> str:
         """Get data store ID, resolving at runtime if needed."""
         if self._data_store_id:
             return self._data_store_id
-        return resolve_data_store_id()
+        return _resolve_data_store_id()
 
+    @override
     def upload_and_index(
         self,
         local_path: Path,
@@ -85,12 +129,10 @@ class GCloudUploadProvider(UploadProvider):
         wait: bool = False,
     ) -> UploadResult:
         """Upload JSONL to GCS and trigger Vertex AI Search import."""
-        # Lazy imports for optional GCP dependencies
         from google.api_core.client_options import ClientOptions
-        from google.cloud import discoveryengine_v1 as discoveryengine
-        from google.cloud import storage
 
-        # Validate required config
+        de = discovery_engine_v1_bindings()
+
         if not self._project_id:
             return UploadResult(
                 success=False,
@@ -115,7 +157,7 @@ class GCloudUploadProvider(UploadProvider):
 
         try:
             data_store_id = self._get_data_store_id()
-        except ValueError as e:
+        except ConfigurationError as e:
             return UploadResult(
                 success=False,
                 provider=self.name,
@@ -132,46 +174,44 @@ class GCloudUploadProvider(UploadProvider):
         )
 
         try:
-            # Folder by date, files keep original names (e.g., import_20251229_green_video.jsonl)
             date_folder = datetime.now(timezone.utc).strftime("%Y%m%d")
             blob_name = f"ingestion/{date_folder}/{local_path.name}"
 
-            # Upload to GCS
             logger.info(
                 "Uploading %s to gs://%s/%s ...", local_path.name, self._gcs_bucket, blob_name
             )
-            storage_client = storage.Client()
+            storage_client = gcs_storage_client()
             bucket = storage_client.bucket(self._gcs_bucket)
             blob = bucket.blob(blob_name)
-            blob.upload_from_filename(str(local_path), content_type="application/json")
+            _ = blob.upload_from_filename(str(local_path), content_type="application/json")
             gcs_uri = f"gs://{self._gcs_bucket}/{blob_name}"
             logger.info("Uploaded to %s", gcs_uri)
 
-            # Trigger Vertex AI Search import
             logger.info(
                 "Triggering import to datastore '%s' in location '%s'...",
                 data_store_id,
                 self._location,
             )
 
+            location = self._location or "global"
             client_options = (
-                ClientOptions(api_endpoint=f"{self._location}-discoveryengine.googleapis.com")
-                if self._location != "global"
+                ClientOptions(api_endpoint=f"{location}-discoveryengine.googleapis.com")
+                if location != "global"
                 else None
             )
-            de_client = discoveryengine.DocumentServiceClient(client_options=client_options)
+            de_client = de.document_service_client(client_options=client_options)
 
             parent = de_client.branch_path(
                 project=self._project_id,
-                location=self._location,
+                location=location,
                 data_store=data_store_id,
                 branch="default_branch",
             )
 
-            request = discoveryengine.ImportDocumentsRequest(
+            request = de.import_documents_request(
                 parent=parent,
-                gcs_source=discoveryengine.GcsSource(input_uris=[gcs_uri]),
-                reconciliation_mode=discoveryengine.ImportDocumentsRequest.ReconciliationMode.INCREMENTAL,
+                gcs_source=de.gcs_source(input_uris=[gcs_uri]),
+                reconciliation_mode=de.reconciliation_incremental,
             )
 
             operation = de_client.import_documents(request=request)
@@ -180,7 +220,7 @@ class GCloudUploadProvider(UploadProvider):
 
             if wait:
                 logger.info("Waiting for import to complete (this may take several minutes)...")
-                response = operation.result(timeout=3600)  # 1 hour timeout
+                response = operation.result(timeout=3600)
                 logger.info("Import completed successfully!")
                 logger.info("Import result: %s", response)
 
@@ -193,7 +233,7 @@ class GCloudUploadProvider(UploadProvider):
                     "data_store_id": data_store_id,
                     "date": date_folder,
                     "project_id": self._project_id,
-                    "location": self._location,
+                    "location": location,
                 },
             )
 
@@ -206,17 +246,18 @@ class GCloudUploadProvider(UploadProvider):
                 error=str(e),
             )
 
+    @override
     def get_config_summary(self) -> dict[str, str]:
         """Get summary of current configuration for logging."""
         try:
             ds_id = self._get_data_store_id()
-        except ValueError:
+        except ConfigurationError:
             ds_id = "<unresolved>"
 
         return {
             "provider": self.name,
-            "project_id": self._project_id or "<not set>",
-            "location": self._location,
-            "gcs_bucket": self._gcs_bucket or "<not set>",
+            "project_id": as_str(self._project_id) or "<not set>",
+            "location": as_str(self._location) or "<not set>",
+            "gcs_bucket": as_str(self._gcs_bucket) or "<not set>",
             "data_store_id": ds_id,
         }

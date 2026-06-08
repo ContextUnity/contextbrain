@@ -15,7 +15,7 @@ Priority: CU_BRAIN_CONFIG_PATH > CU_BRAIN_ASSETS_PATH > package default
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Protocol, runtime_checkable
 
 from contextunity.core import get_contextunit_logger
 
@@ -68,7 +68,7 @@ def _resolve_config_path() -> Path:
 def _log_config_not_found(config_path: Path, example_path: Path) -> None:
     """Log helpful message when config file is not found."""
     msg_lines = [
-        f"Config file not found: {config_path}",
+        f"BrainConfig file not found: {config_path}",
         "",
         "To configure the ingestion pipeline, set the assets path and copy the example config:",
         f"  export {ENV_ASSETS_PATH}=/path/to/your/assets/folder",
@@ -119,7 +119,9 @@ def load_config(config_path: Path | None = None, *, force: bool = False) -> RagI
     except ImportError:
         # Python < 3.11 fallback
         try:
-            import tomli as tomllib  # type: ignore[import-not-found]
+            import importlib
+
+            tomllib = importlib.import_module("tomli")
         except ImportError:
             logger.warning(
                 "Neither tomllib (Python 3.11+) nor tomli available. Using default configuration."
@@ -156,7 +158,7 @@ def get_assets_paths(config: RagIngestionConfig | None = None) -> dict[str, Path
 
     Priority for assets_folder:
     1. CU_BRAIN_ASSETS_PATH env var
-    2. Config file paths.assets_folder setting
+    2. BrainConfig file paths.assets_folder setting
     3. Package default
 
     Args:
@@ -169,15 +171,22 @@ def get_assets_paths(config: RagIngestionConfig | None = None) -> dict[str, Path
     return cfg.assets_paths()
 
 
+@runtime_checkable
+class IngestionPluginWithSourceDir(Protocol):
+    """Plugin exposing a default assets subdirectory name."""
+
+    default_source_dir: str | Path
+
+
 def get_plugin_source_dir(
     plugin_type: str,
     config: RagIngestionConfig | None = None,
-    plugin_instance: Any | None = None,
+    plugin_instance: IngestionPluginWithSourceDir | None = None,
 ) -> Path:
     """Get source directory for a specific plugin type.
 
     Priority:
-    1. Config override: [plugins.{plugin_type}].dir
+    1. BrainConfig override: [plugins.{plugin_type}].dir
     2. Plugin default: plugin.default_source_dir
     3. Fallback: plugin_type
 

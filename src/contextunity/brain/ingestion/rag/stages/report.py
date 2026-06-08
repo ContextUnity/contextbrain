@@ -13,9 +13,11 @@ import json
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_int, as_json_dict, as_str
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, JsonValue, is_json_dict
 
 from ..config import get_assets_paths
 from ..graph.serialization import load_graph_secure
@@ -39,17 +41,18 @@ def _count_jsonl_lines(path: Path, *, hard_cap: int = 2_000_000) -> int:
     return n
 
 
-def _safe_json_load(path: Path) -> dict[str, Any] | None:
+def _safe_json_load(path: Path) -> JsonDict | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        loaded = json_loads(path.read_text(encoding="utf-8"))
+        return loaded if is_json_dict(loaded) else None
     except Exception as e:
         logger.warning("report: failed to load json %s: %s", path, e)
         return None
 
 
-def _taxonomy_stats(taxonomy_path: Path) -> dict[str, Any]:
+def _taxonomy_stats(taxonomy_path: Path) -> JsonDict:
     tax = _safe_json_load(taxonomy_path) or {}
     cats = tax.get("categories", {})
     canonical_map = tax.get("canonical_map", {})
@@ -69,7 +72,7 @@ def _taxonomy_stats(taxonomy_path: Path) -> dict[str, Any]:
         "exists": taxonomy_path.exists(),
         "categories_count": len(cats) if isinstance(cats, dict) else 0,
         "canonical_map_count": (len(canonical_map) if isinstance(canonical_map, dict) else 0),
-        "total_keywords": int(tax.get("total_count") or 0),
+        "total_keywords": as_int(tax.get("total_count")),
         "category_keyword_counts": {
             "min": cat_keyword_counts_sorted[0] if cat_keyword_counts_sorted else 0,
             "p50": (
@@ -87,7 +90,7 @@ def _taxonomy_stats(taxonomy_path: Path) -> dict[str, Any]:
     }
 
 
-def _graph_stats(graph_path: Path) -> dict[str, Any]:
+def _graph_stats(graph_path: Path) -> JsonDict:
     if not graph_path.exists():
         return {
             "path": str(graph_path),
@@ -117,17 +120,18 @@ def _graph_stats(graph_path: Path) -> dict[str, Any]:
 
     label_counts: Counter[str] = Counter()
     try:
-        edges_fn = getattr(g, "edges", None)
-        if callable(edges_fn):
-            for _, _, data in edges_fn(data=True):
-                rel = str((data or {}).get("relation", "")).strip()
-                if rel:
-                    label_counts[rel] += 1
+        for _u, _v, data in g.edges(data=True):
+            edge_data = as_json_dict(data)
+            rel = as_str(edge_data.get("relation")).strip()
+            if rel:
+                label_counts[rel] += 1
     except Exception:
         # If g isn't a networkx graph for some reason, keep stats minimal.
         label_counts = Counter()
 
-    top_labels = [{"label": k, "count": v} for k, v in label_counts.most_common(25)]
+    top_labels: list[JsonValue] = [
+        {"label": k, "count": v} for k, v in label_counts.most_common(25)
+    ]
     return {
         "path": str(graph_path),
         "exists": True,
@@ -137,8 +141,8 @@ def _graph_stats(graph_path: Path) -> dict[str, Any]:
     }
 
 
-def _shadow_stats(shadow_dir: Path, *, types: list[str]) -> dict[str, Any]:
-    per_type: dict[str, Any] = {}
+def _shadow_stats(shadow_dir: Path, *, types: list[str]) -> JsonDict:
+    per_type: JsonDict = {}
     total = 0
     for t in types:
         p = shadow_dir / f"{t}.jsonl"
@@ -148,8 +152,8 @@ def _shadow_stats(shadow_dir: Path, *, types: list[str]) -> dict[str, Any]:
     return {"total_records": total, "per_type": per_type}
 
 
-def _exports_stats(jsonl_dir: Path, *, types: list[str]) -> dict[str, Any]:
-    per_type: dict[str, Any] = {}
+def _exports_stats(jsonl_dir: Path, *, types: list[str]) -> JsonDict:
+    per_type: JsonDict = {}
     total_files = 0
     for t in types:
         d = jsonl_dir / t
@@ -180,9 +184,7 @@ def build_ingestion_report(
     processing = paths["processing"] / "report"
     processing.mkdir(parents=True, exist_ok=True)
 
-    types_out = [
-        t for t in (types or ["video", "book", "qa", "web", "knowledge"]) if isinstance(t, str)
-    ]
+    types_out = list(types or ["video", "book", "qa", "web", "knowledge"])
 
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -199,6 +201,6 @@ def build_ingestion_report(
     }
 
     out_path = processing / "ingestion_report.json"
-    out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    _ = out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info("report: wrote %s", out_path)
     return out_path

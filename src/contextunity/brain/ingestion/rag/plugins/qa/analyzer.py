@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_str
+from contextunity.core.types import JsonDict, is_json_dict
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ...utils.llm import llm_generate
 
@@ -16,27 +16,38 @@ logger = get_contextunit_logger(__name__)
 class QuestionAnalyzer:
     """Handles question extraction, validation, and analysis."""
 
-    def __init__(self, core_cfg: Config) -> None:
-        self.core_cfg = core_cfg
+    def __init__(self, core_cfg: BrainConfig) -> None:
+        """Initialize a new instance of QuestionAnalyzer.
+
+        Args:
+            core_cfg (BrainConfig): The core cfg parameter.
+        """
+        self.core_cfg: BrainConfig = core_cfg
 
     def _validate_question_with_llm(self, question_text: str) -> bool:
-        """Use LLM to validate if text is a proper question."""
+        """Use LLM to validate if text is a proper question.
+
+        Args:
+            question_text (str): The question text parameter.
+
+        Returns:
+            bool: True if the operation was successful, False otherwise.
+        """
         try:
             # Import here to avoid circular imports
-            from ..core.prompts import qa_validate_question_prompt
+            from ...core.prompts import qa_validate_question_prompt
 
-            prompt = qa_validate_question_prompt()
+            prompt = qa_validate_question_prompt(raw_text=question_text, answer_context="")
             response = llm_generate(
                 core_cfg=self.core_cfg,
                 prompt=prompt,
-                content=question_text,
                 model=self.core_cfg.models.ingestion.preprocess.model,
                 max_tokens=100,
                 temperature=0.0,
             )
 
             # Simple yes/no check
-            response_lower = response.lower().strip()
+            response_lower = str(response).lower().strip()
             return "yes" in response_lower or "true" in response_lower
 
         except Exception as e:
@@ -45,7 +56,14 @@ class QuestionAnalyzer:
             return self._is_question_like(question_text)
 
     def _is_question_like(self, text: str) -> bool:
-        """Simple heuristic to check if text looks like a question."""
+        """Simple heuristic to check if text looks like a question.
+
+        Args:
+            text (str): The text parameter.
+
+        Returns:
+            bool: True if the operation was successful, False otherwise.
+        """
         text = text.strip()
         if not text:
             return False
@@ -80,25 +98,30 @@ class QuestionAnalyzer:
         return first_word in question_words
 
     def _validate_answer_with_llm(self, question_text: str, answer_text: str) -> bool:
-        """Use LLM to validate if answer is valuable for the question."""
+        """Use LLM to validate if answer is valuable for the question.
+
+        Args:
+            question_text (str): The question text parameter.
+            answer_text (str): The answer text parameter.
+
+        Returns:
+            bool: True if the operation was successful, False otherwise.
+        """
         try:
             # Import here to avoid circular imports
-            from ..core.prompts import qa_validate_answer_prompt
+            from ...core.prompts import qa_validate_answer_prompt
 
-            prompt = qa_validate_answer_prompt()
-            content = f"Question: {question_text}\nAnswer: {answer_text}"
-
+            prompt = qa_validate_answer_prompt(answer_text=answer_text, topic=question_text)
             response = llm_generate(
                 core_cfg=self.core_cfg,
                 prompt=prompt,
-                content=content,
                 model=self.core_cfg.models.ingestion.preprocess.model,
                 max_tokens=100,
                 temperature=0.0,
             )
 
             # Simple yes/no check
-            response_lower = response.lower().strip()
+            response_lower = str(response).lower().strip()
             return "yes" in response_lower or "true" in response_lower
 
         except Exception as e:
@@ -106,25 +129,31 @@ class QuestionAnalyzer:
             # Default to keeping the answer
             return True
 
-    def _analyze_segments_batch(self, chunks: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
-        """Analyze conversation segments in batch using LLM."""
+    def analyze_segments_batch(self, chunks: list[JsonDict]) -> dict[int, dict[str, str]]:
+        """Analyze conversation segments in batch using LLM.
+
+        Args:
+            chunks (list[JsonDict]): The chunks parameter.
+
+        Returns:
+            dict[int, dict[str, str]]: A dictionary containing the results.
+        """
         try:
             # Import here to avoid circular imports
-            from ..core.prompts import qa_batch_analysis_prompt
+            from ...core.prompts import qa_batch_analysis_prompt
 
             # Prepare content for batch analysis
-            content_parts = []
+            content_parts: list[str] = []
             for i, chunk in enumerate(chunks):
-                if isinstance(chunk, dict) and "text" in chunk:
-                    content_parts.append(f"[{i}] {chunk['text']}")
+                if is_json_dict(chunk) and "text" in chunk:
+                    content_parts.append(f"[{i}] {as_str(chunk.get('text'))}")
 
             content = "\n".join(content_parts)
 
-            prompt = qa_batch_analysis_prompt()
+            prompt = qa_batch_analysis_prompt(items_text=content)
             response = llm_generate(
                 core_cfg=self.core_cfg,
                 prompt=prompt,
-                content=content,
                 model=self.core_cfg.models.ingestion.preprocess.model,
                 max_tokens=2048,
                 temperature=0.0,
@@ -137,26 +166,42 @@ class QuestionAnalyzer:
             return self._fallback_analysis(chunks)
 
     def _parse_batch_analysis(
-        self, response: str, chunks: list[dict[str, Any]]
+        self, _response: object, chunks: list[JsonDict]
     ) -> dict[int, dict[str, str]]:
-        """Parse batch analysis response."""
+        """Parse batch analysis response.
+
+        Args:
+            _response (object): The response payload containing results.
+            chunks (list[JsonDict]): The chunks parameter.
+
+        Returns:
+            dict[int, dict[str, str]]: A dictionary containing the results.
+        """
         results: dict[int, dict[str, str]] = {}
 
         # Simple parsing - can be enhanced
         for i, chunk in enumerate(chunks):
+            text = as_str(chunk.get("text"))
             results[i] = {
-                "question": chunk.get("text", "")[:100],  # Placeholder
-                "answer": chunk.get("text", "")[100:],  # Placeholder
+                "question": text[:100],  # Placeholder
+                "answer": text[100:],  # Placeholder
             }
 
         return results
 
-    def _fallback_analysis(self, chunks: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
-        """Fallback analysis when LLM fails."""
+    def _fallback_analysis(self, chunks: list[JsonDict]) -> dict[int, dict[str, str]]:
+        """Fallback analysis when LLM fails.
+
+        Args:
+            chunks (list[JsonDict]): The chunks parameter.
+
+        Returns:
+            dict[int, dict[str, str]]: A dictionary containing the results.
+        """
         results: dict[int, dict[str, str]] = {}
 
         for i, chunk in enumerate(chunks):
-            text = chunk.get("text", "")
+            text = as_str(chunk.get("text"))
             # Simple split: first sentence as question, rest as answer
             sentences = text.split(".", 1)
             if len(sentences) >= 2:

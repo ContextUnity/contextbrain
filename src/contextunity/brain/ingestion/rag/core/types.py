@@ -5,9 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, NotRequired, TypedDict
 
-# StructDataValue is now defined in contextunity.brain.core.types
-# Import it from there to avoid circular dependencies
-from contextunity.brain.core.types import StructDataValue
+from contextunity.core.types import JsonDict
 
 # ---- Ingestion Struct Data (snake_case) -------------------------------------
 # These are the "struct_data" payloads stored in ShadowRecord and exported.
@@ -16,13 +14,16 @@ SourceType = str
 
 
 class BaseStructData(TypedDict, total=False):
-    source_type: SourceType
+    """Represent and manage Base Struct Data logic within the system."""
+
     title: str
     citation_label: str
     keywords: list[str]
 
 
 class BookStructData(BaseStructData, total=False):
+    """Represent and manage Book Struct Data logic within the system."""
+
     source_type: NotRequired[Literal["book"]]
     book_title: str
     chapter: str
@@ -33,6 +34,8 @@ class BookStructData(BaseStructData, total=False):
 
 
 class VideoStructData(BaseStructData, total=False):
+    """Represent and manage Video Struct Data logic within the system."""
+
     source_type: NotRequired[Literal["video"]]
     video_id: str
     video_url: str
@@ -44,6 +47,8 @@ class VideoStructData(BaseStructData, total=False):
 
 
 class QAStructData(BaseStructData, total=False):
+    """Represent and manage Q A Struct Data logic within the system."""
+
     source_type: NotRequired[Literal["qa"]]
     session_title: str
     source_title: str
@@ -54,6 +59,8 @@ class QAStructData(BaseStructData, total=False):
 
 
 class WebStructData(BaseStructData, total=False):
+    """Represent and manage Web Struct Data logic within the system."""
+
     source_type: NotRequired[Literal["web"]]
     title: str
     url: str
@@ -62,6 +69,8 @@ class WebStructData(BaseStructData, total=False):
 
 
 class KnowledgeStructData(BaseStructData, total=False):
+    """Represent and manage Knowledge Struct Data logic within the system."""
+
     source_type: NotRequired[Literal["knowledge"]]
     filename: str
     description: str
@@ -95,6 +104,11 @@ class IngestionMetadata(TypedDict, total=False):
 
     # Generic
     summary: str
+    source_title: str
+    session_host: str
+    sentences: list[str | dict[str, object]]
+    interactions: list[dict[str, object]]
+    crawl_seed_url: str
     keywords: list[str]
     keyphrases: list[dict[str, object]]
     keyphrase_texts: list[str]
@@ -120,7 +134,7 @@ class RawData:
 
     content: str
     source_type: str  # "video", "book", "qa", "web", "knowledge"
-    metadata: IngestionMetadata = field(default_factory=dict)
+    metadata: JsonDict = field(default_factory=dict)
 
 
 @dataclass
@@ -140,7 +154,7 @@ class ShadowRecord:
 
     id: str
     input_text: str  # The "Shadow" text (Content + AI Keywords + Graph Context)
-    struct_data: dict[str, StructDataValue]  # Must match frontend citation schema
+    struct_data: dict[str, object]  # Must match frontend citation schema
     citation_label: str | None = None
     title: str | None = None
     source_type: str | None = None

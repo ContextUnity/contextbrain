@@ -1,57 +1,51 @@
+"""Keyword extraction for Knowledge Base enrichment."""
+
+from __future__ import annotations
+
 import re
-from typing import List, Optional, Set
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_json_dict, as_json_dict_map, as_str_list
+from contextunity.core.types import JsonDict
 
 logger = get_contextunit_logger(__name__)
 
 
 class KeywordExtractor:
-    """
-    Modular keyword extraction for Knowledge Base enrichment.
-    """
+    """Modular keyword extraction for Knowledge Base enrichment."""
 
-    def __init__(self, taxonomy: Optional[dict] = None):
+    taxonomy: JsonDict | None
+    _compiled_keywords: set[str] | None
+
+    def __init__(self, taxonomy: JsonDict | None = None) -> None:
         self.taxonomy = taxonomy
-        self._compiled_keywords: Optional[Set[str]] = None
+        self._compiled_keywords = None
         if taxonomy:
             self._compile_taxonomy()
 
-    def _compile_taxonomy(self):
-        """Pre-compile taxonomy keywords for faster matching."""
-        keywords = set()
-        cats = self.taxonomy.get("categories", {})
-        if isinstance(cats, dict):
-            for cat_data in cats.values():
-                if isinstance(cat_data, dict):
-                    kws = cat_data.get("keywords", [])
-                    keywords.update([str(k).lower() for k in kws])
+    def _compile_taxonomy(self) -> None:
+        keywords: set[str] = set()
+        root = as_json_dict(self.taxonomy)
+        categories = as_json_dict_map(root.get("categories"))
+        for cat_data in categories.values():
+            kws = as_str_list(cat_data.get("keywords"))
+            keywords.update(kw.lower() for kw in kws)
         self._compiled_keywords = keywords
 
-    def extract(self, text: str, limit: int = 10) -> List[str]:
-        """
-        Extract keywords from text.
-        If taxonomy is provided, it performs matching first.
-        """
+    def extract(self, text: str, limit: int = 10) -> list[str]:
         text_lc = text.lower()
-        found = []
+        found: list[str] = []
 
-        # 1. Taxonomy Match (Precision)
         if self._compiled_keywords:
             for kw in self._compiled_keywords:
-                if kw in text_lc:
-                    # Simple boundary check
-                    if re.search(rf"\b{re.escape(kw)}\b", text_lc):
-                        found.append(kw)
+                if kw in text_lc and re.search(rf"\b{re.escape(kw)}\b", text_lc):
+                    found.append(kw)
 
-        # 2. Simple Heuristics (Recall)
-        # In a real scenario, this would use Rake, TextRank, or LLM
         if len(found) < limit:
-            # Fallback to meaningful words (naive)
-            words = re.findall(r"\b\w{5,}\b", text_lc)
-            for w in words:
-                if w not in found:
-                    found.append(w)
+            words = as_str_list(re.findall(r"\b\w{5,}\b", text_lc))
+            for word in words:
+                if word not in found:
+                    found.append(word)
                 if len(found) >= limit:
                     break
 

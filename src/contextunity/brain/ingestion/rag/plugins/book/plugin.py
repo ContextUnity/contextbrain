@@ -1,5 +1,4 @@
 """Book ingestion plugin using PyMuPDF TOC extraction for accurate chapter detection.
-
 Uses PyMuPDF's built-in table of contents (TOC) extraction to identify chapters,
 then converts PDF content to markdown with pymupdf4llm. Falls back to markdown
 header parsing if TOC is not available.
@@ -9,32 +8,22 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, TypedDict
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.narrowing import (
+    as_float,
+    as_int,
+    as_str,
+    as_str_list,
+    tuple_item_at,
+    tuple_len,
+)
+from contextunity.core.types import JsonDict
+from typing_extensions import override
 
-# Try to import and activate pymupdf_layout BEFORE importing pymupdf4llm
-# This suppresses the warning and improves PDF parsing quality
-try:
-    import pymupdf.layout
-
-    pymupdf.layout.activate()
-except ImportError:
-    # pymupdf_layout is optional; continue without it
-    pass
-
-# pymupdf4llm will be imported inside functions when needed
-
-# PyMuPDF (fitz) for TOC extraction - pymupdf4llm depends on it
-try:
-    import fitz  # PyMuPDF
-except ImportError:
-    try:
-        import pymupdf as fitz  # Alternative import name
-    except ImportError:
-        fitz = None  # Fallback to markdown parsing if not available
-
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ...core.plugins import IngestionPlugin
 from ...core.prompts import book_batch_analysis_prompt
@@ -42,7 +31,6 @@ from ...core.registry import register_plugin
 from ...core.types import (
     BookStructData,
     GraphEnrichmentResult,
-    IngestionMetadata,
     RawData,
     ShadowRecord,
 )
@@ -54,10 +42,49 @@ from ...core.utils import (
     normalize_clean_text,
     parse_tsv_line,
 )
+from ...protocols import (
+    PdfDocument,
+    fitz_get_toc,
+    fitz_is_available,
+    fitz_open,
+    pymupdf4llm_to_markdown,
+    try_activate_pymupdf_layout,
+)
 from ...settings import RagIngestionConfig
 from ...utils.records import generate_id
 
+try_activate_pymupdf_layout()
+
 logger = get_contextunit_logger(__name__)
+
+
+class _ChapterDraft(TypedDict):
+    title: str
+    content: str
+    start_page: int
+
+
+def _chapter_draft_to_json(chapter: _ChapterDraft) -> JsonDict:
+    return {
+        "title": chapter["title"],
+        "content": chapter["content"],
+        "start_page": chapter["start_page"],
+    }
+
+
+def _pdf_block_text(block: object) -> str:
+    if tuple_len(block) <= 4:
+        return ""
+    return as_str(tuple_item_at(block, 4))
+
+
+def _pdf_block_sort_key(block: object) -> tuple[float, float]:
+    if tuple_len(block) < 2:
+        return (0.0, 0.0)
+    y_val = as_float(tuple_item_at(block, 1, default=0.0))
+    x_val = as_float(tuple_item_at(block, 0, default=0.0))
+    return (y_val, x_val)
+
 
 # NOTE: pymupdf4llm does NOT reliably emit <page: N> markers. In practice it emits
 # separators like: "--- end of page=12 ---". Some parts of the pipeline still
@@ -150,11 +177,25 @@ class BookPlugin(IngestionPlugin):
     """
 
     @property
+    @override
     def source_type(self) -> str:
+        """Source type.
+
+        Returns:
+            str: The resulting string value.
+        """
         return "book"
 
+    @override
     def load(self, assets_path: str) -> list[RawData]:
-        """Load PDF files using PyMuPDF TOC for chapter extraction and pymupdf4llm for content."""
+        """Load PDF files using PyMuPDF TOC for chapter extraction and pymupdf4llm for content.
+
+        Args:
+            assets_path (str): The assets path parameter.
+
+        Returns:
+            list[RawData]: A list of list[RawData].
+        """
         source_dir = Path(assets_path)
         if not source_dir.exists():
             logger.warning("Book source directory does not exist: %s", assets_path)
@@ -173,22 +214,22 @@ class BookPlugin(IngestionPlugin):
                 book_title = book_title_raw.title()
 
                 # Extract chapters using PyMuPDF TOC (more accurate than markdown headers)
-                if fitz is not None:
+                if fitz_is_available():
                     chapters = self._extract_chapters_from_toc(str(pdf_file), book_title)
                 else:
                     logger.warning("PyMuPDF (fitz) not available, falling back to markdown parsing")
                     chapters = self._extract_chapters_from_markdown(str(pdf_file), book_title)
 
                 for chapter_info in chapters:
-                    metadata: IngestionMetadata = {
+                    metadata: JsonDict = {
                         "book_title": book_title,
-                        "chapter": chapter_info.get("title", ""),
-                        "page_number": chapter_info.get("start_page", 1),
+                        "chapter": as_str(chapter_info.get("title")),
+                        "page_number": as_int(chapter_info.get("start_page"), default=1),
                     }
 
                     raw_data.append(
                         RawData(
-                            content=chapter_info["content"],
+                            content=as_str(chapter_info.get("content")),
                             source_type="book",
                             metadata=metadata,
                         )
@@ -200,7 +241,7 @@ class BookPlugin(IngestionPlugin):
 
         return raw_data
 
-    def _extract_chapters_from_toc(self, pdf_path: str, book_title: str) -> list[dict[str, Any]]:
+    def _extract_chapters_from_toc(self, pdf_path: str, book_title: str) -> list[JsonDict]:
         """Extract chapters using PyMuPDF's table of contents (TOC) for accurate structure.
 
         This method:
@@ -216,12 +257,13 @@ class BookPlugin(IngestionPlugin):
         Returns:
             List of chapter dicts with title, content, and start_page
         """
-        chapters: list[dict[str, Any]] = []
+        chapters: list[JsonDict] = []
 
         # Open PDF to extract TOC
-        doc = fitz.open(pdf_path)
-        toc = doc.get_toc()
-        doc.close()
+        if not fitz_is_available():
+            logger.warning("PyMuPDF not available for TOC extraction")
+            return self._extract_chapters_from_markdown(pdf_path, book_title)
+        toc = fitz_get_toc(pdf_path)
 
         if not toc:
             logger.warning("No TOC found in PDF %s, falling back to markdown parsing", pdf_path)
@@ -246,21 +288,21 @@ class BookPlugin(IngestionPlugin):
         # Log all chapter titles for verification
         if chapter_toc:
             logger.info("Extracted chapters:")
-            for i, (level, title, page) in enumerate(chapter_toc, 1):
-                logger.info("  %d. [Level %d] %s (page %d)", i, level, title, page)
+            for i, (_level, title, page) in enumerate(chapter_toc, 1):
+                logger.info("  %d. %s (page %d)", i, title, page)
 
         # Group TOC entries by page to merge subchapters
         # Format: "Chapter Title [Subchapter Title]" when both exist on same page
         grouped_toc = self._group_toc_by_page(chapter_toc)
 
         # Extract content directly from PDF pages (robust, does not depend on markers)
-        if fitz is None:
+        if not fitz_is_available():
             logger.warning(
                 "PyMuPDF (fitz) not available for page extraction; falling back to markdown parsing"
             )
             return self._extract_chapters_from_markdown(pdf_path, book_title)
 
-        doc2 = fitz.open(pdf_path)
+        doc2 = fitz_open(pdf_path)
         try:
             for i, (merged_title, start_page) in enumerate(grouped_toc):
                 # Determine end page (next chapter or end of book)
@@ -382,7 +424,9 @@ class BookPlugin(IngestionPlugin):
                 # Sort by level (lower level = main chapter)
                 entries_sorted = sorted(entries, key=lambda x: x[0])
                 main_chapter = entries_sorted[0][1]  # Lowest level = main
-                subchapters = [title for level, title in entries_sorted[1:]]  # Higher levels = subs
+                subchapters = [
+                    title for _level, title in entries_sorted[1:]
+                ]  # Higher levels = subs
 
                 if subchapters:
                     # Format: "Main Chapter [Subchapter1] [Subchapter2]"
@@ -397,16 +441,18 @@ class BookPlugin(IngestionPlugin):
 
     def _extract_pdf_text_between_pages(
         self,
-        doc: Any,
+        doc: PdfDocument,
         *,
         start_page: int,
         end_page: int | None,
     ) -> str:
         """Extract paragraph-ish text from a PDF document between TOC page boundaries.
 
-        Notes:
-        - TOC page numbers are 1-based.
-        - `fitz` pages are 0-based indices.
+        Args:
+            doc (Any): The doc parameter.
+
+        Returns:
+            str: The resulting string value.
         """
         page_count = getattr(doc, "page_count", 0) or 0
         if page_count <= 0:
@@ -424,9 +470,9 @@ class BookPlugin(IngestionPlugin):
                 # Each block is (x0, y0, x1, y1, text, block_no, block_type)
                 blocks = page.get_text("blocks") or []
                 block_texts: list[str] = []
-                for b in sorted(blocks, key=lambda x: (x[1], x[0])):  # top-to-bottom, left-to-right
-                    txt = b[4] if len(b) > 4 else ""
-                    if not isinstance(txt, str):
+                for block_obj in sorted(blocks, key=_pdf_block_sort_key):
+                    txt = _pdf_block_text(block_obj)
+                    if not txt:
                         continue
                     t = txt.strip()
                     if not t:
@@ -440,7 +486,7 @@ class BookPlugin(IngestionPlugin):
                 txt = "\n\n".join(block_texts)
             except Exception:
                 txt = ""
-            if isinstance(txt, str) and txt.strip():
+            if txt.strip():
                 # Inject an explicit page marker BEFORE EACH paragraph block so page_end can be
                 # computed even when chunks start mid-page. Markers are removed from final chunk text.
                 page_num = page_index + 1  # back to 1-based
@@ -455,10 +501,18 @@ class BookPlugin(IngestionPlugin):
         return content
 
     def _extract_text_basic(self, pdf_path: str) -> str:
-        if fitz is None:
+        """extract text basic.
+
+        Args:
+            pdf_path (str): The pdf path parameter.
+
+        Returns:
+            str: The resulting string value.
+        """
+        if not fitz_is_available():
             return ""
         try:
-            doc = fitz.open(pdf_path)
+            doc = fitz_open(pdf_path)
             try:
                 return self._extract_pdf_text_between_pages(doc, start_page=1, end_page=None)
             finally:
@@ -467,27 +521,32 @@ class BookPlugin(IngestionPlugin):
             logger.error("Basic PDF extraction failed for %s: %s", pdf_path, e)
             return ""
 
-    def _extract_chapters_from_markdown(
-        self, pdf_path: str, book_title: str
-    ) -> list[dict[str, Any]]:
+    def _extract_chapters_from_markdown(self, pdf_path: str, _book_title: str) -> list[JsonDict]:
         """Fallback: Extract chapters from markdown headers (original method).
 
-        Used when TOC is not available or empty.
+        Args:
+            pdf_path (str): The pdf path parameter.
+            book_title (str): The book title parameter.
+
+        Returns:
+            list[JsonDict]: A list of list[JsonDict].
+
+        Raises:
+            RuntimeError: If a validation error occurs.
         """
         try:
-            import pymupdf4llm
+            markdown_content = pymupdf4llm_to_markdown(
+                pdf_path,
+                write_images=False,
+                page_separators=True,  # Adds <page: N> markers
+            )
         except ImportError as e:
-            raise RuntimeError(
-                "pymupdf4llm is required for book markdown extraction. "
-                "Install it or provide a working PyMuPDF pipeline."
+            raise ConfigurationError(
+                (
+                    "pymupdf4llm is required for book markdown extraction. "
+                    "Install it or provide a working PyMuPDF pipeline."
+                )
             ) from e
-
-        # Convert PDF to Markdown using pymupdf4llm with layout analysis
-        markdown_content = pymupdf4llm.to_markdown(
-            pdf_path,
-            write_images=False,
-            page_separators=True,  # Adds <page: N> markers
-        )
 
         # Clean markdown: normalize headers, filter testimonials, normalize unicode
         from ...core.utils import (
@@ -505,7 +564,7 @@ class BookPlugin(IngestionPlugin):
 
         return chapters
 
-    def _extract_chapters_with_pages(self, markdown: str) -> list[dict[str, Any]]:
+    def _extract_chapters_with_pages(self, markdown: str) -> list[JsonDict]:
         """Extract chapters from markdown content, splitting by highest-level headers.
 
         Also parses page markers (<page: N>) to track page numbers accurately.
@@ -516,9 +575,9 @@ class BookPlugin(IngestionPlugin):
         Returns:
             List of chapter dicts with title, content, and start_page
         """
-        chapters = []
+        chapters: list[JsonDict] = []
         lines = markdown.split("\n")
-        current_chapter: dict[str, Any] = {
+        current_chapter: _ChapterDraft = {
             "title": "Introduction",
             "content": "",
             "start_page": 1,
@@ -568,7 +627,7 @@ class BookPlugin(IngestionPlugin):
                 if header_level == highest_header_level:
                     # Save previous chapter
                     if current_chapter["content"].strip():
-                        chapters.append(current_chapter.copy())
+                        chapters.append(_chapter_draft_to_json(current_chapter))
 
                     # Start new chapter - strip markdown from title
                     from ...core.utils import strip_markdown_from_text
@@ -588,7 +647,7 @@ class BookPlugin(IngestionPlugin):
 
         # Add last chapter
         if current_chapter["content"].strip():
-            chapters.append(current_chapter)
+            chapters.append(_chapter_draft_to_json(current_chapter))
 
         logger.info("Extracted %d chapters from markdown", len(chapters))
         return chapters
@@ -629,16 +688,31 @@ class BookPlugin(IngestionPlugin):
 
         return False
 
+    @override
     def transform(
         self,
         data: list[RawData],
         enrichment_func: Callable[[str], GraphEnrichmentResult],
         taxonomy_path: Path | None = None,
         config: RagIngestionConfig | None = None,
-        core_cfg: Config | None = None,
+        core_cfg: BrainConfig | None = None,
         **kwargs: object,
     ) -> list[ShadowRecord]:
-        """Transform book data by chunking within chapters (by paragraphs, avoid mid-sentence breaks)."""
+        """Transform book data by chunking within chapters (by paragraphs, avoid mid-sentence breaks).
+
+        Args:
+            data (list[RawData]): The raw data dictionary or object.
+            enrichment_func (Callable[[str], GraphEnrichmentResult]): The enrichment func parameter.
+            taxonomy_path (Path | None): The taxonomy path parameter.
+            config (RagIngestionConfig | None): The configuration settings dict or object.
+            core_cfg (BrainConfig | None): The core cfg parameter.
+
+        Returns:
+            list[ShadowRecord]: A list of list[ShadowRecord].
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         _ = enrichment_func, kwargs
         # Load taxonomy for keyword extraction
         taxonomy = load_taxonomy_safe(taxonomy_path) if taxonomy_path else None
@@ -650,24 +724,26 @@ class BookPlugin(IngestionPlugin):
             config = load_config()
         llm_topic_extraction_enabled = config.book.llm_topic_extraction_enabled
         if llm_topic_extraction_enabled and core_cfg is None:
-            raise ValueError(
+            raise ConfigurationError(
                 "BookPlugin.transform requires core_cfg when llm_topic_extraction_enabled=true"
             )
 
         # Get taxonomy categories for LLM prompt
-        taxonomy_categories = None
+        taxonomy_categories: list[str] | None = None
         if taxonomy and isinstance(taxonomy.get("categories"), dict):
-            taxonomy_categories = [
-                cat_name.replace("_", " ").title()
-                for cat_name in taxonomy.get("categories", {}).keys()
-            ]
+            cats_raw = taxonomy.get("categories")
+            if isinstance(cats_raw, dict):
+                taxonomy_categories = [
+                    str(cat_name).replace("_", " ").title() for cat_name in cats_raw
+                ]
 
         shadow_records: list[ShadowRecord] = []
 
         for raw in data:
-            book_title = raw.metadata.get("book_title", "Book")
-            chapter = raw.metadata.get("chapter", "")
-            page_number = raw.metadata.get("page_number", 1)
+            book_title = str(raw.metadata.get("book_title", "Book"))
+            chapter = str(raw.metadata.get("chapter", ""))
+            page_number_raw = raw.metadata.get("page_number", 1)
+            page_number = int(page_number_raw) if isinstance(page_number_raw, (int, float)) else 1
 
             # Clean content before processing but KEEP page markers so we can compute page_end.
             cleaned_content = clean_book_content(raw.content, keep_page_markers=True)
@@ -695,10 +771,10 @@ class BookPlugin(IngestionPlugin):
                 )
 
             for chunk_idx, chunk_info in enumerate(chunks):
-                chunk_text = chunk_info["text"]
-                chunk_start_page = chunk_info["start_page"]
-                chunk_end_page = chunk_info.get(
-                    "end_page", chunk_start_page
+                chunk_text = as_str(chunk_info.get("text"))
+                chunk_start_page = as_int(chunk_info.get("start_page"), default=1)
+                chunk_end_page = as_int(
+                    chunk_info.get("end_page"), default=chunk_start_page
                 )  # Fallback to start if not set
 
                 # Clean chunk text again to catch any missed artifacts (drop page markers here).
@@ -706,7 +782,7 @@ class BookPlugin(IngestionPlugin):
 
                 # Get topic from LLM analysis if available
                 topic_info = chunk_topics.get(chunk_idx, {})
-                topic = topic_info.get("topic", "")
+                topic = as_str(topic_info.get("topic"))
 
                 # Enrichment (graph + taxonomy)
                 graph_keywords, summary, parent_categories = get_graph_enrichment(
@@ -717,10 +793,8 @@ class BookPlugin(IngestionPlugin):
                 taxonomy_keywords = self._extract_taxonomy_terms(chunk_text, taxonomy)
 
                 # Combine metadata + graph + taxonomy keywords, deduplicated
-                initial_keywords = raw.metadata.get("keywords", [])
-                if not isinstance(initial_keywords, list):
-                    initial_keywords = []
-                keywords = list(
+                initial_keywords: list[str] = as_str_list(raw.metadata.get("keywords", []))
+                keywords: list[str] = list(
                     dict.fromkeys([*initial_keywords, *graph_keywords, *taxonomy_keywords])
                 )[:10]
 
@@ -759,7 +833,7 @@ class BookPlugin(IngestionPlugin):
                     ShadowRecord(
                         id=record_id,
                         input_text=input_text,
-                        struct_data=struct_data,
+                        struct_data=dict(struct_data) if struct_data else {},
                         title=f"{book_title} - {chapter}",
                         source_type="book",
                     )
@@ -787,7 +861,7 @@ class BookPlugin(IngestionPlugin):
         Returns:
             Formatted input_text string with explicit Categories: and Additional Knowledge: headers
         """
-        parts = []
+        parts: list[str] = []
 
         # Add topic if available (QA-style)
         if topic:
@@ -797,7 +871,7 @@ class BookPlugin(IngestionPlugin):
 
         # Add taxonomy categories from graph enrichment (QA-style)
         if parent_categories:
-            cats = [c for c in parent_categories if isinstance(c, str) and c.strip()]
+            cats = [c for c in parent_categories if c.strip()]
             if cats:
                 cat_str = ", ".join(cats[:5])
                 parts.append(f"Categories: {cat_str}")
@@ -819,33 +893,37 @@ class BookPlugin(IngestionPlugin):
                 )
 
         # Add summary if available (graph relations)
-        if isinstance(summary, str) and summary.strip():
+        if summary.strip():
             parts.append(f"Additional Knowledge: {summary.strip()}")
 
         return "\n".join(parts)
 
     def _analyze_chunks_batch(
         self,
-        chunks: list[dict[str, Any]],
+        chunks: list[JsonDict],
         taxonomy_categories: list[str] | None = None,
         *,
-        core_cfg: Config | None,
+        core_cfg: BrainConfig | None,
     ) -> dict[int, dict[str, str]]:
         """Batch LLM processing to identify topic and category for each chunk.
 
         Args:
-            chunks: List of chunk dictionaries with "text" key
-            taxonomy_categories: Optional list of taxonomy category names
+            chunks (list[JsonDict]): The chunks parameter.
+            taxonomy_categories (list[str] | None): The taxonomy categories parameter.
 
-        Returns dict mapping chunk index to analysis results.
+        Returns:
+            dict[int, dict[str, str]]: A dictionary containing the results.
+
+        Raises:
+            ValueError: If parameter values are invalid.
         """
         if not chunks:
             return {}
 
         # Prepare batch prompt
-        batch_items = []
+        batch_items: list[JsonDict] = []
         for i, chunk in enumerate(chunks):
-            chunk_text = chunk.get("text", "")
+            chunk_text = as_str(chunk.get("text"))
             # Truncate to avoid token limits (keep first 2000 chars)
             truncated = chunk_text[:2000] + ("..." if len(chunk_text) > 2000 else "")
             batch_items.append(
@@ -856,7 +934,7 @@ class BookPlugin(IngestionPlugin):
             )
 
         if core_cfg is None:
-            raise ValueError("BookPlugin._analyze_chunks_batch requires core_cfg")
+            raise ConfigurationError("BookPlugin._analyze_chunks_batch requires core_cfg")
 
         try:
             # Build batch prompt
@@ -913,17 +991,21 @@ class BookPlugin(IngestionPlugin):
     def _extract_taxonomy_terms(
         self,
         content: str,
-        taxonomy: dict[str, Any] | None,
+        taxonomy: JsonDict | None,
     ) -> list[str]:
         """Extract matching taxonomy terms from content.
 
-        Simple case-insensitive keyword matching.
-        Returns matched terms sorted by frequency.
+        Args:
+            content (str): The content parameter.
+            taxonomy (JsonDict | None): The taxonomy parameter.
+
+        Returns:
+            list[str]: A list of list[str].
         """
         if not taxonomy:
             return []
 
-        all_keywords = taxonomy.get("all_keywords", [])
+        all_keywords = as_str_list(taxonomy.get("all_keywords"))
         if not all_keywords:
             return []
 
@@ -946,7 +1028,7 @@ class BookPlugin(IngestionPlugin):
         target_size: int = 1000,
         min_size: int = 400,
         base_page: int = 1,
-    ) -> list[dict[str, Any]]:
+    ) -> list[JsonDict]:
         """Chunk paragraphs together, ensuring no mid-sentence breaks.
 
         Since we chunk by paragraphs (which are complete units), we naturally avoid
@@ -963,7 +1045,7 @@ class BookPlugin(IngestionPlugin):
         Returns:
             List of chunk dicts with text, start_page, and end_page
         """
-        chunks = []
+        chunks: list[JsonDict] = []
         current_chunk_parts: list[str] = []
         current_size = 0
         current_start_page = base_page

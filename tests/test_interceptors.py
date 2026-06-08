@@ -49,8 +49,10 @@ class TestShouldSkip:
 class TestRpcPermissionMap:
     def test_knowledge_rpcs_mapped(self):
         assert "Search" in RPC_PERMISSION_MAP
-        assert "IngestDocument" in RPC_PERMISSION_MAP
         assert "GraphSearch" in RPC_PERMISSION_MAP
+        assert "CreateKGRelation" in RPC_PERMISSION_MAP
+        assert "Upsert" in RPC_PERMISSION_MAP
+        assert "QueryMemory" in RPC_PERMISSION_MAP
         assert "GetTaxonomy" in RPC_PERMISSION_MAP
 
     def test_memory_rpcs_mapped(self):
@@ -58,6 +60,8 @@ class TestRpcPermissionMap:
         assert "GetRecentEpisodes" in RPC_PERMISSION_MAP
         assert "UpsertFact" in RPC_PERMISSION_MAP
         assert "GetUserFacts" in RPC_PERMISSION_MAP
+        assert "WriteBlackboard" in RPC_PERMISSION_MAP
+        assert "ReadBlackboard" in RPC_PERMISSION_MAP
 
     def test_trace_rpcs_mapped(self):
         assert "LogTrace" in RPC_PERMISSION_MAP
@@ -68,8 +72,10 @@ class TestRpcPermissionMap:
             "Search",
             "GraphSearch",
             "GetTaxonomy",
+            "QueryMemory",
             "GetRecentEpisodes",
             "GetUserFacts",
+            "ReadBlackboard",
             "GetTraces",
         ]
         for rpc in read_rpcs:
@@ -77,10 +83,28 @@ class TestRpcPermissionMap:
             assert ":read" in perm, f"{rpc} should require a :read permission, got {perm}"
 
     def test_write_ops_require_write_permissions(self):
-        write_rpcs = ["IngestDocument", "AddEpisode", "UpsertFact", "LogTrace"]
+        write_rpcs = [
+            "CreateKGRelation",
+            "Upsert",
+            "AddEpisode",
+            "UpsertFact",
+            "WriteBlackboard",
+            "LogTrace",
+        ]
         for rpc in write_rpcs:
             perm = RPC_PERMISSION_MAP[rpc]
             assert ":write" in perm, f"{rpc} should require a :write permission, got {perm}"
+
+    def test_map_matches_proto_surface(self):
+        from contextunity.core import brain_pb2_grpc
+
+        servicer = brain_pb2_grpc.BrainServiceServicer()
+        expected = {
+            name
+            for name in dir(servicer)
+            if not name.startswith("_") and name[:1].isupper() and callable(getattr(servicer, name))
+        }
+        assert set(RPC_PERMISSION_MAP) == expected
 
 
 # ── check_permission ──
@@ -125,11 +149,17 @@ class TestCheckPermission:
         if result is not None:
             assert "tenant access denied" in result
 
-    def test_empty_tenants_means_admin(self):
-        """Empty allowed_tenants = admin (can access all tenants)."""
+    def test_empty_tenants_denies_access(self):
+        """Empty allowed_tenants grants no tenant access unless admin:all."""
         token = self._make_token(("brain:read",), ())
         result = check_permission(token, "brain:read", tenant_id="any-tenant")
-        assert result is None  # admin has access to all
+        assert result is not None
+        assert "tenant access denied" in result
+
+    def test_admin_all_bypasses_empty_tenants(self):
+        token = self._make_token(("admin:all",), ())
+        result = check_permission(token, "brain:read", tenant_id="any-tenant")
+        assert result is None
 
 
 # ── validate_tenant_access ──

@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-import json
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable, Protocol
 from urllib.parse import urldefrag, urljoin, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.narrowing import as_json_dict_list, as_str, as_str_list, str_list_as_json
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, is_json_dict
+from typing_extensions import override
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
+from contextunity.brain.core.exceptions import BrainValidationError
 from contextunity.brain.core.types import StructData
 
 from ..core.plugins import IngestionPlugin
@@ -20,7 +25,6 @@ from ..core.prompts import web_summary_prompt
 from ..core.registry import register_plugin
 from ..core.types import (
     GraphEnrichmentResult,
-    IngestionMetadata,
     RawData,
     ShadowRecord,
     WebStructData,
@@ -29,6 +33,16 @@ from ..core.utils import (
     get_graph_enrichment,
     load_taxonomy_safe,
     normalize_clean_text,
+)
+from ..protocols import (
+    bs4_parse,
+    soup_anchor_hrefs,
+    soup_decompose_tags,
+    soup_meta_content,
+    soup_plain_text,
+    soup_title_text,
+    trafilatura_extract,
+    urlopen_response,
 )
 from ..settings import RagIngestionConfig
 from ..utils.llm import llm_generate
@@ -39,6 +53,14 @@ logger = get_contextunit_logger(__name__)
 
 def _normalize_text(s: str) -> str:
     # Remove Unicode line/paragraph separators that break some editors/JSONL viewers.
+    """normalize text.
+
+    Args:
+        s (str): The s parameter.
+
+    Returns:
+        str: The resulting string value.
+    """
     return (s or "").replace("\u2028", "\n").replace("\u2029", "\n")
 
 
@@ -47,21 +69,25 @@ class WebPlugin(IngestionPlugin):
     """Plugin for processing web content."""
 
     @property
+    @override
     def source_type(self) -> str:
+        """Source type.
+
+        Returns:
+            str: The resulting string value.
+        """
         return "web"
 
+    @override
     def load(self, assets_path: str, config: RagIngestionConfig | None = None) -> list[RawData]:
         """Load web content from multiple supported formats.
 
-        Preferred format: assets/ingestion/source/web/url.toml
-        Structure: [{"url": "...", "tags": ["..."], "force_reindex": bool}]
+        Args:
+            assets_path (str): The assets path parameter.
+            config (RagIngestionConfig | None): The configuration settings dict or object.
 
-        Also supported: assets/ingestion/source/web/sources.json
-        Structure:
-        - [{"url": "...", "tags": ["..."], "force_reindex": false}]
-        - or {"sources": [...]}
-
-        Fallback: urls.txt (one URL per line) or *.url files
+        Returns:
+            list[RawData]: A list of list[RawData].
         """
         source_dir = Path(assets_path)
         if not source_dir.exists():
@@ -69,9 +95,9 @@ class WebPlugin(IngestionPlugin):
             return []
 
         raw_data: list[RawData] = []
-        sources: list[dict[str, Any]] = []
+        sources: list[JsonDict] = []
 
-        # Config to get web settings (prefer caller-provided config from preprocess stage)
+        # BrainConfig to get web settings (prefer caller-provided config from preprocess stage)
         if config is None:
             from ..config import load_config
 
@@ -94,18 +120,16 @@ class WebPlugin(IngestionPlugin):
                 try:
                     import tomllib
                 except ImportError:
-                    import tomli as tomllib  # type: ignore[import-not-found]
+                    import importlib
+
+                    tomllib = importlib.import_module("tomli")
 
                 with open(url_file, "rb") as f:
                     toml_data = tomllib.load(f)
-                    # TOML structure: sources = [{"url": "...", "tags": [...], "force_reindex": bool}]
-                    # Or: [[sources]] format
-                    if isinstance(toml_data, dict):
-                        sources = toml_data.get("sources", [])
-                    elif isinstance(toml_data, list):
-                        sources = toml_data
+                    if is_json_dict(toml_data):
+                        sources = as_json_dict_list(toml_data.get("sources", []))
                     else:
-                        sources = []
+                        sources = as_json_dict_list(toml_data)
                 logger.info("Loaded %d web sources from %s", len(sources), url_file)
             except Exception as e:
                 logger.warning("Failed to load %s: %s", url_file, e)
@@ -116,13 +140,11 @@ class WebPlugin(IngestionPlugin):
             sources_json = source_dir / "sources.json"
             if sources_json.exists():
                 try:
-                    payload = json.loads(sources_json.read_text(encoding="utf-8"))
-                    if isinstance(payload, dict):
-                        sources = payload.get("sources", []) or []
-                    elif isinstance(payload, list):
-                        sources = payload
+                    payload = json_loads(sources_json.read_text(encoding="utf-8"))
+                    if is_json_dict(payload):
+                        sources = as_json_dict_list(payload.get("sources", []))
                     else:
-                        sources = []
+                        sources = as_json_dict_list(payload)
                     logger.info("Loaded %d web sources from %s", len(sources), sources_json)
                 except Exception as e:
                     logger.warning("Failed to load %s: %s", sources_json, e)
@@ -143,14 +165,16 @@ class WebPlugin(IngestionPlugin):
             for url_f in source_dir.glob("*.url"):
                 url = url_f.read_text().strip()
                 if url:
-                    sources.append({"url": url, "tags": [], "force_reindex": False})
+                    _ = sources.append({"url": url, "tags": [], "force_reindex": False})
 
         # Filter out example/placeholder entries
-        sources = [s for s in sources if s.get("url") and "example.com" not in s.get("url", "")]
+        sources = [
+            s for s in sources if as_str(s.get("url")) and "example.com" not in as_str(s.get("url"))
+        ]
 
         for source in sources:
-            url = source.get("url", "")
-            tags = source.get("tags", [])
+            url = as_str(source.get("url"))
+            tags = as_str_list(source.get("tags"))
             # force_reindex = source.get("force_reindex", False)  # For future caching
 
             try:
@@ -197,11 +221,11 @@ class WebPlugin(IngestionPlugin):
                     normalized_content = normalize_ambiguous_unicode(content)
                     normalized_title = normalize_ambiguous_unicode(title or final_url)
 
-                    metadata: IngestionMetadata = {
+                    metadata: JsonDict = {
                         "url": normalized_final_url,  # Use normalized final URL (after redirects)
                         "title": normalized_title,
                         "summary": summary or "",
-                        "keywords": tags,  # Pass tags as initial keywords
+                        "keywords": str_list_as_json(tags),  # Pass tags as initial keywords
                         "crawl_seed_url": url,
                     }
 
@@ -233,8 +257,8 @@ class WebPlugin(IngestionPlugin):
     ) -> list[str]:
         """Bounded crawl starting from a seed URL, returning a list of page URLs.
 
-        - Same-domain only by default
-        - Skips obvious non-HTML assets by extension
+        Returns:
+            list[str]: A list of list[str].
         """
         seed = self._normalize_url(seed_url)
         if not seed:
@@ -246,6 +270,14 @@ class WebPlugin(IngestionPlugin):
             return [seed]
 
         def host_allowed(url: str) -> bool:
+            """Host allowed.
+
+            Args:
+                url (str): The remote endpoint URL.
+
+            Returns:
+                bool: True if the operation was successful, False otherwise.
+            """
             h = urlparse(url).netloc.lower()
             if not h:
                 return False
@@ -334,10 +366,11 @@ class WebPlugin(IngestionPlugin):
     def _normalize_url(url: str) -> str:
         """Normalize URL for deduplication.
 
-        - Removes fragments (#anchor)
-        - Removes trailing slashes (except for root)
-        - Converts to lowercase for scheme and host
-        - Removes default ports (80 for http, 443 for https)
+        Args:
+            url (str): The remote endpoint URL.
+
+        Returns:
+            str: The resulting string value.
         """
         url = (url or "").strip()
         if not url:
@@ -373,10 +406,18 @@ class WebPlugin(IngestionPlugin):
 
     @staticmethod
     def _should_skip_url(url: str, *, skip_url_substrings: list[str]) -> bool:
+        """should skip url.
+
+        Args:
+            url (str): The remote endpoint URL.
+
+        Returns:
+            bool: True if the operation was successful, False otherwise.
+        """
         path = urlparse(url).path.lower()
         url_l = url.lower()
         for s in skip_url_substrings:
-            if isinstance(s, str) and s and s.lower() in url_l:
+            if s and s.lower() in url_l:
                 return True
         # Skip obvious non-HTML assets
         for ext in (
@@ -400,26 +441,38 @@ class WebPlugin(IngestionPlugin):
 
     @staticmethod
     def _extract_links(html: str, *, base_url: str) -> list[str]:
-        try:
-            from bs4 import BeautifulSoup  # type: ignore[import-not-found]
+        """extract links.
 
-            soup = BeautifulSoup(html, "html.parser")
+        Args:
+            html (str): The html parameter.
+
+        Returns:
+            list[str]: A list of list[str].
+        """
+        try:
+            soup = bs4_parse(html)
             links: list[str] = []
-            for a in soup.find_all("a"):
-                href = a.get("href")
-                if not isinstance(href, str) or not href.strip():
-                    continue
+            for href in soup_anchor_hrefs(soup):
                 if href.startswith(("mailto:", "tel:", "javascript:")):
                     continue
-                abs_url = urljoin(base_url, href)
-                links.append(abs_url)
+                links.append(urljoin(base_url, href))
             return links
         except Exception:
             return []
 
+    class _WebUserAgentConfig(Protocol):
+        user_agent: str
+
     @staticmethod
-    def _get_user_agent(web_config: Any) -> str:
-        """Extract user agent from WebSection config."""
+    def _get_user_agent(web_config: _WebUserAgentConfig) -> str:
+        """Extract user agent from WebSection config.
+
+        Args:
+            web_config (Any): The web config parameter.
+
+        Returns:
+            str: The resulting string value.
+        """
         ua = web_config.user_agent.strip()
         if ua:
             return ua
@@ -430,13 +483,19 @@ class WebPlugin(IngestionPlugin):
     def _download_html(url: str, *, user_agent: str, timeout_s: float = 20.0) -> tuple[str, str]:
         """Download HTML and return (html_content, final_url_after_redirects).
 
+        Args:
+            url (str): The remote endpoint URL.
+
         Returns:
-            Tuple of (html_content, final_url). final_url is the normalized URL after redirects.
+            tuple[str, str]: An instance of tuple[str, str].
+
+        Raises:
+            ValueError: If parameter values are invalid.
         """
         # Validate URL scheme for security - only allow HTTP/HTTPS
         parsed_url = urlparse(url)
         if parsed_url.scheme not in ("http", "https"):
-            raise ValueError(
+            raise BrainValidationError(
                 f"Unsupported URL scheme '{parsed_url.scheme}'. Only HTTP and HTTPS are allowed."
             )
 
@@ -448,8 +507,7 @@ class WebPlugin(IngestionPlugin):
             },
         )
         final_url = url
-        with urlopen(req, timeout=timeout_s) as resp:  # nosec B310
-            # Get final URL after redirects
+        with urlopen_response(req, timeout=timeout_s) as resp:
             final_url = resp.geturl()
             raw = resp.read()
             try:
@@ -463,22 +521,21 @@ class WebPlugin(IngestionPlugin):
 
     @staticmethod
     def _extract_basic_metadata(html: str, url: str) -> tuple[str, str]:
+        """extract basic metadata.
+
+        Args:
+            html (str): The html parameter.
+            url (str): The remote endpoint URL.
+
+        Returns:
+            tuple[str, str]: An instance of tuple[str, str].
+        """
         try:
-            from bs4 import BeautifulSoup  # type: ignore[import-not-found]
-
-            soup = BeautifulSoup(html, "html.parser")
-            title = ""
-            if soup.title and soup.title.string:
-                title = str(soup.title.string).strip()
-
-            summary = ""
-            meta_desc = soup.find("meta", attrs={"name": "description"})
-            if meta_desc and meta_desc.get("content"):
-                summary = str(meta_desc.get("content")).strip()
+            soup = bs4_parse(html)
+            title = soup_title_text(soup)
+            summary = soup_meta_content(soup, name="description")
             if not summary:
-                meta_og = soup.find("meta", attrs={"property": "og:description"})
-                if meta_og and meta_og.get("content"):
-                    summary = str(meta_og.get("content")).strip()
+                summary = soup_meta_content(soup, prop="og:description")
 
             if not title:
                 title = urlparse(url).path or url
@@ -491,8 +548,11 @@ class WebPlugin(IngestionPlugin):
     ) -> tuple[str, str, str, str]:
         """Fetch and clean web content, always sending a User-Agent.
 
+        Args:
+            url (str): The remote endpoint URL.
+
         Returns:
-            Tuple of (content, title, summary, final_url_after_redirects)
+            tuple[str, str, str, str]: An instance of tuple[str, str, str, str].
         """
         try:
             html, final_url = self._download_html(url, user_agent=user_agent, timeout_s=timeout_s)
@@ -505,9 +565,7 @@ class WebPlugin(IngestionPlugin):
 
         # Prefer trafilatura for boilerplate removal when available
         try:
-            import trafilatura  # type: ignore[import-not-found]
-
-            content = trafilatura.extract(html, include_comments=False, include_tables=False) or ""
+            content = trafilatura_extract(html)
             if content.strip():
                 return (
                     _normalize_text(content),
@@ -520,12 +578,9 @@ class WebPlugin(IngestionPlugin):
 
         # Fallback: BeautifulSoup text extraction
         try:
-            from bs4 import BeautifulSoup  # type: ignore[import-not-found]
-
-            soup = BeautifulSoup(html, "html.parser")
-            for tag in soup(["script", "style", "noscript"]):
-                tag.decompose()
-            content = soup.get_text(" ", strip=True)
+            soup = bs4_parse(html)
+            soup_decompose_tags(soup, ["script", "style", "noscript"])
+            content = soup_plain_text(soup)
             return (
                 _normalize_text(content),
                 _normalize_text(title),
@@ -536,22 +591,27 @@ class WebPlugin(IngestionPlugin):
             logger.error("HTML text extraction failed for %s: %s", final_url, e)
             return "", "", "", final_url
 
+    @override
     def transform(
         self,
         data: list[RawData],
         enrichment_func: Callable[[str], GraphEnrichmentResult],
         taxonomy_path: Path | None = None,
         config: RagIngestionConfig | None = None,
-        core_cfg: Config | None = None,
+        core_cfg: BrainConfig | None = None,
         **kwargs: object,
     ) -> list[ShadowRecord]:
         """Transform web data using standard text splitting with taxonomy keywords.
 
-        Process:
-        1. Chunk by paragraphs (~1000 chars)
-        2. Identify 3 main taxonomy keywords per chunk
-        3. Generate taxonomy-aligned summary if missing
-        4. Create ShadowRecords with enriched input_text
+        Args:
+            data (list[RawData]): The raw data dictionary or object.
+            enrichment_func (Callable[[str], GraphEnrichmentResult]): The enrichment func parameter.
+            taxonomy_path (Path | None): The taxonomy path parameter.
+            config (RagIngestionConfig | None): The configuration settings dict or object.
+            core_cfg (BrainConfig | None): The core cfg parameter.
+
+        Returns:
+            list[ShadowRecord]: A list of list[ShadowRecord].
         """
         shadow_records: list[ShadowRecord] = []
 
@@ -561,10 +621,10 @@ class WebPlugin(IngestionPlugin):
         taxonomy = load_taxonomy_safe(taxonomy_path)
 
         for raw in data:
-            url = raw.metadata.get("url", "")
-            title = raw.metadata.get("title", "Web Content")
-            base_summary = raw.metadata.get("summary", "")
-            initial_keywords = raw.metadata.get("keywords", [])
+            url = str(raw.metadata.get("url", ""))
+            title = str(raw.metadata.get("title", "Web Content"))
+            base_summary = str(raw.metadata.get("summary", ""))
+            initial_keywords = as_str_list(raw.metadata.get("keywords", []))
 
             # Chunk by paragraphs (~1000 chars)
             paragraphs = [p.strip() for p in raw.content.split("\n\n") if p.strip()]
@@ -616,9 +676,24 @@ class WebPlugin(IngestionPlugin):
         taxonomy: StructData | None,
         *,
         config: RagIngestionConfig | None,
-        core_cfg: Config | None,
+        core_cfg: BrainConfig | None,
     ) -> ShadowRecord:
-        """Create a ShadowRecord for a web content chunk."""
+        """Create a ShadowRecord for a web content chunk.
+
+        Args:
+            chunk (str): The chunk parameter.
+            url (str): The remote endpoint URL.
+            title (str): The title parameter.
+            base_summary (str): The base summary parameter.
+            initial_keywords (list[str]): The initial keywords parameter.
+            enrichment_func (Callable[[str], GraphEnrichmentResult]): The enrichment func parameter.
+            taxonomy (StructData | None): The taxonomy parameter.
+
+        Returns:
+            ShadowRecord: An instance of ShadowRecord.
+        """
+        _ = config
+
         # Graph enrichment
         graph_keywords, enrichment_summary, parent_categories = get_graph_enrichment(
             text=chunk, enrichment_func=enrichment_func
@@ -661,7 +736,7 @@ class WebPlugin(IngestionPlugin):
         return ShadowRecord(
             id=record_id,
             input_text=input_text,
-            struct_data=struct_data,
+            struct_data=dict(struct_data) if struct_data else {},
             title=title,
             source_type="web",
         )
@@ -674,14 +749,19 @@ class WebPlugin(IngestionPlugin):
     ) -> list[str]:
         """Identify top taxonomy keywords from content.
 
-        Uses simple keyword matching for efficiency.
-        Falls back to LLM only if no matches found.
+        Args:
+            content (str): The content parameter.
+            taxonomy (StructData | None): The taxonomy parameter.
+            max_keywords (int): The max keywords parameter.
+
+        Returns:
+            list[str]: A list of list[str].
         """
         if not taxonomy:
             return []
 
         all_keywords = taxonomy.get("all_keywords", [])
-        if not all_keywords:
+        if not all_keywords or not isinstance(all_keywords, list):
             return []
 
         # Simple case-insensitive matching
@@ -689,6 +769,8 @@ class WebPlugin(IngestionPlugin):
         matches: list[tuple[str, int]] = []
 
         for keyword in all_keywords:
+            if not isinstance(keyword, str):
+                continue
             keyword_lower = keyword.lower()
             count = content_lower.count(keyword_lower)
             if count > 0:
@@ -701,25 +783,34 @@ class WebPlugin(IngestionPlugin):
     def _generate_summary(
         self,
         content: str,
-        taxonomy: dict[str, Any] | None,
+        taxonomy: StructData | None,
         *,
-        core_cfg: Config | None,
+        core_cfg: BrainConfig | None,
     ) -> str:
-        """Generate taxonomy-aligned summary using LLM."""
+        """Generate taxonomy-aligned summary using LLM.
+
+        Args:
+            content (str): The content parameter.
+            taxonomy (StructData | None): The taxonomy parameter.
+
+        Returns:
+            str: The resulting string value.
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         if len(content) < 200:
             return ""
         if core_cfg is None:
-            raise ValueError(
-                "WebPlugin summary generation requires core_cfg (contextunity.brain.core.config.Config)"
+            raise ConfigurationError(
+                "WebPlugin summary generation requires core_cfg (contextunity.brain.core.config.BrainConfig)"
             )
 
         try:
             categories = None
-            if taxonomy and isinstance(taxonomy.get("categories"), dict):
-                categories = [
-                    str(c).replace("_", " ").title()
-                    for c in list(taxonomy.get("categories", {}).keys())[:10]
-                ]
+            cats = taxonomy.get("categories") if taxonomy else None
+            if isinstance(cats, dict):
+                categories = [str(c).replace("_", " ").title() for c in list(cats.keys())[:10]]
             prompt = web_summary_prompt(content=content[:3000], categories=categories)
 
             result = llm_generate(
@@ -761,7 +852,7 @@ class WebPlugin(IngestionPlugin):
 
         # Add taxonomy categories from graph enrichment (QA-style)
         if parent_categories:
-            cats = [c for c in parent_categories if isinstance(c, str) and c.strip()]
+            cats = [c for c in parent_categories if c.strip()]
             if cats:
                 cat_str = ", ".join(cats[:5])
                 parts.append(f"Categories: {cat_str}")

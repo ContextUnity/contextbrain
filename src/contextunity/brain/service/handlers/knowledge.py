@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from contextunity.core import get_contextunit_logger
-from contextunity.core.exceptions import grpc_error_handler, grpc_stream_error_handler
+from collections.abc import AsyncIterator
+
+import grpc
+from contextunity.core import contextunit_pb2, get_contextunit_logger
+from contextunity.core.grpc_errors import grpc_error_handler, grpc_stream_error_handler
 from contextunity.core.permissions import Permissions
 
 from ...payloads import (
@@ -13,6 +16,7 @@ from ...payloads import (
     SearchPayload,
     UpsertPayload,
 )
+from ..handler_base import BrainHandlerBase
 from ..helpers import (
     extract_token_from_context,
     make_response,
@@ -26,16 +30,20 @@ from ..helpers import (
 logger = get_contextunit_logger(__name__)
 
 
-class KnowledgeHandlersMixin:
+class KnowledgeHandlersMixin(BrainHandlerBase):
     """Mixin for core knowledge gRPC handlers."""
 
     @grpc_stream_error_handler
-    async def Search(self, request, context):
+    async def Search(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
         """Semantic/Hybrid search."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
-        params = SearchPayload(**unit.payload)
+        params = SearchPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -67,7 +75,11 @@ class KnowledgeHandlersMixin:
             )
 
     @grpc_error_handler
-    async def GraphSearch(self, request, context):
+    async def GraphSearch(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Graph traversal search.
 
         Walks knowledge_edges from entrypoint_ids up to max_hops.
@@ -76,7 +88,7 @@ class KnowledgeHandlersMixin:
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
-        params = GraphSearchPayload(**unit.payload)
+        params = GraphSearchPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -107,16 +119,20 @@ class KnowledgeHandlersMixin:
         )
 
     @grpc_error_handler
-    async def CreateKGRelation(self, request, context):
+    async def CreateKGRelation(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Create Knowledge Graph relation."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
-        params = CreateKGRelationPayload(**unit.payload)
+        params = CreateKGRelationPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
-        from ..storage.postgres.models import GraphEdge
+        from contextunity.brain.storage.postgres.models import GraphEdge
 
         edge = GraphEdge(
             source_id=f"{params.source_type}:{params.source_id}",
@@ -142,12 +158,16 @@ class KnowledgeHandlersMixin:
         )
 
     @grpc_error_handler
-    async def Upsert(self, request, context):
+    async def Upsert(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Generic content upsert."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
-        params = UpsertPayload(**unit.payload)
+        params = UpsertPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -169,12 +189,16 @@ class KnowledgeHandlersMixin:
         )
 
     @grpc_stream_error_handler
-    async def QueryMemory(self, request, context):
+    async def QueryMemory(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
         """Hybrid search for relevant knowledge (legacy, use Search)."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
-        params = QueryMemoryPayload(**unit.payload)
+        params = QueryMemoryPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 

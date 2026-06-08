@@ -7,46 +7,158 @@ to in-memory LRU cache when Redis is unavailable.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
-from typing import Optional
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, ClassVar, Protocol, final, runtime_checkable
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_json_dict, object_attr
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import is_object_iterable, is_object_list
 
 logger = get_contextunit_logger(__name__)
 
+if TYPE_CHECKING:
+    from contextunity.brain.core.config.main import BrainConfig
+
 # Silence noisy httpx logger (logs every OpenAI API call at INFO level)
 get_contextunit_logger("httpx").setLevel(logging.WARNING)
+
+
+class _EmbeddingVector(Protocol):
+    def tolist(self) -> list[float]: ...
+
+
+@runtime_checkable
+class _AsyncKeyValueClient(Protocol):
+    async def get(self, name: str) -> object: ...
+
+    async def set(self, name: str, value: str, *, ex: int) -> object: ...
+
+
+class _SentenceTransformerModel(Protocol):
+    def encode(self, sentences: list[str]) -> Sequence[_EmbeddingVector]: ...
+
+
+def _embedding_list_from_json(raw: str) -> list[float] | None:
+    parsed_obj: object = json_loads(raw)
+    if not is_object_list(parsed_obj):
+        return None
+    values: list[float] = []
+    for item_obj in parsed_obj:
+        if isinstance(item_obj, bool) or not isinstance(item_obj, (int, float)):
+            return None
+        values.append(float(item_obj))
+    return values
+
+
+def _embedding_list_from_api(data: object, *, ollama: bool) -> list[float] | None:
+    payload = as_json_dict(data)
+    raw: object
+    if ollama:
+        raw = payload.get("embedding")
+    else:
+        rows_raw: object = payload.get("data")
+        if not isinstance(rows_raw, list) or not rows_raw:
+            return None
+        first_row: object = rows_raw[0]
+        first = as_json_dict(first_row)
+        raw = first.get("embedding")
+    if not is_object_list(raw):
+        return None
+    values: list[float] = []
+    for item_obj in raw:
+        if isinstance(item_obj, bool) or not isinstance(item_obj, (int, float)):
+            return None
+        values.append(float(item_obj))
+    return values
+
+
+@final
+class _SentenceTransformerHandle:
+    _inner: object
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+
+    def encode(self, sentences: list[str]) -> Sequence[_EmbeddingVector]:
+        encode_fn_obj: object = object_attr(self._inner, "encode")
+        if not callable(encode_fn_obj):
+            raise TypeError("sentence-transformers model missing encode()")
+        encode_fn: Callable[[list[str]], object] = encode_fn_obj
+        vectors_obj = encode_fn(sentences)
+        if not is_object_iterable(vectors_obj):
+            raise TypeError("encode() did not return a sequence")
+        return [_EmbeddingVectorAdapter(vector) for vector in vectors_obj]
+
+
+@final
+class _EmbeddingVectorAdapter:
+    _inner: object
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+
+    def tolist(self) -> list[float]:
+        tolist_fn_obj: object = object_attr(self._inner, "tolist")
+        if not callable(tolist_fn_obj):
+            raise TypeError("embedding vector missing tolist()")
+        tolist_fn: Callable[[], object] = tolist_fn_obj
+        raw_obj = tolist_fn()
+        if not is_object_list(raw_obj):
+            raise TypeError("tolist() did not return a list")
+        values: list[float] = []
+        for value in raw_obj:
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values.append(float(value))
+        return values
+
+
+def _load_sentence_transformer(model_name: str) -> _SentenceTransformerHandle | None:
+    try:
+        st_mod = importlib.import_module("sentence_transformers")
+    except ImportError:
+        return None
+    st_ctor_obj: object | None = getattr(st_mod, "SentenceTransformer", None)
+    if st_ctor_obj is None or not callable(st_ctor_obj):
+        return None
+    st_ctor: Callable[[str], object] = st_ctor_obj
+    loaded = st_ctor(model_name)
+    encode_fn_obj: object | None = getattr(loaded, "encode", None)
+    if encode_fn_obj is None or not callable(encode_fn_obj):
+        return None
+    return _SentenceTransformerHandle(loaded)
+
+
+def _vector_to_floats(vec: _EmbeddingVector) -> list[float]:
+    return [float(x) for x in vec.tolist()]
 
 
 # ─── Embedding Cache ─────────────────────────────────────────────────────────
 
 
 class EmbeddingCache:
-    """Two-tier embedding cache: Redis (primary) → in-memory (fallback).
+    """Two-tier embedding cache: Redis (primary) → in-memory (fallback)."""
 
-    Redis stores embeddings as JSON strings with TTL.
-    In-memory dict acts as fallback when Redis is down or unconfigured.
-    """
+    PREFIX: ClassVar[str] = "emb:"
+    TTL_SECONDS: ClassVar[int] = 86400 * 7
+    MEMORY_MAX_SIZE: ClassVar[int] = 2048
+    STATS_LOG_INTERVAL: ClassVar[int] = 50
 
-    PREFIX = "emb:"
-    TTL_SECONDS = 86400 * 7  # 7 days
-    MEMORY_MAX_SIZE = 2048
-    STATS_LOG_INTERVAL = 50  # Log stats every N requests
-
-    def __init__(self, redis_url: Optional[str] = None):
-        self._redis = None
-        self._redis_url = redis_url
-        self._redis_available = False
+    def __init__(self, redis_url: str | None = None) -> None:
+        self._redis: object | None = None
+        self._redis_url: str | None = redis_url
+        self._redis_available: bool = False
         self._memory: dict[str, list[float]] = {}
-        self._hits = 0
-        self._misses = 0
+        self._hits: int = 0
+        self._misses: int = 0
 
         if redis_url:
             self._init_redis(redis_url)
 
     def _init_redis(self, url: str) -> None:
-        """Try to initialize Redis async client."""
         try:
             import redis.asyncio as aioredis
 
@@ -59,27 +171,27 @@ class EmbeddingCache:
 
     @staticmethod
     def make_key(model: str, text: str) -> str:
-        """Deterministic cache key from model + text."""
         digest = hashlib.sha256(f"{model}:{text}".encode()).hexdigest()
         return f"{EmbeddingCache.PREFIX}{digest}"
 
-    async def get(self, model: str, text: str) -> Optional[list[float]]:
-        """Try to get cached embedding. Returns None on miss."""
+    async def get(self, model: str, text: str) -> list[float] | None:
         key = self.make_key(model, text)
 
-        # 1. Try Redis
         if self._redis_available:
             try:
-                raw = await self._redis.get(key)
-                if raw is not None:
+                client = self._redis
+                parsed: list[float] | None = None
+                if isinstance(client, _AsyncKeyValueClient):
+                    fetched_obj = await client.get(key)
+                    if isinstance(fetched_obj, str):
+                        parsed = _embedding_list_from_json(fetched_obj)
+                if parsed is not None:
                     self._hits += 1
-                    return json.loads(raw)
+                    return parsed
             except Exception:
-                # Redis went down — flip to fallback silently
                 self._redis_available = False
                 logger.warning("Embedding cache: Redis lost, falling back to in-memory")
 
-        # 2. Try in-memory
         if key in self._memory:
             self._hits += 1
             return self._memory[key]
@@ -89,24 +201,26 @@ class EmbeddingCache:
         return None
 
     async def put(self, model: str, text: str, embedding: list[float]) -> None:
-        """Store embedding in cache (Redis + in-memory)."""
         key = self.make_key(model, text)
 
-        # Store in Redis
         if self._redis_available:
             try:
-                await self._redis.set(key, json.dumps(embedding), ex=self.TTL_SECONDS)
+                client = self._redis
+                if isinstance(client, _AsyncKeyValueClient):
+                    _ = await client.set(
+                        key,
+                        json.dumps(embedding),
+                        ex=self.TTL_SECONDS,
+                    )
             except Exception:
                 self._redis_available = False
 
-        # Always store in memory (fast path for hot queries)
         if len(self._memory) >= self.MEMORY_MAX_SIZE:
             oldest = next(iter(self._memory))
             del self._memory[oldest]
         self._memory[key] = embedding
 
     def _log_stats_periodic(self) -> None:
-        """Log cache stats every N requests."""
         total = self._hits + self._misses
         if total > 0 and total % self.STATS_LOG_INTERVAL == 0:
             hit_rate = (self._hits / total) * 100
@@ -120,7 +234,7 @@ class EmbeddingCache:
             )
 
     @property
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, object]:
         total = self._hits + self._misses
         return {
             "hits": self._hits,
@@ -131,17 +245,16 @@ class EmbeddingCache:
         }
 
 
-# Module-level singleton
-_cache: Optional[EmbeddingCache] = None
+_cache: EmbeddingCache | None = None
 
 
-def get_embedding_cache(redis_url: Optional[str] = None) -> EmbeddingCache:
-    """Get or create the singleton embedding cache."""
+def get_embedding_cache(redis_url: str | None = None) -> EmbeddingCache:
     global _cache
     if _cache is None:
         from contextunity.core.config import get_core_config
 
-        url = redis_url or get_core_config().redis_url
+        core = get_core_config()
+        url = redis_url or (core.redis.url if core.redis.enabled else None)
         _cache = EmbeddingCache(redis_url=url)
     return _cache
 
@@ -152,32 +265,31 @@ def get_embedding_cache(redis_url: Optional[str] = None) -> EmbeddingCache:
 class ApiEmbedder:
     """API-based embeddings (OpenAI, Local Ollama/vLLM) with Redis + in-memory cache."""
 
-    _instance: Optional["ApiEmbedder"] = None
+    _instance: ApiEmbedder | None = None
 
-    def __init__(self, model_name: str = "text-embedding-3-small"):
-        self._model_name = model_name
-        from contextunity.brain.core.config.main import Config
+    def __init__(self, model_name: str = "text-embedding-3-small") -> None:
+        self._model_name: str = model_name
+        from contextunity.brain.core.config import get_core_config
 
-        cfg = Config.load()
-        self._api_key = cfg.openai.api_key
-        # Default to OpenAI, but allow overriding for local API providers (Ollama/vLLM)
-        self._base_url = "https://api.openai.com/v1/embeddings"
+        cfg = get_core_config()
+        self._api_key: str | None = cfg.openai.api_key
+        self._base_url: str = "https://api.openai.com/v1/embeddings"
         if cfg.local.ollama_base_url:
             self._base_url = f"{cfg.local.ollama_base_url}/api/embeddings"
         elif cfg.local.vllm_base_url:
             self._base_url = f"{cfg.local.vllm_base_url}/v1/embeddings"
 
-        self._dim = 1536 if "small" in model_name or "ada" in model_name else 3072
-        self._cache = get_embedding_cache()
+        self._dim: int = 1536 if "small" in model_name or "ada" in model_name else 3072
+        self._cache: EmbeddingCache = get_embedding_cache()
         if not self._api_key and "openai.com" in self._base_url:
             logger.warning("OPENAI_API_KEY not set for OpenAI API embedder. Embeddings may fail.")
 
     @classmethod
-    def get_instance(cls) -> "ApiEmbedder":
+    def get_instance(cls) -> ApiEmbedder:
         if cls._instance is None:
-            from contextunity.brain.core.config.main import Config
+            from contextunity.brain.core.config import get_core_config
 
-            model = Config.load().openai.embedding_model or "text-embedding-3-small"
+            model = get_core_config().openai.embedding_model or "text-embedding-3-small"
             cls._instance = cls(model_name=model)
         return cls._instance
 
@@ -187,13 +299,11 @@ class ApiEmbedder:
         return asyncio.get_event_loop().run_until_complete(self.embed_async(text))
 
     async def embed_async(self, text: str) -> list[float]:
-        # Check cache
         cached = await self._cache.get(self._model_name, text)
         if cached is not None:
             logger.debug("Embedding cache HIT (stats: %s)", self._cache.stats)
             return cached
 
-        # Cache miss → call API
         try:
             import httpx
 
@@ -201,10 +311,9 @@ class ApiEmbedder:
             if self._api_key:
                 headers["Authorization"] = f"Bearer {self._api_key}"
 
-            payload = {"model": self._model_name, "input": text}
-
-            # Adjust payload for Ollama
-            if "/api/embeddings" in self._base_url:
+            payload: dict[str, str] = {"model": self._model_name, "input": text}
+            ollama = "/api/embeddings" in self._base_url
+            if ollama:
                 payload = {"model": self._model_name, "prompt": text}
 
             async with httpx.AsyncClient() as client:
@@ -214,61 +323,52 @@ class ApiEmbedder:
                     json=payload,
                     timeout=30.0,
                 )
-                response.raise_for_status()
-                data = response.json()
+                _ = response.raise_for_status()
+                parsed_body: object = json_loads(response.text)
+                embedding = _embedding_list_from_api(parsed_body, ollama=ollama)
+                if embedding is None:
+                    raise ValueError("API response did not contain a valid embedding vector")
 
-                if "/api/embeddings" in self._base_url:
-                    embedding = data["embedding"]
-                else:
-                    embedding = data["data"][0]["embedding"]
-
-                # Store in cache
                 await self._cache.put(self._model_name, text, embedding)
-
                 return embedding
         except Exception as e:
-            logger.error(f"API embedding error: {e}")
+            logger.error("API embedding error: %s", e)
             return [0.0] * self._dim
 
 
 class LocalEmbedder:
-    """Local embeddings using SentenceTransformers.
+    """Local embeddings using SentenceTransformers."""
 
-    Default model: 'paraphrase-multilingual-MiniLM-L12-v2' (ideal for bilingual EN/UA setups).
-    Runs completely offline on local CPU/GPU.
-    """
-
-    _instance: Optional["LocalEmbedder"] = None
+    _instance: LocalEmbedder | None = None
     _warned: bool = False
 
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
-        self._model = None
-        self._model_name = model_name
-        self._dim = 384  # MiniLM uses 384 dimensions
-        self._fallback_mode = False
+    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2") -> None:
+        self._model: _SentenceTransformerModel | None = None
+        self._model_name: str = model_name
+        self._dim: int = 384
+        self._fallback_mode: bool = False
 
     @classmethod
-    def get_instance(cls) -> "LocalEmbedder":
+    def get_instance(cls) -> LocalEmbedder:
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
 
-    def _ensure_model(self):
+    def _ensure_model(self) -> _SentenceTransformerModel | None:
         if self._model is not None:
             return self._model
         if self._fallback_mode:
             return None
-        try:
-            from sentence_transformers import SentenceTransformer
-
-            self._model = SentenceTransformer(self._model_name)
-            logger.info(f"Loaded local embedding model: {self._model_name}")
-        except ImportError:
+        loaded = _load_sentence_transformer(self._model_name)
+        if loaded is None:
             self._fallback_mode = True
             logger.critical(
                 "SentenceTransformers not installed! Local semantic search will NOT work."
             )
             self._model = None
+        else:
+            self._model = loaded
+            logger.info("Loaded local embedding model: %s", self._model_name)
         return self._model
 
     def embed(self, text: str) -> list[float]:
@@ -279,7 +379,7 @@ class LocalEmbedder:
 
         loop = asyncio.get_event_loop()
         vec = loop.run_until_complete(loop.run_in_executor(None, lambda: model.encode([text])[0]))
-        return [float(x) for x in vec.tolist()]
+        return _vector_to_floats(vec)
 
     async def embed_async(self, text: str) -> list[float]:
         model = self._ensure_model()
@@ -289,44 +389,32 @@ class LocalEmbedder:
 
         loop = asyncio.get_event_loop()
         vec = await loop.run_in_executor(None, lambda: model.encode([text])[0])
-        return [float(x) for x in vec.tolist()]
+        return _vector_to_floats(vec)
 
 
-# ─── Factory ──────────────────────────────────────────────────────────────────
-
-
-def get_embedder(config=None):
-    """Get embedder based on config or EMBEDDER_TYPE env var.
-
-    Args:
-        config: Optional Brain Config object. When provided, reads
-                embedder_type and openai.api_key from it instead of env.
-    """
-    # Initialize cache with Redis URL from config if available
+def get_embedder(config: BrainConfig | None = None) -> ApiEmbedder | LocalEmbedder:
     redis_url = getattr(config, "redis_url", None) if config else None
-    get_embedding_cache(redis_url=redis_url)
+    _ = get_embedding_cache(redis_url=redis_url)
 
-    from contextunity.brain.core.config.main import Config
+    from contextunity.brain.core.config import get_core_config
 
-    brain_cfg = config or Config.load()
+    brain_cfg = config if config is not None else get_core_config()
     embedder_type = brain_cfg.embedder_type.lower()
     openai_key = brain_cfg.openai.api_key
 
     if embedder_type in ("api", "openai"):
         return ApiEmbedder.get_instance()
-    elif embedder_type == "local":
+    if embedder_type == "local":
         return LocalEmbedder.get_instance()
-    else:
-        # Auto-detect fallback
-        if openai_key or brain_cfg.local.ollama_base_url or brain_cfg.local.vllm_base_url:
-            return ApiEmbedder.get_instance()
-        return LocalEmbedder.get_instance()
+    if openai_key or brain_cfg.local.ollama_base_url or brain_cfg.local.vllm_base_url:
+        return ApiEmbedder.get_instance()
+    return LocalEmbedder.get_instance()
 
 
 __all__ = [
     "ApiEmbedder",
-    "LocalEmbedder",
     "EmbeddingCache",
+    "LocalEmbedder",
     "get_embedder",
     "get_embedding_cache",
 ]

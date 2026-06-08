@@ -2,121 +2,61 @@
 
 Knowledge layer: vector storage, knowledge graphs, taxonomy hierarchies, and episodic agent memory.
 
+**Types & payloads:** [docs/architecture/type-boundaries.md](../../docs/architecture/type-boundaries.md)
+**Code quality:** [docs/architecture/code-quality.md](../../docs/architecture/code-quality.md)
+
 ## Entry & Execution
-- **Workspace**: `services/brain/`
-- **Run**: `uv run python -m contextunity.brain`
-- **Tests**: `uv run --package contextunity-brain pytest`
-- **Lint**: `uv run ruff check .`
 
-## Code Standards
-You MUST adhere to [Code Standards](../../.agent/skills/code_standards/SKILL.md): 400-line limit, Pydantic strictness, `mise` sync, Ruff compliance.
+Run from monorepo root (`contextunity/`) unless noted.
 
-## Architecture
+| Task | Command |
+|------|---------|
+| Workspace | `services/brain/` |
+| Run | `uv run python -m contextunity.brain` |
+| Tests | `uv run --package contextunity-brain pytest services/brain/tests` |
+| Lint | `cd services/brain && uv run ruff check src tests` |
+| Types (brain scope) | `uv run basedpyright services/brain/src/contextunity/brain --warnings` |
+| Monorepo gate | `uv run basedpyright --project pyrightconfig.json --warnings` |
+| Core guards (shared types / interceptors) | [type-boundaries.md §8.1](../../docs/architecture/type-boundaries.md) |
 
-```
-src/contextunity/brain/
-├── service/
-│   ├── server.py              # gRPC server with interceptor stack
-│   ├── brain_service.py       # Main BrainService (mixin composition)
-│   ├── interceptors.py        # BrainPermissionInterceptor
-│   ├── helpers.py             # Token/tenant validation
-│   ├── payloads.py            # Pydantic validation for all gRPC payloads
-│   └── handlers/              # Domain-specific handlers
-│       ├── knowledge.py       # Search, upsert, graph
-│       ├── memory.py          # Episodic/entity memory
-│       ├── traces.py          # Agent execution traces
-│       ├── taxonomy.py        # Taxonomy CRUD
-│       ├── commerce.py        # Commerce/verification
-│       └── news.py            # News engine
-├── storage/postgres/
-│   ├── store/                 # Mixin pattern
-│   │   ├── base.py            # Connection management
-│   │   ├── search.py          # Vector search (pgvector)
-│   │   ├── graph.py           # Knowledge graph CRUD
-│   │   ├── episodes.py        # Memory
-│   │   └── taxonomy.py        # Categories (ltree)
-│   ├── news.py                # News post storage
-│   └── schema.py              # DDL definitions
-├── storage/duckdb_store.py    # In-memory analytical engine (OLAP, commerce verification)
-├── storage/graph/cognee.py    # Graph knowledge via Cognee
-├── ingestion/rag/             # RAG pipeline & NLP processors
-├── journal.py                 # DuckDB-powered agent journal
-└── core/
-    ├── config/                # BrainConfig (Pydantic settings)
-    ├── exceptions.py          # ContextbrainError → ContextUnityError
-    └── registry.py            # Component registry
-```
+## Type hardening & skills
 
-## Strict Boundaries
-- **ContextUnit ONLY**: All gRPC calls use `ContextUnit` from `contextunity.core`. No domain-specific proto messages.
-- **No Naked SQL**: All PostgreSQL access through `storage/` abstraction layer. Never raw SQL in handlers.
-- **Security Non-Negotiable**: `BrainPermissionInterceptor` must be active. All handlers validate tokens via `validate_token_for_read/write`.
-- **Tenant Isolation**: `tenant_id` is physically enforced via PostgreSQL RLS. Every query sets `SET LOCAL app.current_tenant`.
-- **Exception Hierarchy**: All exceptions extend `ContextUnityError`. Use `@grpc_error_handler` / `@grpc_stream_error_handler`.
+Import types from `contextunity.core.types` / `contextunity.core.sdk.types` — never fork `JsonValue` or `ContextUnitPayload` locally.
 
-## gRPC Interface
-Proto definitions: `packages/core/protos/brain.proto`
+**Narrowing:** graph state, storage rows, ingestion — `from contextunity.core.narrowing import as_*`; gRPC/SDK payload fields — `sdk.payload.get_*`. See [type-boundaries.md §4.5](../../docs/architecture/type-boundaries.md). No service-local `narrow.py` re-exports.
 
-| Handler | Methods | Location |
-|---------|---------|----------|
-| Knowledge | Search, Upsert, GraphSearch, CreateKGRelation | `handlers/knowledge.py` |
-| Memory | AddEpisode, GetRecentEpisodes, UpsertFact, GetUserFacts | `handlers/memory.py` |
-| Taxonomy | GetTaxonomy, SyncTaxonomy, UpsertTaxonomy | `handlers/taxonomy.py` |
-| Commerce | GetProducts, UpdateEnrichment | `handlers/commerce.py` |
-| News | UpsertNewsItem, GetNewsItems, UpsertNewsPost | `handlers/news.py` |
-| Traces | LogTrace, GetTraces | `handlers/traces.py` |
+| Trigger | Skill |
+|---------|-------|
+| Typing, JSON/gRPC, ContextUnit payloads, `dict[str, object]`, basedpyright | **`contract-boundaries`** (primary) → **`type-validation`** |
+| Core types / parsing / SDK | **`core-contract-change`** + **`contract-boundaries`** |
+| Bug / regression | `diagnose` |
+| Implementation loop | `tdd` |
 
-**Client usage**:
-```python
-from contextunity.core import BrainClient
-client = BrainClient(host="localhost:50051")
-results = await client.search("winter jacket", limit=10)
-```
+Workflow: [/contract-boundaries](../../.agents/workflows/contract-boundaries.md). Monorepo: [AGENTS.md](../../AGENTS.md).
 
-## Security & Authorization
-Two-layer defense:
-1. **Interceptor** (`BrainPermissionInterceptor`): RPC → permission mapping (e.g., `Search` → `brain:read`)
-2. **Handler** (`validate_token_for_read/write`): Tenant binding + resource-level authorization
+## Platform Invariants
+Follow `packages/core/AGENTS.md` for proto, config, exception, and token rules. In this service:
+- **Config**: use `SharedConfig` / Brain config models — no bare `os.getenv()` or `os.environ`.
+- **Exceptions**: inherit `contextunity.core.exceptions.ContextUnityError`.
+- **Crypto/tokens**: use `contextunity.core.token_utils` — no inline HMAC or encryption.
 
-```python
-from contextunity.brain.service.helpers import validate_token_for_read
+## Strict Boundaries & Tenancy
+1. **ContextUnit Only**: All gRPC requests and responses MUST use the `ContextUnit` envelope from `contextunity.core`. No custom payload schemas.
+2. **PostgreSQL RLS Tenancy**: All postgres access MUST enforce tenant isolation via Row Level Security (RLS). Every database connection must set the current tenant using:
+   ```sql
+   SET LOCAL app.current_tenant = '{tenant_id}';
+   ```
+3. **No Raw SQL in Handlers**: All SQL queries must live in the `storage/` abstraction layer, never inside gRPC handler classes.
+4. **Strict Payload Configuration**: Brain payload models use Pydantic `extra="forbid"`. Any client payload MUST provide `tenant_id` for validation.
+5. **No Model Orchestration**: Brain does not execute agent loops or make routing calls. It only performs data processing (RAG parsing, embedding generation, graph traversal, and storage).
 
-async def Search(self, request, context):
-    token = validate_token_for_read(context, params.tenant_id)
-```
+## Database & Migration Invariants
+- **Schema Authority**: `storage/postgres/schema.py` is the single source of truth for DDL.
+- **Alembic Migrations**: All schema modifications MUST be accompanied by an Alembic migration script generated under `migrations/`.
+- **Embeddings Dimension**: Vector dimension is fixed per deployment via `PGVECTOR_DIM` (e.g., `1536` for OpenAI, `768` for local models). Any mismatch in dimensions between client-side embeddings and the database schema will raise a validation exception.
 
-## Configuration
+---
 
-| Variable | Description |
-|----------|-------------|
-| `BRAIN_DATABASE_URL` | PostgreSQL connection string |
-| `BRAIN_PORT` | gRPC server listening port |
-| `BRAIN_TENANTS` | Comma-separated allowed tenants |
-| `EMBEDDER_TYPE` | `openai` or `local` |
-| `OPENAI_API_KEY` | Required if embedder is `openai` |
-| `PGVECTOR_DIM` | Must match embedder (1536 OpenAI / 768 Local) |
-| `REDIS_URL` | Embedding cache (falls back to in-memory LRU) |
+## Workflow Routing Table (Slash Commands)
 
-All config accessed via `contextunity.brain.core.get_core_config()`. No `os.getenv()`.
-
-## Golden Paths
-
-### Adding a Database Table
-1. Define schema in `storage/postgres/schema.py`
-2. Create migration: `uv run alembic revision -m "add_table_name"`
-3. Add storage mixin in `storage/postgres/store/`
-4. Apply: `uv run alembic upgrade head`
-
-### Adding/Modifying a gRPC Method
-1. Edit `protos/brain.proto` in `packages/core/`
-2. Regenerate stubs: `uv run python scripts/build_protos.py`
-3. `uv sync` to pick up updated types
-4. Implement handler in `service/handlers/`, expose via `brain_service.py`
-
-### ContextUnit Protocol
-- Always populate `unit.provenance` with transformation context
-- Always enforce `unit.payload.tenant_id` — isolation is query-level
-
-## Further Reading
-- [Astro Docs: ContextBrain](../../docs/website/src/content/docs/brain/)
-- [Brain Operations Skill](../../.agent/skills/brain_ops/SKILL.md)
+- **gRPC Brain Client SDK** → [/brain-sdk](../../.agents/workflows/brain-sdk.md)

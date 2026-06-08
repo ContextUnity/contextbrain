@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Type
+from typing import TypeVar
+
+from contextunity.brain.core.exceptions import BrainRegistryError
 
 from .plugins import IngestionPlugin
 
-_PLUGINS: dict[str, Type[IngestionPlugin]] = {}
+_T = TypeVar("_T", bound=IngestionPlugin)
+
+_PLUGINS: dict[str, type[IngestionPlugin]] = {}
 
 
 def register_plugin(source_type: str):
@@ -21,31 +25,36 @@ def register_plugin(source_type: str):
             ...
     """
 
-    def decorator(cls: Type[IngestionPlugin]) -> Type[IngestionPlugin]:
+    def decorator(cls: type[_T]) -> type[_T]:
+        """Decorator.
+
+        Returns:
+            Type[_T]: The original class, unchanged.
+        """
         _PLUGINS[source_type] = cls
         return cls
 
     return decorator
 
 
-def get_plugin_class(source_type: str) -> Type[IngestionPlugin]:
+def get_plugin_class(source_type: str) -> type[IngestionPlugin]:
     """Retrieve a plugin class by source type.
 
     Args:
-        source_type: The source type string
+        source_type (str): The source type parameter.
 
     Returns:
-        The plugin class
+        Type[IngestionPlugin]: An instance of Type[IngestionPlugin].
 
     Raises:
-        ValueError: If no plugin is registered for the given source type
+        ValueError: If parameter values are invalid.
     """
     if source_type not in _PLUGINS:
-        raise ValueError(f"No plugin registered for: {source_type}")
+        raise BrainRegistryError(f"No plugin registered for: {source_type}")
     return _PLUGINS[source_type]
 
 
-def get_all_plugins() -> list[Type[IngestionPlugin]]:
+def get_all_plugins() -> list[type[IngestionPlugin]]:
     """Get all registered plugins.
 
     Returns:

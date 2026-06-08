@@ -1,6 +1,17 @@
-from typing import Any, Dict
+"""Coordinator for Knowledge Hub intelligence modules."""
+
+from __future__ import annotations
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import str_list_as_json
+from contextunity.core.types import JsonDict, JsonValue
+
+from contextunity.brain.service.nlp import NLPEnricher
+
+from .keyphrases import KeyphraseExtractor
+from .keywords import KeywordExtractor
+from .ner import Entity, EntityExtractor
+from .taxonomy_manager import TaxonomyManager
 
 logger = get_contextunit_logger(__name__)
 
@@ -13,12 +24,15 @@ class IntelligenceHub:
     falling back to legacy regex-based extractors.
     """
 
-    def __init__(self, project_path: str | None = None):
-        # Modern NLP enrichment (spaCy + KeyBERT)
+    _nlp_enricher: NLPEnricher | None
+    _legacy_ner: EntityExtractor
+    _legacy_keyphrases: KeyphraseExtractor
+    taxonomy: TaxonomyManager
+    _legacy_keywords: KeywordExtractor
+
+    def __init__(self, project_path: str | None = None) -> None:
         self._nlp_enricher = None
         try:
-            from contextunity.brain.service.nlp import NLPEnricher
-
             self._nlp_enricher = NLPEnricher.get_instance()
             caps = self._nlp_enricher.capabilities
             if caps["ner"] or caps["topics"]:
@@ -27,18 +41,11 @@ class IntelligenceHub:
                     caps["ner"],
                     caps["topics"],
                 )
-        except Exception as e:
-            logger.debug("NLP enrichment unavailable: %s", e)
-
-        # Legacy extractors (fallback)
-        from .keyphrases import KeyphraseExtractor
-        from .keywords import KeywordExtractor
-        from .ner import EntityExtractor
+        except Exception as exc:
+            logger.debug("NLP enrichment unavailable: %s", exc)
 
         self._legacy_ner = EntityExtractor()
         self._legacy_keyphrases = KeyphraseExtractor()
-
-        from .taxonomy_manager import TaxonomyManager
 
         if not project_path:
             from contextunity.brain.core import get_core_config
@@ -47,21 +54,19 @@ class IntelligenceHub:
         self.taxonomy = TaxonomyManager(project_path or "")
         self._legacy_keywords = KeywordExtractor(taxonomy=self.taxonomy.categories)
 
-    async def enrich_content(self, text: str) -> Dict[str, Any]:
-        """
-        Runs intelligence modules over the content.
-
-        Priority: spaCy/KeyBERT → legacy extractors (fallback).
-        """
-        # Try modern NLP pipeline first
+    async def enrich_content(self, text: str) -> JsonDict:
         if self._nlp_enricher:
             try:
                 result = self._nlp_enricher.enrich(text)
-                entities = [
-                    {"text": e.text, "label": e.label, "start": e.start, "end": e.end}
-                    for e in result.entities
+                entities: list[JsonValue] = [
+                    {
+                        "text": entity.text,
+                        "label": entity.label,
+                        "start": entity.start,
+                        "end": entity.end,
+                    }
+                    for entity in result.entities
                 ]
-                # Combine KeyBERT topics with legacy keyword extraction
                 keywords = result.topics or []
                 if not keywords:
                     keywords = self._legacy_keywords.extract(text)
@@ -70,25 +75,34 @@ class IntelligenceHub:
 
                 return {
                     "entities": entities,
-                    "keyphrases": keyphrases,
-                    "keywords": keywords,
-                    "topics": result.topics,
+                    "keyphrases": str_list_as_json(keyphrases),
+                    "keywords": str_list_as_json(keywords),
+                    "topics": str_list_as_json(result.topics),
                     "language": result.language,
                     "summary_signals": text[:200],
                 }
-            except Exception as e:
-                logger.warning("NLP enrichment failed, using legacy: %s", e)
+            except Exception as exc:
+                logger.warning("NLP enrichment failed, using legacy: %s", exc)
 
-        # Legacy fallback
-        entities = await self._legacy_ner.extract(text)
+        entities_legacy = await self._legacy_ner.extract(text)
         keyphrases = self._legacy_keyphrases.extract(text)
         keywords = self._legacy_keywords.extract(text)
 
         return {
-            "entities": [e.model_dump() for e in entities],
-            "keyphrases": keyphrases,
-            "keywords": keywords,
+            "entities": [_entity_to_json(entity) for entity in entities_legacy],
+            "keyphrases": str_list_as_json(keyphrases),
+            "keywords": str_list_as_json(keywords),
             "topics": [],
             "language": "",
             "summary_signals": text[:200],
         }
+
+
+def _entity_to_json(entity: Entity) -> JsonDict:
+    return {
+        "text": entity.text,
+        "label": entity.label,
+        "start": entity.start,
+        "end": entity.end,
+        "confidence": entity.confidence,
+    }

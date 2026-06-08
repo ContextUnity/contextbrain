@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import (
+    as_json_dict,
+    as_json_dict_list,
+    as_str,
+    as_str_list,
+    str_list_as_json,
+)
+from contextunity.core.types import JsonDict, JsonValue, is_object_list
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 from contextunity.brain.core.types import StructData
 
 from .analyzer import BookAnalyzer
@@ -21,14 +28,26 @@ logger = get_contextunit_logger(__name__)
 class BookTransformer:
     """Main book transformer that orchestrates all book processing."""
 
-    def __init__(self, core_cfg: Config) -> None:
-        self.core_cfg = core_cfg
-        self.extractor = PDFExtractor()
-        self.normalizer = ContentNormalizer()
-        self.analyzer = BookAnalyzer(core_cfg)
+    def __init__(self, core_cfg: BrainConfig) -> None:
+        """Initialize a new instance of BookTransformer.
 
-    def transform_pdf(self, pdf_path: Path) -> dict[str, Any]:
-        """Transform a single PDF into processed content."""
+        Args:
+            core_cfg (BrainConfig): The core cfg parameter.
+        """
+        self.core_cfg: BrainConfig = core_cfg
+        self.extractor: PDFExtractor = PDFExtractor()
+        self.normalizer: ContentNormalizer = ContentNormalizer()
+        self.analyzer: BookAnalyzer = BookAnalyzer(core_cfg)
+
+    def transform_pdf(self, pdf_path: Path) -> JsonDict:
+        """Transform a single PDF into processed content.
+
+        Args:
+            pdf_path (Path): The pdf path parameter.
+
+        Returns:
+            JsonDict: A dictionary containing the results.
+        """
         try:
             # Extract TOC
             toc = self.extractor.extract_toc(pdf_path)
@@ -51,12 +70,15 @@ class BookTransformer:
             # Split by chapters if TOC available
             chapter_chunks = self.analyzer.chunk_by_chapters(normalized_text, toc)
 
+            chapters_json: list[JsonValue] = list(toc)
+            chapter_chunks_json: list[JsonValue] = list(chapter_chunks)
+
             return {
                 "text": normalized_text,
-                "chapters": toc,
-                "chunks": chunks,
-                "analyses": analyses,
-                "chapter_chunks": chapter_chunks,
+                "chapters": chapters_json,
+                "chunks": str_list_as_json(chunks),
+                "analyses": list(analyses),
+                "chapter_chunks": chapter_chunks_json,
                 "metadata": {
                     "page_count": self.extractor.get_page_count(pdf_path),
                     "estimated_reading_time": self.analyzer.estimate_reading_time(normalized_text),
@@ -76,9 +98,16 @@ class BookTransformer:
                 "error": str(e),
             }
 
-    def transform_multiple_pdfs(self, pdf_paths: list[Path]) -> list[dict[str, Any]]:
-        """Transform multiple PDFs."""
-        results = []
+    def transform_multiple_pdfs(self, pdf_paths: list[Path]) -> list[JsonDict]:
+        """Transform multiple PDFs.
+
+        Args:
+            pdf_paths (list[Path]): The pdf paths parameter.
+
+        Returns:
+            list[JsonDict]: A list of list[JsonDict].
+        """
+        results: list[JsonDict] = []
 
         for pdf_path in pdf_paths:
             logger.info("Processing book: %s", pdf_path.name)
@@ -92,49 +121,68 @@ class BookTransformer:
         return results
 
     def create_structured_records(
-        self, transformation_result: dict[str, Any], taxonomy: StructData | None = None
-    ) -> list[dict[str, Any]]:
-        """Create structured records from transformation result."""
-        records = []
+        self, transformation_result: JsonDict, taxonomy: StructData | None = None
+    ) -> list[JsonDict]:
+        """Create structured records from transformation result.
 
-        chunks = transformation_result.get("chunks", [])
-        analyses = transformation_result.get("analyses", [])
+        Args:
+            transformation_result (JsonDict): The transformation result parameter.
+            taxonomy (StructData | None): The taxonomy parameter.
 
-        for i, (chunk, analysis) in enumerate(zip(chunks, analyses)):
-            record = {
+        Returns:
+            list[JsonDict]: A list of list[JsonDict].
+        """
+        records: list[JsonDict] = []
+
+        chunks = as_str_list(transformation_result.get("chunks"))
+        analyses = as_json_dict_list(transformation_result.get("analyses"))
+        metadata_base = as_json_dict(transformation_result.get("metadata"))
+
+        for i, chunk in enumerate(chunks):
+            analysis = analyses[i] if i < len(analyses) else {}
+            record_metadata: JsonDict = dict(metadata_base)
+            record_metadata["themes"] = str_list_as_json(as_str_list(analysis.get("themes")))
+            record_metadata["topics"] = str_list_as_json(as_str_list(analysis.get("topics")))
+            record_metadata["book_title"] = as_str(transformation_result.get("book_title"))
+            record: JsonDict = {
                 "content": chunk,
                 "chunk_id": i,
                 "source_type": "book",
-                "metadata": {
-                    "themes": analysis.get("themes", []),
-                    "topics": analysis.get("topics", []),
-                    "book_title": transformation_result.get("book_title", ""),
-                    **transformation_result.get("metadata", {}),
-                },
+                "metadata": record_metadata,
             }
 
             # Add taxonomy if available
             if taxonomy:
-                record["taxonomy_categories"] = self._map_to_taxonomy(chunk, taxonomy)
+                record["taxonomy_categories"] = str_list_as_json(
+                    self._map_to_taxonomy(chunk, taxonomy)
+                )
 
             records.append(record)
 
         return records
 
     def _map_to_taxonomy(self, content: str, taxonomy: StructData) -> list[str]:
-        """Map content to taxonomy categories."""
-        # Simple implementation - can be enhanced
-        if isinstance(taxonomy, dict):
-            categories = taxonomy.get("categories", [])
-            content_lower = content.lower()
+        """Map content to taxonomy categories.
 
-            matched = []
-            for category in categories:
-                if isinstance(category, str):
-                    category_lower = category.lower()
-                    if any(word in content_lower for word in category_lower.split()):
-                        matched.append(category)
+        Args:
+            content (str): The content parameter.
+            taxonomy (StructData): The taxonomy parameter.
 
-            return matched
+        Returns:
+            list[str]: A list of list[str].
+        """
+        categories_raw = taxonomy.get("categories", [])
+        if not is_object_list(categories_raw):
+            return []
+        content_lower = content.lower()
 
-        return []
+        matched: list[str] = []
+        for category_obj in categories_raw:
+            category = category_obj if isinstance(category_obj, str) else ""
+            if not category:
+                continue
+            category_lower = category.lower()
+            if any(word in content_lower for word in category_lower.split()):
+                matched.append(category)
+
+        return matched

@@ -2,31 +2,36 @@
 
 from __future__ import annotations
 
-from typing import List
+from abc import ABC
+from typing import override
 
-from ..models import GraphEdge, GraphNode
+from contextunity.brain.core.exceptions import BrainValidationError
+
+from ..models import GraphEdge, GraphNode, GraphTraversalResult
+from .base import PostgresStoreBase
 from .helpers import Json, execute, vec
 
 
-class GraphMixin:
+class GraphMixin(PostgresStoreBase, ABC):
     """Mixin for knowledge graph operations."""
 
+    @override
     async def upsert_graph(
         self,
-        nodes: List[GraphNode],
-        edges: List[GraphEdge],
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
         *,
         tenant_id: str,
         user_id: str | None = None,
     ) -> None:
         """Upsert knowledge graph nodes and edges."""
         if not tenant_id:
-            raise ValueError("tenant_id is required")
+            raise BrainValidationError("tenant_id is required")
 
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             async with conn.transaction():
                 for node in nodes:
-                    await execute(
+                    _ = await execute(
                         conn,
                         """
                         INSERT INTO knowledge_nodes (
@@ -59,7 +64,7 @@ class GraphMixin:
                     )
 
                 for edge in edges:
-                    await execute(
+                    _ = await execute(
                         conn,
                         """
                         INSERT INTO knowledge_edges (tenant_id, source_id, target_id, relation, weight, metadata)
@@ -86,7 +91,7 @@ class GraphMixin:
         max_hops: int = 2,
         allowed_relations: list[str] | None = None,
         max_results: int = 200,
-    ) -> dict:
+    ) -> GraphTraversalResult:
         """Structural graph traversal.
 
         Walks knowledge_edges from entrypoint_ids up to max_hops.

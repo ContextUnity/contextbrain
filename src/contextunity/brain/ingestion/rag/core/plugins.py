@@ -9,18 +9,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ..settings import RagIngestionConfig
-from .types import RawData, ShadowRecord
-from .utils import (
-    build_enriched_input_text,
-    get_graph_enrichment,
-    load_taxonomy_safe,
-    normalize_clean_text,
-)
+from .types import GraphEnrichmentResult, RawData, ShadowRecord
 
 
 class IngestionPlugin(ABC):
@@ -58,41 +52,15 @@ class IngestionPlugin(ABC):
     def transform(
         self,
         data: list[RawData],
-        enrichment_func: Callable[[str], dict[str, Any]],
+        enrichment_func: Callable[[str], GraphEnrichmentResult],
         *,
         taxonomy_path: Path | None = None,
         config: RagIngestionConfig | None = None,
-        core_cfg: Config | None = None,
+        core_cfg: BrainConfig | None = None,
     ) -> list[ShadowRecord]:
         """Chunks the raw data and transforms it into ShadowRecords."""
 
     # ---- Optional shared helpers (recommended for consistency across plugins) ----
-
-    def _load_taxonomy(self, taxonomy_path: Path | None = None) -> dict[str, Any] | None:
-        return load_taxonomy_safe(taxonomy_path)
-
-    def _graph_enrichment(
-        self, *, text: str, enrichment_func: Callable[[str], dict[str, Any]]
-    ) -> tuple[list[str], str, list[str]]:
-        return get_graph_enrichment(text=text, enrichment_func=enrichment_func)
-
-    def _build_input_text(
-        self,
-        *,
-        content: str,
-        keywords: list[str] | None = None,
-        summary: str | None = None,
-        parent_categories: list[str] | None = None,
-    ) -> str:
-        return build_enriched_input_text(
-            content=content,
-            keywords=keywords,
-            summary=summary,
-            parent_categories=parent_categories,
-        )
-
-    def _clean_ui_text(self, text: str) -> str:
-        return normalize_clean_text(text)
 
 
 __all__ = ["IngestionPlugin"]

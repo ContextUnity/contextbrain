@@ -9,7 +9,7 @@ from datetime import datetime
 
 from contextunity.core import get_contextunit_logger
 
-from contextunity.brain.core.types import StructData
+from contextunity.brain.core.types import StructData, coerce_struct_data
 
 from ..config import get_assets_paths
 from ..core.types import ShadowRecord
@@ -27,6 +27,11 @@ def export_jsonl_per_type(
     overwrite: bool = True,
     workers: int = 1,
 ) -> dict[str, str]:
+    """Export jsonl per type.
+
+    Returns:
+        dict[str, str]: A dictionary containing the results.
+    """
     paths = get_assets_paths(config)
     db_name = config.upload.db_name
     include_date = config.upload.include_date
@@ -36,6 +41,14 @@ def export_jsonl_per_type(
     out: dict[str, str] = {}
 
     def _run_one(t: str) -> tuple[str, str]:
+        """run one.
+
+        Args:
+            t (str): The t parameter.
+
+        Returns:
+            tuple[str, str]: An instance of tuple[str, str].
+        """
         t0 = time.perf_counter()
         shadow_path = paths["shadow"] / f"{t}.jsonl"
         records = read_shadow_records_jsonl(shadow_path)
@@ -56,7 +69,7 @@ def export_jsonl_per_type(
         mode = "w" if overwrite else "a"
         with open(out_path, mode, encoding="utf-8") as f:
             for r in records:
-                f.write(json.dumps(_to_vertex_record(r), ensure_ascii=False) + "\n")
+                _ = f.write(json.dumps(_to_vertex_record(r), ensure_ascii=False) + "\n")
 
         logger.warning(
             "export: wrote %d records for type=%s -> %s (%.1fs)",
@@ -80,7 +93,16 @@ def export_jsonl_per_type(
 
 
 def _to_vertex_record(record: ShadowRecord) -> StructData:
-    struct_data: StructData = dict(record.struct_data or {})
+    """to vertex record.
+
+    Args:
+        record (ShadowRecord): The record parameter.
+
+    Returns:
+        StructData: An instance of StructData.
+    """
+    sd = record.struct_data or {}
+    struct_data: StructData = {str(k): coerce_struct_data(v) for k, v in sd.items()}
     if record.source_type:
         struct_data["source_type"] = record.source_type
     if record.title:

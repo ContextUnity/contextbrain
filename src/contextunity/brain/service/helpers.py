@@ -1,5 +1,4 @@
 """Helper functions for gRPC service.
-
 IMPORTANT: validate_token_* functions are synchronous. They cannot
 ``await context.abort()`` (async gRPC).  Instead they raise exceptions
 that are caught by ``@grpc_error_handler`` which does the proper
@@ -8,26 +7,22 @@ that are caught by ``@grpc_error_handler`` which does the proper
 
 from __future__ import annotations
 
-import uuid
-from typing import Optional
-from uuid import UUID
-
 import grpc
-from contextunity.core import (
-    ContextToken,
-    ContextUnit,
-    contextunit_pb2,
-)
-from contextunity.core.exceptions import ContextUnityError
-
-
-def parse_unit(request) -> ContextUnit:
-    """Parse protobuf request to ContextUnit."""
-    return ContextUnit.from_protobuf(request)
+from contextunity.core import ContextToken, ContextUnit
+from contextunity.core.exceptions import ContextUnityError, SecurityError
+from contextunity.core.sdk.service_helpers import make_response, parse_unit
 
 
 # Fetch from verified auth context instead of re-parsing metadata
-def extract_token_from_context(context=None) -> Optional[ContextToken]:
+def extract_token_from_context(_context: object | None = None) -> ContextToken | None:
+    """Extract token from context.
+
+    Args:
+        context (object | None): The request context payload.
+
+    Returns:
+        ContextToken | None: Token from verified auth context, if any.
+    """
     from contextunity.core.authz.context import get_auth_context
 
     auth_ctx = get_auth_context()
@@ -35,9 +30,9 @@ def extract_token_from_context(context=None) -> Optional[ContextToken]:
 
 
 def validate_token_for_read(
-    unit: ContextUnit,
-    token: Optional[ContextToken],
-    context: grpc.ServicerContext,
+    _unit: ContextUnit,
+    token: ContextToken | None,
+    _context: grpc.ServicerContext,
     *,
     required_permission: str | None = None,
 ) -> None:
@@ -54,7 +49,7 @@ def validate_token_for_read(
             Defaults to ``brain:read``.
 
     Raises:
-        ContextUnityError if token is invalid or missing required permissions
+        ContextUnityError: If token is invalid or missing required permissions.
     """
     from contextunity.core.authz import authorize, get_auth_context
 
@@ -76,13 +71,13 @@ def validate_token_for_read(
         service="brain",
     )
     if decision.denied:
-        raise ContextUnityError(code="PERMISSION_DENIED", message=decision.reason)
+        raise SecurityError(message=decision.reason)
 
 
 def validate_token_for_write(
-    unit: ContextUnit,
-    token: Optional[ContextToken],
-    context: grpc.ServicerContext,
+    _unit: ContextUnit,
+    token: ContextToken | None,
+    _context: grpc.ServicerContext,
     *,
     required_permission: str | None = None,
 ) -> None:
@@ -99,7 +94,7 @@ def validate_token_for_write(
             Defaults to ``brain:write``.
 
     Raises:
-        ContextUnityError if token is invalid or missing required permissions
+        ContextUnityError: If token is invalid or missing required permissions.
     """
     from contextunity.core.authz import authorize, get_auth_context
 
@@ -121,40 +116,65 @@ def validate_token_for_write(
         service="brain",
     )
     if decision.denied:
-        raise ContextUnityError(code="PERMISSION_DENIED", message=decision.reason)
+        raise SecurityError(message=decision.reason)
 
 
 def validate_tenant_access(
-    token: Optional[ContextToken],
+    token: ContextToken | None,
     tenant_id: str,
-    context: grpc.ServicerContext,
+    _context: grpc.ServicerContext,
 ) -> None:
     """Validate the token grants access to the specified tenant.
 
     Args:
-        token: The ContextToken to validate.
-        tenant_id: Tenant identifier from the request payload.
+        token: The ContextToken to validate (SPOT for tenant identity).
+        tenant_id: Legacy tenant identifier from the request payload. MUST
+            be empty OR match the token's ``allowed_tenants`` — new
+            callers SHOULD omit it and let the token decide.
         context: gRPC servicer context.
 
     Raises:
-        grpc.RpcError with PERMISSION_DENIED if tenant access denied.
+        ContextUnityError: If tenant access is denied or payload tenant_id
+            contradicts the token.
     """
-    # Security is always enforced.
 
     if token is None:
-        return  # No token → handled by validate_token_for_*
+        return  # Missing token is handled by validate_token_for_*.
+
+    if not tenant_id:
+        return  # Token-only mode: server derives tenant from the token.
 
     if hasattr(token, "can_access_tenant") and not token.can_access_tenant(tenant_id):
-        raise ContextUnityError(
-            code="PERMISSION_DENIED",
+        raise SecurityError(
             message=f"Tenant access denied: {tenant_id}",
         )
 
 
+def resolve_tenant_id(
+    token: ContextToken | None,
+    payload_tenant_id: str | None = None,
+) -> str:
+    """Derive the canonical tenant_id for this RPC.
+
+    Args:
+        token (ContextToken | None): The security token for authentication.
+        payload_tenant_id (str | None): The payload tenant id parameter.
+
+    Returns:
+        str: The resulting string value.
+    """
+    if token is not None and getattr(token, "allowed_tenants", None):
+        allowed = token.allowed_tenants
+        if payload_tenant_id and payload_tenant_id in allowed:
+            return payload_tenant_id
+        return allowed[0]
+    return payload_tenant_id or "default"
+
+
 def validate_user_access(
-    token: Optional[ContextToken],
+    token: ContextToken | None,
     user_id: str | None,
-    context: grpc.ServicerContext,
+    _context: grpc.ServicerContext,
 ) -> None:
     """Validate the token grants access to the specified user_id.
 
@@ -164,56 +184,37 @@ def validate_user_access(
         context: gRPC servicer context.
 
     Raises:
-        grpc.RpcError with PERMISSION_DENIED if cross-user access attempted.
+        grpc.RpcError: If cross-user access is attempted.
     """
     # Security is always enforced.
 
     if token is None:
         return  # No token → handled by validate_token_for_*
 
-    if hasattr(token, "user_id") and token.user_id is not None:
-        if user_id is None:
-            raise ContextUnityError(
-                code="PERMISSION_DENIED",
-                message="Tenant-wide access denied for user-bound token. Must specify matching user_id.",
+    if getattr(token, "user_id", None) is None:
+        if user_id and user_id not in ("platform", "anonym"):
+            raise SecurityError(
+                message="User-scoped access requires a user-bound token.",
             )
-        if token.user_id != user_id:
-            raise ContextUnityError(
-                code="PERMISSION_DENIED",
-                message=f"Cross-user access denied. Token user: {token.user_id}, Requested: {user_id}",
-            )
+        return
+
+    if user_id is None:
+        raise SecurityError(
+            message="Tenant-wide access denied for user-bound token. Must specify matching user_id.",
+        )
+    if token.user_id != user_id:
+        raise SecurityError(
+            message=f"Cross-user access denied. Token user: {token.user_id}, Requested: {user_id}",
+        )
 
 
-def make_response(
-    payload: dict,
-    trace_id: str | UUID | None = None,
-    parent_unit: ContextUnit | None = None,
-) -> bytes:
-    """Create ContextUnit response protobuf.
-
-    Args:
-        payload: Response payload data
-        trace_id: Trace identifier (inherited from parent_unit if None)
-        parent_unit: Optional parent ContextUnit to inherit trace_id from
-
-    Returns:
-        Serialized protobuf bytes
-    """
-    from uuid import UUID
-
-    # Inherit trace_id from parent if not provided
-    if trace_id is None and parent_unit:
-        trace_id = parent_unit.trace_id
-    elif isinstance(trace_id, str):
-        trace_id = UUID(trace_id)
-    elif trace_id is None:
-        trace_id = uuid.uuid4()
-
-    unit = ContextUnit(
-        payload=payload,
-        trace_id=trace_id,
-    )
-    return unit.to_protobuf(contextunit_pb2)
-
-
-__all__ = ["parse_unit", "make_response"]
+__all__ = [
+    "parse_unit",
+    "make_response",
+    "extract_token_from_context",
+    "validate_token_for_read",
+    "validate_token_for_write",
+    "validate_tenant_access",
+    "resolve_tenant_id",
+    "validate_user_access",
+]

@@ -7,6 +7,8 @@ Future: Azure, AWS, etc.
 
 from __future__ import annotations
 
+from contextunity.brain.core.exceptions import BrainRegistryError
+
 from ..settings import RagIngestionConfig
 from .base import (
     UploadProvider,
@@ -50,7 +52,9 @@ def get_provider(config: RagIngestionConfig) -> UploadProvider:
 
     if provider_name not in _PROVIDERS:
         available = ", ".join(_PROVIDERS.keys())
-        raise ValueError(f"Unknown upload provider '{provider_name}'. Available: {available}")
+        raise BrainRegistryError(
+            f"Unknown upload provider '{provider_name}'. Available: {available}"
+        )
 
     provider_class = _PROVIDERS[provider_name]
     if provider_name == "postgres":

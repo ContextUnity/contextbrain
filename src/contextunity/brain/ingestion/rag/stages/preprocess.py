@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_float, as_json_dict_list, as_str
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, is_json_dict, is_object_list
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ..config import get_assets_paths, get_plugin_source_dir
-from ..core import IngestionMetadata, RawData
+from ..core import RawData
 from ..core.utils import (
     normalize_ambiguous_unicode,
     parallel_map,
@@ -32,13 +34,21 @@ from .store import write_raw_data_jsonl
 logger = get_contextunit_logger(__name__)
 
 
-def _resolve_preprocess_model(core_cfg: Config) -> str:
+def _resolve_preprocess_model(core_cfg: BrainConfig) -> str:
+    """resolve preprocess model.
+
+    Args:
+        core_cfg (BrainConfig): The core cfg parameter.
+
+    Returns:
+        str: The resulting string value.
+    """
     return core_cfg.models.ingestion.preprocess.model.strip()
 
 
 def preprocess_to_clean_text(
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     config: RagIngestionConfig,
     only_types: list[str],
     overwrite: bool = True,
@@ -46,7 +56,8 @@ def preprocess_to_clean_text(
 ) -> dict[str, Path]:
     """Preprocess raw sources into clean_text JSONL per type.
 
-    Returns a mapping {source_type: output_path}.
+    Returns:
+        dict[str, Path]: A dictionary containing the results.
     """
     paths = get_assets_paths(config)
     preprocess_model = _resolve_preprocess_model(core_cfg)
@@ -54,6 +65,14 @@ def preprocess_to_clean_text(
     outputs: dict[str, Path] = {}
 
     def _run_one(t: str) -> tuple[str, Path, int]:
+        """run one.
+
+        Args:
+            t (str): The t parameter.
+
+        Returns:
+            tuple[str, Path, int]: An instance of tuple[str, Path, int].
+        """
         import time
 
         start = time.perf_counter()
@@ -115,25 +134,29 @@ def preprocess_to_clean_text(
 
 
 def _preprocess_book(
-    *, source_dir: Path, config: RagIngestionConfig, core_cfg: Config
+    *, source_dir: Path, config: RagIngestionConfig, core_cfg: BrainConfig
 ) -> list[RawData]:
-    """Book preprocessing using BookPlugin for PDF extraction and chapter detection."""
+    """Book preprocessing using BookPlugin for PDF extraction and chapter detection.
+
+    Returns:
+        list[RawData]: A list of list[RawData].
+    """
+    _ = config, core_cfg
     plugin = BookPlugin()
     items = plugin.load(str(source_dir))
     return items
 
 
 def _preprocess_qa(
-    *, source_dir: Path, config: RagIngestionConfig, core_cfg: Config
+    *, source_dir: Path, config: RagIngestionConfig, core_cfg: BrainConfig
 ) -> list[RawData]:
     """QA preprocessing (optional LLM speaker detection + interruption merge + question filtering).
 
-    If enabled:
-    - Detects speakers and splits into interactions
-    - Merges short interruptions
-    - Filters out meaningless interactions (greetings, pleasantries)
-    - Stores structured turns into metadata["interactions"]
-    - Rewrites RawData.content to a cleaned transcript (no speaker tags) for taxonomy/graph.
+    Returns:
+        list[RawData]: A list of list[RawData].
+
+    Raises:
+        RuntimeError: If a validation error occurs.
     """
     speaker_enabled = bool(config.qa.llm_speaker_detect_enabled)
     question_filter_enabled = bool(config.qa.llm_question_filter_enabled)
@@ -149,16 +172,10 @@ def _preprocess_qa(
         logger.info("preprocess(qa): question filtering enabled")
 
     for i, raw in enumerate(items, start=1):
-        title = ""
-        if isinstance(raw.metadata, dict):
-            title = str(
-                raw.metadata.get("session_title") or raw.metadata.get("source_title") or ""
-            )[:80]
+        title = as_str(raw.metadata.get("session_title") or raw.metadata.get("source_title"))[:80]
         logger.info("preprocess(qa): session %d/%d title=%s", i, len(items), title or "Untitled")
 
         interactions = plugin.split_by_speakers_llm(raw.content)
-        if interactions is None:
-            raise RuntimeError("QA speaker detection returned None; expected list of interactions")
         if not interactions:
             interactions = [{"speaker": "Unknown", "text": raw.content}]
 
@@ -168,10 +185,10 @@ def _preprocess_qa(
         if question_filter_enabled:
             interactions = _filter_meaningless_interactions(interactions, core_cfg=core_cfg)
 
-        # Persist structured turns for shadow stage reuse
-        if not isinstance(raw.metadata, dict):
-            raw.metadata = {}
-        raw.metadata["interactions"] = interactions
+        raw.metadata["interactions"] = [
+            {"speaker": as_str(it.get("speaker")), "text": as_str(it.get("text"))}
+            for it in interactions
+        ]
 
         # Identify session host/interviewer (dominant NON-persona speaker)
         # Used for fallback headers: "Speaker Name sharing thoughts on 'topic' with {Host}"
@@ -193,7 +210,7 @@ def _preprocess_qa(
 
 
 def _identify_session_host(
-    interactions: list[dict[str, str]], config: RagIngestionConfig, *, core_cfg: Config
+    interactions: list[dict[str, str]], config: RagIngestionConfig, *, core_cfg: BrainConfig
 ) -> str | None:
     """Identify the host/interviewer for the session using LLM analysis.
 
@@ -221,6 +238,14 @@ def _identify_session_host(
     corrections.update(config.qa.corrections)
 
     def apply_corrections(name: str) -> str:
+        """Apply corrections.
+
+        Args:
+            name (str): The name of the entity.
+
+        Returns:
+            str: The resulting string value.
+        """
         for wrong, correct in corrections.items():
             if wrong.casefold() in name.casefold():
                 name = name.replace(wrong, correct)
@@ -232,15 +257,14 @@ def _identify_session_host(
     norm_to_corrected: dict[str, str] = {}
 
     for it in interactions:
-        if not isinstance(it, dict):
+        sp = as_str(it.get("speaker")).strip()
+        tx = as_str(it.get("text")).strip()
+        if not sp or not tx:
             continue
-        sp = it.get("speaker")
-        tx = it.get("text")
-        if not sp or not isinstance(sp, str) or not tx or not isinstance(tx, str):
-            continue
-        corrected = apply_corrections(sp.strip()) or "Unknown"
+        corrected = apply_corrections(sp) or "Unknown"
         norm = corrected.casefold()
-        norm_to_corrected.setdefault(norm, corrected)
+        if norm not in norm_to_corrected:
+            norm_to_corrected[norm] = corrected
         speaker_word_counts[norm] += len(tx.split())
         speaker_interaction_counts[norm] += 1
 
@@ -285,20 +309,18 @@ def _identify_session_host(
     # Host has many short interactions (intros, questions, transitions)
     # Guest speakers have few long interactions (talks, explanations)
     # Score = interaction_count / word_count (higher = more host-like)
-    host_scores = []
+    host_scores: list[tuple[str, float]] = []
     for norm in non_persona_speakers:
         words = speaker_word_counts[norm]
         interactions_count = speaker_interaction_counts[norm]
-        # Avoid division by zero
         if words > 0:
-            score = interactions_count / words * 1000  # Scale for readability
+            score = interactions_count / words * 1000
             host_scores.append((norm, score))
 
     if not host_scores:
         return None
 
-    # Return speaker with highest host score (many short interactions)
-    best_host_norm = max(host_scores, key=lambda x: x[1])[0]
+    best_host_norm, _score = max(host_scores, key=lambda pair: pair[1])
     return norm_to_corrected.get(best_host_norm)
 
 
@@ -306,17 +328,23 @@ def _identify_host_llm(
     interactions: list[dict[str, str]],
     candidates: list[str],
     norm_to_corrected: dict[str, str],
-    persona_norm: str,
+    _persona_norm: str,
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
 ) -> str | None:
     """Use LLM to identify the host from multiple speaker candidates.
 
-    Analyzes first portion of transcript to understand speaker roles.
+    Args:
+        interactions (list[dict[str, str]]): The interactions parameter.
+        candidates (list[str]): The candidates parameter.
+        norm_to_corrected (dict[str, str]): The norm to corrected parameter.
+        persona_norm (str): The persona norm parameter.
+
+    Returns:
+        str | None: An instance of str | None.
     """
 
-    # Build sample of first ~2000 chars showing speaker patterns
-    sample_lines = []
+    sample_lines: list[str] = []
     char_count = 0
     for it in interactions:
         if char_count > 2000:
@@ -378,7 +406,7 @@ HOST:"""
 
 
 def _filter_meaningless_interactions(
-    interactions: list[dict[str, str]], *, core_cfg: Config
+    interactions: list[dict[str, str]], *, core_cfg: BrainConfig
 ) -> list[dict[str, str]]:
     """Filter out meaningless interactions (greetings, pleasantries, low-value conversational patterns).
 
@@ -419,12 +447,11 @@ def _filter_meaningless_interactions(
 
         batch_num += 1
 
-        batch_data = []
+        batch_data: list[JsonDict] = []
         for i, it in enumerate(batch):
-            text = str(it.get("text", "")).strip()
+            text = as_str(it.get("text")).strip()
             if not text:
                 continue
-            # Store global index for tracking
             batch_data.append({"idx": batch_start + i, "text": text})
 
         if not batch_data:
@@ -548,9 +575,13 @@ CHUNKS:
 
 
 def _populate_web_llm_summaries(
-    items: list[RawData], *, config: RagIngestionConfig, core_cfg: Config
+    items: list[RawData], *, config: RagIngestionConfig, core_cfg: BrainConfig
 ) -> None:
-    """Ensure each web RawData has a short summary in metadata for citations/UI."""
+    """Ensure each web RawData has a short summary in metadata for citations/UI.
+
+    Args:
+        items (list[RawData]): The items parameter.
+    """
     if not config.web.llm_summary_enabled:
         logger.info("preprocess(web): llm_summary_enabled=false (skipping)")
         return
@@ -561,14 +592,12 @@ def _populate_web_llm_summaries(
     for item in items:
         if item.source_type != "web":
             continue
-        if not isinstance(item.metadata, dict):
+        existing = as_str(item.metadata.get("summary"))
+        if existing.strip():
             continue
-        existing = item.metadata.get("summary")
-        if isinstance(existing, str) and existing.strip():
-            continue
-        url = item.metadata.get("url") if isinstance(item.metadata.get("url"), str) else ""
-        title = item.metadata.get("title") if isinstance(item.metadata.get("title"), str) else ""
-        content = item.content if isinstance(item.content, str) else ""
+        url = as_str(item.metadata.get("url"))
+        title = as_str(item.metadata.get("title"))
+        content = item.content
         if not content.strip():
             continue
 
@@ -593,8 +622,8 @@ def _populate_web_llm_summaries(
             logger.warning("preprocess(web): summary LLM failed (url=%s): %s", url, e)
             continue
 
-        if isinstance(summary, str):
-            s = " ".join(summary.strip().split())
+        if summary:
+            s = " ".join(as_str(summary).strip().split())
             if out_chars > 0 and len(s) > out_chars:
                 s = s[: out_chars - 1].rstrip() + "…"
             if s:
@@ -602,16 +631,12 @@ def _populate_web_llm_summaries(
 
 
 def _preprocess_video(
-    *, source_dir: Path, config: RagIngestionConfig, core_cfg: Config
+    *, source_dir: Path, config: RagIngestionConfig, core_cfg: BrainConfig
 ) -> list[RawData]:
     """Video preprocessing that preserves timing information.
 
-    Produces one RawData per transcript file with:
-    - content: full transcript text
-    - metadata.sentences: list[{text,start,end}] (seconds)
-
-    If [video].llm_clean_enabled is True, performs LLM-based cleaning to remove
-    filler, garbled text, and promotional content while preserving timing.
+    Returns:
+        list[RawData]: A list of list[RawData].
     """
     if not source_dir.exists():
         logger.warning("Video source directory does not exist: %s", source_dir)
@@ -628,25 +653,24 @@ def _preprocess_video(
 
     for file_idx, json_file in enumerate(json_files, 1):
         try:
-            payload = json.loads(json_file.read_text(encoding="utf-8"))
+            payload = json_loads(json_file.read_text(encoding="utf-8"))
         except Exception as e:
             logger.warning("Failed to read video JSON %s: %s", json_file, e)
             continue
 
         extracted_id, clean_filename = extract_youtube_id_from_filename(json_file.stem)
 
-        words: list[dict[str, Any]] = []
+        words: list[JsonDict] = []
         video_id = extracted_id or json_file.stem
         video_title = clean_filename or video_id
 
-        if isinstance(payload, list):
-            words = payload
-        elif isinstance(payload, dict):
-            video_id = payload.get("video_id") or video_id
-            video_title = payload.get("video_title") or video_title
+        if is_object_list(payload):
+            words = as_json_dict_list(payload)
+        elif is_json_dict(payload):
+            video_id = as_str(payload.get("video_id")) or video_id
+            video_title = as_str(payload.get("video_title")) or video_title
             w = payload.get("words") or payload.get("transcript") or []
-            if isinstance(w, list):
-                words = w
+            words = as_json_dict_list(w) if is_object_list(w) else []
 
         if not words:
             logger.warning("No words/transcript found in %s", json_file)
@@ -654,27 +678,21 @@ def _preprocess_video(
 
         logger.info("preprocess(video): %d/%d %s", file_idx, total_files, video_title)
 
-        sentences = smart_glue_words(words)
+        sentences: list[JsonDict] = smart_glue_words(words)
 
-        # Optional LLM cleaning
         if llm_clean_enabled:
             sentences = _llm_clean_video_sentences(
                 sentences,
                 corrections=corrections,
                 batch_size=llm_batch_size,
-                video_title=video_title,
                 core_cfg=core_cfg,
             )
         elif corrections:
-            # Deterministic corrections should not depend on LLM; apply to all sentences.
             for s in sentences:
-                if isinstance(s, dict):
-                    s["text"] = _apply_deterministic_corrections(
-                        str(s.get("text") or ""), corrections
-                    )
+                s["text"] = _apply_deterministic_corrections(as_str(s.get("text")), corrections)
 
         sentence_texts = [
-            str(s.get("text") or "").strip() for s in sentences if str(s.get("text") or "").strip()
+            as_str(s.get("text")).strip() for s in sentences if as_str(s.get("text")).strip()
         ]
         transcript = " ".join(sentence_texts).strip()
 
@@ -682,51 +700,33 @@ def _preprocess_video(
         transcript = normalize_ambiguous_unicode(transcript)
         video_title = normalize_ambiguous_unicode(str(video_title))  # Normalize video title too
 
-        md: IngestionMetadata = {
-            "video_id": str(video_id),
+        metadata: JsonDict = {
+            "video_id": as_str(video_id),
             "video_title": video_title,
             "video_url": f"https://youtu.be/{video_id}",
-            # CleanText enrichment for later stages
             "sentences": [
                 {
-                    "text": normalize_ambiguous_unicode(
-                        str(s.get("text") or "")
-                    ),  # Normalize sentence text too
-                    "start": float(s.get("start") or 0.0),
-                    "end": float(s.get("end") or 0.0),
+                    "text": normalize_ambiguous_unicode(as_str(s.get("text"))),
+                    "start": as_float(s.get("start")),
+                    "end": as_float(s.get("end")),
                 }
                 for s in sentences
-                if isinstance(s, dict)
             ],
         }
 
-        out.append(RawData(content=transcript, source_type="video", metadata=md))
+        out.append(RawData(content=transcript, source_type="video", metadata=metadata))
 
     return out
 
 
 def _llm_clean_video_sentences(
-    sentences: list[dict[str, Any]],
+    sentences: list[JsonDict],
     *,
     corrections: dict[str, str],
     batch_size: int,
-    video_title: str,
-    core_cfg: Config,
-) -> list[dict[str, Any]]:
-    """LLM-based cleaning of video transcript sentences.
-
-    Uses smart batching with overlap to preserve thought boundaries:
-    - Processes sentences with overlapping windows to avoid cutting mid-thought
-    - Overlap ensures sentences at batch boundaries are evaluated in context
-    - Resolves conflicts by preferring decisions from batches where sentence is in the middle
-
-    For each sentence, the LLM decides:
-    - KEEP: meaningful content (keep the sentence)
-    - DROP: filler/noise/promo/unintelligible/repetition (remove the sentence)
-
-    Deterministic corrections are applied locally (never gated by the LLM).
-    Preserves timing (start/end) for kept sentences.
-    """
+    core_cfg: BrainConfig,
+) -> list[JsonDict]:
+    """LLM-based cleaning of video transcript sentences."""
     if not sentences:
         return []
 
@@ -884,7 +884,7 @@ INPUT JSON:
         final_decisions[global_idx] = decision_list[0][1]
 
     # Build cleaned list based on final decisions
-    cleaned: list[dict[str, Any]] = []
+    cleaned: list[JsonDict] = []
     for i, orig_sentence in enumerate(sentences):
         action = final_decisions.get(i, "KEEP")  # Default to KEEP if no decision
 
@@ -914,11 +914,19 @@ INPUT JSON:
 
 
 def _apply_deterministic_corrections(text: str, corrections: dict[str, str]) -> str:
-    """Apply configured string replacements deterministically (exact substring matches)."""
+    """Apply configured string replacements deterministically (exact substring matches).
+
+    Args:
+        text (str): The text parameter.
+        corrections (dict[str, str]): The corrections parameter.
+
+    Returns:
+        str: The resulting string value.
+    """
     out = text
     for orig, repl in corrections.items():
-        if isinstance(orig, str) and orig:
-            out = out.replace(orig, str(repl))
+        if orig:
+            out = out.replace(orig, repl)
     return out
 
 

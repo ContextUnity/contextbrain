@@ -1,43 +1,29 @@
 """Unified batch processing utilities for LLM operations.
-
 This module provides reusable helpers for batch LLM calls during ingestion:
-
 **Key Functions**:
-
 - `batch_validate(items, prompt_builder, ...)` - Validate items in batches,
   returns set of indices that passed validation. Used for filtering
   non-valuable content (QA questions/answers, video segments).
-
 - `batch_transform(items, prompt_builder, result_parser, ...)` - Transform
   items in batches, returns dict mapping index to result. Used for
   generating summaries, extracting topics.
-
 - `filter_by_indices(items, valid_indices)` - Filter sequence keeping only
   items at valid indices. Companion to batch_validate.
-
 - `chunked(iterable, size)` - Yield successive chunks of given size.
-
 **Design Patterns**:
-
 1. Prompt builders receive `list[tuple[int, T]]` (indexed items) to enable
    TSV-style response parsing with index matching.
-
 2. Error handling is configurable: `on_error="keep"` preserves items on
    LLM failure (safe default), `on_error="drop"` removes them.
-
 3. Response parsing handles both real tabs and `<TAB>` literal markers
    (some LLMs output these instead of actual tab characters).
-
 **Example Usage**:
-
 ```python
 from contextunity.core import get_contextunit_logger
 from contextunity.brain.ingestion.rag.core.batch import batch_validate, filter_by_indices
-
 def build_prompt(batch: list[tuple[int, str]]) -> str:
     items = "\\n".join(f"{idx}: {text}" for idx, text in batch)
     return f"Validate these items:\\n{items}\\n\\nReturn: idx<TAB>VALUABLE|NOT_VALUABLE"
-
 valid_indices = batch_validate(
     records,
     prompt_builder=build_prompt,
@@ -52,11 +38,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from contextunity.core import get_contextunit_logger
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ..utils.llm import llm_generate
 
@@ -75,10 +61,23 @@ class BatchResult(Generic[T]):
 
     @property
     def success_indices(self) -> set[int]:
+        """Success indices.
+
+        Returns:
+            set[int]: An instance of set[int].
+        """
         return {idx for idx, _ in self.successes}
 
     def get(self, idx: int, default: T | None = None) -> T | None:
-        """Get result by original index."""
+        """Get result by original index.
+
+        Args:
+            idx (int): The idx parameter.
+            default (T | None): The default parameter.
+
+        Returns:
+            T | None: An instance of T | None.
+        """
         for i, result in self.successes:
             if i == idx:
                 return result
@@ -88,7 +87,7 @@ class BatchResult(Generic[T]):
 def batch_validate(
     items: Sequence[T],
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     prompt_builder: Callable[[list[tuple[int, T]]], str],
     batch_size: int = 50,
     model: str | None = None,
@@ -157,11 +156,18 @@ def batch_validate(
 
 def _parse_validation_response(
     response: str,
-    batch: list[tuple[int, Any]],
+    _batch: list[tuple[int, T]],
     valid_indices: set[int],
     parse_decision: Callable[[str], bool],
 ) -> None:
-    """Parse TSV validation response and update valid_indices."""
+    """Parse TSV validation response and update valid_indices.
+
+    Args:
+        response (str): The response payload containing results.
+        batch (list[tuple[int, Any]]): The batch parameter.
+        valid_indices (set[int]): The valid indices parameter.
+        parse_decision (Callable[[str], bool]): The parse decision parameter.
+    """
     for line in response.strip().splitlines():
         line = line.strip()
         if not line:
@@ -184,7 +190,7 @@ def _parse_validation_response(
 def batch_transform(
     items: Sequence[T],
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     prompt_builder: Callable[[list[tuple[int, T]]], str],
     result_parser: Callable[[str, int], R | None],
     batch_size: int = 50,
@@ -259,7 +265,12 @@ def batch_transform(
 def chunked(iterable: Iterable[T], size: int) -> Iterable[list[T]]:
     """Yield successive chunks of given size from iterable.
 
-    More memory-efficient than slicing for large iterables.
+    Args:
+        iterable (Iterable[T]): The iterable parameter.
+        size (int): The size parameter.
+
+    Returns:
+        Iterable[list[T]]: A list of Iterable[list[T]].
     """
     chunk: list[T] = []
     for item in iterable:
@@ -272,5 +283,13 @@ def chunked(iterable: Iterable[T], size: int) -> Iterable[list[T]]:
 
 
 def filter_by_indices(items: Sequence[T], valid_indices: set[int]) -> list[T]:
-    """Filter sequence keeping only items at valid indices."""
+    """Filter sequence keeping only items at valid indices.
+
+    Args:
+        items (Sequence[T]): The items parameter.
+        valid_indices (set[int]): The valid indices parameter.
+
+    Returns:
+        list[T]: A list of list[T].
+    """
     return [item for i, item in enumerate(items) if i in valid_indices]

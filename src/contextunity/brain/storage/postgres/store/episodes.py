@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, List
+from abc import ABC
 
+from contextunity.core.types import JsonDict, JsonValue
+
+from .base import PostgresStoreBase
 from .helpers import Json, execute, fetch_all, vec
 
 
-class EpisodesMixin:
+class EpisodesMixin(PostgresStoreBase, ABC):
     """Mixin for episodic memory operations."""
 
     async def add_episode(
@@ -17,13 +20,13 @@ class EpisodesMixin:
         user_id: str,
         content: str,
         tenant_id: str,
-        embedding: List[float] | None = None,
-        metadata: dict = None,
+        embedding: list[float] | None = None,
+        metadata: JsonDict | None = None,
         session_id: str | None = None,
     ) -> None:
         """Add an episodic event."""
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
-            await execute(
+            _ = await execute(
                 conn,
                 """
                 INSERT INTO episodic_events (id, tenant_id, user_id, session_id, content, embedding, metadata)
@@ -42,7 +45,7 @@ class EpisodesMixin:
 
     async def get_recent_episodes(
         self, *, user_id: str, tenant_id: str, limit: int = 5
-    ) -> List[dict]:
+    ) -> list[JsonDict]:
         """Get recent episodes for a user."""
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             return await fetch_all(
@@ -61,13 +64,13 @@ class EpisodesMixin:
         user_id: str,
         tenant_id: str = "default",
         key: str,
-        value: Any,
+        value: JsonValue,
         confidence: float = 1.0,
         source_id: str | None = None,
     ) -> None:
         """Upsert a user fact."""
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
-            await execute(
+            _ = await execute(
                 conn,
                 """
                 INSERT INTO user_facts (tenant_id, user_id, fact_key, fact_value, confidence, source_id, updated_at)
@@ -91,7 +94,7 @@ class EpisodesMixin:
         *,
         user_id: str,
         tenant_id: str = "default",
-    ) -> List[dict]:
+    ) -> list[JsonDict]:
         """Get all facts for a user.
 
         Returns list of dicts with: fact_key, fact_value, confidence, updated_at.
@@ -116,7 +119,7 @@ class EpisodesMixin:
         tenant_id: str = "default",
         older_than_days: int = 30,
         limit: int = 100,
-    ) -> List[dict]:
+    ) -> list[JsonDict]:
         """Get episodes older than N days for distillation.
 
         Returns list of dicts with: id, user_id, content, metadata, created_at.
@@ -140,7 +143,7 @@ class EpisodesMixin:
         *,
         tenant_id: str = "default",
         older_than_days: int = 30,
-        episode_ids: List[str] | None = None,
+        episode_ids: list[str] | None = None,
     ) -> int:
         """Delete episodes older than N days (or by explicit IDs).
 
@@ -172,7 +175,7 @@ class EpisodesMixin:
         self,
         *,
         tenant_id: str = "default",
-    ) -> dict:
+    ) -> JsonDict:
         """Get episode count and date range for a tenant."""
         async with await self.tenant_connection(tenant_id) as conn:
             rows = await fetch_all(

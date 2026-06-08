@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import str_list_as_json
+from contextunity.core.types import JsonDict
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 logger = get_contextunit_logger(__name__)
 
@@ -14,21 +14,33 @@ logger = get_contextunit_logger(__name__)
 class BookAnalyzer:
     """Handles batch analysis and chunking of book content."""
 
-    def __init__(self, core_cfg: Config) -> None:
-        self.core_cfg = core_cfg
+    def __init__(self, core_cfg: BrainConfig) -> None:
+        """Initialize a new instance of BookAnalyzer.
 
-    def analyze_batch(self, chunks: list[str]) -> list[dict[str, Any]]:
-        """Analyze book chunks in batch for themes and topics."""
+        Args:
+            core_cfg (BrainConfig): The core cfg parameter.
+        """
+        self.core_cfg: BrainConfig = core_cfg
+
+    def analyze_batch(self, chunks: list[str]) -> list[JsonDict]:
+        """Analyze book chunks in batch for themes and topics.
+
+        Args:
+            chunks (list[str]): The chunks parameter.
+
+        Returns:
+            list[JsonDict]: A list of list[JsonDict].
+        """
         # This would use LLM to analyze book content
         # For now, return basic analysis
-        analyses = []
+        analyses: list[JsonDict] = []
 
         for i, chunk in enumerate(chunks):
-            analysis = {
-                "chunk_id": i,
+            analysis: JsonDict = {
+                "chunk_id": str(i),
                 "content": chunk,
-                "themes": self._extract_themes_basic(chunk),
-                "topics": self._extract_topics_basic(chunk),
+                "themes": str_list_as_json(self._extract_themes_basic(chunk)),
+                "topics": str_list_as_json(self._extract_topics_basic(chunk)),
                 "sentiment": "neutral",  # placeholder
             }
             analyses.append(analysis)
@@ -36,9 +48,16 @@ class BookAnalyzer:
         return analyses
 
     def _extract_themes_basic(self, text: str) -> list[str]:
-        """Basic theme extraction (can be enhanced with LLM)."""
+        """Basic theme extraction (can be enhanced with LLM).
+
+        Args:
+            text (str): The text parameter.
+
+        Returns:
+            list[str]: A list of list[str].
+        """
         # Simple keyword-based theme detection
-        themes = []
+        themes: list[str] = []
 
         text_lower = text.lower()
 
@@ -56,9 +75,16 @@ class BookAnalyzer:
         return themes[:3]  # Limit to top 3 themes
 
     def _extract_topics_basic(self, text: str) -> list[str]:
-        """Basic topic extraction."""
+        """Basic topic extraction.
+
+        Args:
+            text (str): The text parameter.
+
+        Returns:
+            list[str]: A list of list[str].
+        """
         # Simple sentence start analysis
-        topics = []
+        topics: list[str] = []
         sentences = text.split(".")
 
         for sentence in sentences[:5]:  # Check first 5 sentences
@@ -71,10 +97,16 @@ class BookAnalyzer:
 
         return topics[:3]
 
-    def chunk_by_chapters(
-        self, content: str, chapters: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
-        """Split content by chapter boundaries."""
+    def chunk_by_chapters(self, content: str, chapters: list[JsonDict]) -> list[JsonDict]:
+        """Split content by chapter boundaries.
+
+        Args:
+            content (str): The content parameter.
+            chapters (list[JsonDict]): The chapters parameter.
+
+        Returns:
+            list[JsonDict]: A list of list[JsonDict].
+        """
         if not chapters:
             return [{"content": content, "chapter": "Full Book", "start_page": 1}]
 
@@ -83,7 +115,14 @@ class BookAnalyzer:
         return [{"content": content, "chapter": "Full Book", "start_page": 1}]
 
     def estimate_reading_time(self, text: str) -> int:
-        """Estimate reading time in minutes."""
+        """Estimate reading time in minutes.
+
+        Args:
+            text (str): The text parameter.
+
+        Returns:
+            int: The resulting integer value.
+        """
         words = len(text.split())
         # Average reading speed: 200-250 words per minute
         return max(1, words // 225)

@@ -13,26 +13,34 @@ class ContentNormalizer:
     """Handles text cleaning and normalization for book content."""
 
     def __init__(self) -> None:
+        """Initialize a new instance of ContentNormalizer."""
         # Common patterns to clean
-        self._header_patterns = [
+        self._header_patterns: list[str] = [
             r"^Chapter\s+\d+.*$",  # Chapter headers
             r"^Page\s+\d+.*$",  # Page numbers
             r"^\d+\s*$",  # Standalone numbers
         ]
 
-        self._footer_patterns = [
+        self._footer_patterns: list[str] = [
             r".*Page\s+\d+$",  # Page footers
             r".*\d{4}.*",  # Copyright years at end
         ]
 
     def clean_text(self, text: str) -> str:
-        """Clean and normalize extracted text."""
+        """Clean and normalize extracted text.
+
+        Args:
+            text (str): The text parameter.
+
+        Returns:
+            str: The resulting string value.
+        """
         if not text:
             return ""
 
         # Split into lines for processing
         lines = text.split("\n")
-        cleaned_lines = []
+        cleaned_lines: list[str] = []
 
         for line in lines:
             line = line.strip()
@@ -54,7 +62,14 @@ class ContentNormalizer:
         return "\n".join(cleaned_lines)
 
     def _is_header_footer(self, line: str) -> bool:
-        """Check if line is a header or footer to be removed."""
+        """Check if line is a header or footer to be removed.
+
+        Args:
+            line (str): The line parameter.
+
+        Returns:
+            bool: True if the operation was successful, False otherwise.
+        """
         # Check header patterns
         for pattern in self._header_patterns:
             if re.match(pattern, line, re.IGNORECASE):
@@ -68,7 +83,14 @@ class ContentNormalizer:
         return False
 
     def _clean_line(self, line: str) -> str:
-        """Clean individual line."""
+        """Clean individual line.
+
+        Args:
+            line (str): The line parameter.
+
+        Returns:
+            str: The resulting string value.
+        """
         # Remove extra whitespace
         line = re.sub(r"\s+", " ", line)
 
@@ -84,7 +106,14 @@ class ContentNormalizer:
         return line.strip()
 
     def normalize_unicode(self, text: str) -> str:
-        """Normalize problematic Unicode characters."""
+        """Normalize problematic Unicode characters.
+
+        Args:
+            text (str): The text parameter.
+
+        Returns:
+            str: The resulting string value.
+        """
         # Common PDF extraction issues
         replacements = {
             "ﬁ": "fi",  # fi ligature
@@ -106,11 +135,19 @@ class ContentNormalizer:
         return text
 
     def split_into_chunks(self, text: str, max_chunk_size: int = 2000) -> list[str]:
-        """Split text into manageable chunks."""
+        """Split text into manageable chunks.
+
+        Args:
+            text (str): The text parameter.
+            max_chunk_size (int): The max chunk size parameter.
+
+        Returns:
+            list[str]: A list of list[str].
+        """
         if len(text) <= max_chunk_size:
             return [text]
 
-        chunks = []
+        chunks: list[str] = []
         current_chunk = ""
 
         # Split by paragraphs first

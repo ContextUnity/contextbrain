@@ -44,7 +44,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from contextunity.core import get_contextunit_logger
 
@@ -144,8 +143,8 @@ def load_text_files(
     directory: Path,
     *,
     extensions: tuple[str, ...] = (".txt", ".md"),
-    transform: Callable[[LoadedFile], Any] | None = None,
-) -> list[Any]:
+    transform: Callable[[LoadedFile], LoadedFile | None] | None = None,
+) -> list[LoadedFile]:
     """Load all text files from directory.
 
     Args:
@@ -160,7 +159,7 @@ def load_text_files(
         logger.warning("Directory does not exist: %s", directory)
         return []
 
-    results = []
+    results: list[LoadedFile] = []
     for path in iter_files(directory, extensions=extensions):
         if loaded := read_text_file(path):
             result = transform(loaded) if transform else loaded

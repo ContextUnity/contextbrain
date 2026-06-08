@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from abc import ABC
 
 from contextunity.core import get_contextunit_logger
+from psycopg import AsyncConnection, sql
 from psycopg_pool import AsyncConnectionPool
 
 from ..models import KnowledgeStoreInterface
@@ -17,7 +19,7 @@ logger = get_contextunit_logger(__name__)
 get_contextunit_logger("psycopg.pool").setLevel(logging.ERROR)
 
 
-class PostgresStoreBase(KnowledgeStoreInterface):
+class PostgresStoreBase(KnowledgeStoreInterface, ABC):
     """Base PostgreSQL store with connection pool and schema isolation.
 
     Supports schema isolation for unified database deployments where
@@ -36,14 +38,19 @@ class PostgresStoreBase(KnowledgeStoreInterface):
         pool_max_size: int = 20,
         schema: str = "brain",
     ):
-        self._dsn = dsn
-        self._pool_min_size = pool_min_size
-        self._pool_max_size = pool_max_size
-        self._schema = schema
+        """Initialize a new instance of PostgresStoreBase."""
+        self._dsn: str = dsn
+        self._pool_min_size: int = pool_min_size
+        self._pool_max_size: int = pool_max_size
+        self._schema: str = schema
         self._pool: AsyncConnectionPool | None = None
 
     async def _get_pool(self) -> AsyncConnectionPool:
-        """Get or create async connection pool."""
+        """Get or create async connection pool.
+
+        Returns:
+            AsyncConnectionPool: An instance of AsyncConnectionPool.
+        """
         if self._pool is None or self._pool.closed:
             self._pool = AsyncConnectionPool(
                 self._dsn,
@@ -60,22 +67,20 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                     "keepalives_count": 5,
                 },
             )
-        if not self._pool._opened:
+        if self._pool.closed:
             await self._pool.open()
         return self._pool
 
-    async def _configure_connection(self, conn):
+    async def _configure_connection(self, conn: AsyncConnection[object]) -> None:
         """Configure each connection from the pool.
 
-        Sets the search_path to use Brain schema + public (for extensions).
-        This ensures schema isolation in unified database deployments.
-
-        NOTE: psycopg3 defaults to autocommit=False, so any SQL here opens
-        an implicit transaction. The pool expects idle connections after
-        configure — use autocommit to avoid INTRANS state.
+        Args:
+            conn (Any): The conn parameter.
         """
         await conn.set_autocommit(True)
-        await conn.execute(f"SET search_path TO {self._schema}, public")
+        _ = await conn.execute(
+            sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self._schema))
+        )
         await conn.set_autocommit(False)
         logger.debug("Connection configured with schema: %s", self._schema)
 
@@ -99,6 +104,7 @@ class PostgresStoreBase(KnowledgeStoreInterface):
 
         @asynccontextmanager
         async def _ctx():
+            """ctx."""
             pool = await self._get_pool()
             async with pool.connection() as conn:
                 try:
@@ -115,8 +121,10 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                     # if set_tenant_context fails.  Application-level
                     # WHERE tenant_id = %s still provides isolation.
                     logger.warning(
-                        "Failed to set RLS tenant context for '%s': %s. "
-                        "Application-level tenant filtering still active.",
+                        (
+                            "Failed to set RLS tenant context for '%s': %s. "
+                            "Application-level tenant filtering still active."
+                        ),
                         tenant_id,
                         e,
                     )
@@ -163,21 +171,27 @@ class PostgresStoreBase(KnowledgeStoreInterface):
             await conn.set_autocommit(True)
             try:
                 # 1. Ensure schema namespace exists
-                await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self._schema}")
+                _ = await conn.execute(
+                    sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(self._schema))
+                )
 
                 # 2. Extensions (require superuser — graceful if pre-provisioned)
                 for ext_stmt in build_extension_sql():
                     try:
-                        await conn.execute(ext_stmt)
+                        _ = await conn.execute(ext_stmt.encode())
                     except Exception as ext_err:
                         logger.warning(
-                            "Cannot create extension (needs superuser): %s — "
-                            "ensure extensions are pre-provisioned",
+                            (
+                                "Cannot create extension (needs superuser): %s — "
+                                "ensure extensions are pre-provisioned"
+                            ),
                             ext_err,
                         )
 
                 # 3. Set search_path for this session
-                await conn.execute(f"SET search_path TO {self._schema}, public")
+                _ = await conn.execute(
+                    sql.SQL("SET search_path TO {}, public").format(sql.Identifier(self._schema))
+                )
 
                 # 4. Run all DDL statements (all use IF NOT EXISTS)
                 statements = build_schema_sql(
@@ -185,14 +199,14 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                     include_commerce=include_commerce,
                 )
                 for stmt in statements:
-                    await conn.execute(stmt)
+                    _ = await conn.execute(stmt.encode())
 
                 # 5. Column backfill + constraint upgrades
                 # Handles columns/constraints added in code but missing
                 # from tables that already existed on disk.
                 for stmt in build_column_backfill_sql():
                     try:
-                        await conn.execute(stmt)
+                        _ = _ = await conn.execute(stmt.encode())
                     except Exception as backfill_err:
                         logger.warning("Column backfill skipped: %s", backfill_err)
 
@@ -201,7 +215,7 @@ class PostgresStoreBase(KnowledgeStoreInterface):
                 # bypassed, PostgreSQL blocks cross-tenant data access.
                 for stmt in build_rls_sql():
                     try:
-                        await conn.execute(stmt)
+                        _ = _ = await conn.execute(stmt.encode())
                     except Exception as rls_err:
                         logger.warning(
                             "RLS policy skipped (needs superuser or table owner): %s",
@@ -226,5 +240,9 @@ class PostgresStoreBase(KnowledgeStoreInterface):
 
     @property
     def schema(self) -> str:
-        """Current schema name."""
+        """Current schema name.
+
+        Returns:
+            str: The resulting string value.
+        """
         return self._schema

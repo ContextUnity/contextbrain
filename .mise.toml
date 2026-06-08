@@ -54,8 +54,8 @@ description = "Start Brain gRPC service (port from BRAIN_PORT env, default 50051
 run = "uv run contextbrain serve"
 
 [tasks.dev]
-description = "Start Brain gRPC service in dev mode"
-run = "uv run contextbrain serve"
+description = "Start Brain gRPC service in dev mode with autoreload"
+run = "uv run watchfiles --filter python 'uv run contextbrain serve' src/"
 
 # =============================================================================
 # Database

@@ -6,6 +6,7 @@ Usage: `from .store import PostgresKnowledgeStore`
 """
 
 from .base import PostgresStoreBase
+from .blackboard import BlackboardStoreMixin
 from .episodes import EpisodesMixin
 from .graph import GraphMixin
 from .search import SearchMixin
@@ -19,6 +20,7 @@ class PostgresKnowledgeStore(
     TracesMixin,
     TaxonomyMixin,
     SearchMixin,
+    BlackboardStoreMixin,
     PostgresStoreBase,
 ):
     """PostgreSQL knowledge store with pgvector and ltree support."""

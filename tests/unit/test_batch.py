@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from contextunity.brain.core.config import Config
+from contextunity.brain.core.config import BrainConfig
 from contextunity.brain.ingestion.rag import (
     BatchResult,
     batch_transform,
@@ -18,9 +18,9 @@ from contextunity.brain.ingestion.rag.core.batch import _parse_validation_respon
 
 
 @pytest.fixture()
-def core_cfg() -> Config:
+def core_cfg() -> BrainConfig:
     # Minimal config accepted by VertexLLM (used by ingestion llm utilities).
-    return Config.model_validate({"vertex": {"project_id": "test", "location": "us-central1"}})
+    return BrainConfig.model_validate({"vertex": {"project_id": "test", "location": "us-central1"}})
 
 
 class TestBatchResult:
@@ -104,7 +104,7 @@ class TestParseValidationResponse:
 class TestBatchValidate:
     """Tests for batch_validate function."""
 
-    def test_returns_empty_set_for_empty_input(self, core_cfg: Config) -> None:
+    def test_returns_empty_set_for_empty_input(self, core_cfg: BrainConfig) -> None:
         result = batch_validate(
             [],
             core_cfg=core_cfg,
@@ -114,7 +114,7 @@ class TestBatchValidate:
         assert result == set()
 
     @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
-    def test_validates_items_in_batches(self, mock_llm: MagicMock, core_cfg: Config) -> None:
+    def test_validates_items_in_batches(self, mock_llm: MagicMock, core_cfg: BrainConfig) -> None:
         mock_llm.return_value = "0\tVALUABLE\n1\tNOT_VALUABLE\n2\tVALUABLE"
         items = ["item0", "item1", "item2"]
 
@@ -131,7 +131,7 @@ class TestBatchValidate:
         mock_llm.assert_called_once()
 
     @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
-    def test_splits_into_batches(self, mock_llm: MagicMock, core_cfg: Config) -> None:
+    def test_splits_into_batches(self, mock_llm: MagicMock, core_cfg: BrainConfig) -> None:
         # First batch: all valid, second batch: one valid
         mock_llm.side_effect = [
             "0\tVALUABLE\n1\tVALUABLE",
@@ -152,7 +152,7 @@ class TestBatchValidate:
         assert mock_llm.call_count == 2
 
     @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
-    def test_on_error_keep_preserves_all(self, mock_llm: MagicMock, core_cfg: Config) -> None:
+    def test_on_error_keep_preserves_all(self, mock_llm: MagicMock, core_cfg: BrainConfig) -> None:
         mock_llm.side_effect = Exception("LLM error")
         items = ["item0", "item1"]
 
@@ -167,7 +167,7 @@ class TestBatchValidate:
         assert result == {0, 1}
 
     @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
-    def test_on_error_drop_removes_all(self, mock_llm: MagicMock, core_cfg: Config) -> None:
+    def test_on_error_drop_removes_all(self, mock_llm: MagicMock, core_cfg: BrainConfig) -> None:
         mock_llm.side_effect = Exception("LLM error")
         items = ["item0", "item1"]
 
@@ -185,7 +185,7 @@ class TestBatchValidate:
 class TestBatchTransform:
     """Tests for batch_transform function."""
 
-    def test_returns_empty_dict_for_empty_input(self, core_cfg: Config) -> None:
+    def test_returns_empty_dict_for_empty_input(self, core_cfg: BrainConfig) -> None:
         result = batch_transform(
             [],
             core_cfg=core_cfg,
@@ -197,7 +197,7 @@ class TestBatchTransform:
 
     @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_transforms_items_and_parses_results(
-        self, mock_llm: MagicMock, core_cfg: Config
+        self, mock_llm: MagicMock, core_cfg: BrainConfig
     ) -> None:
         mock_llm.return_value = "0\tsummary_0\n1\tsummary_1"
         items = ["content0", "content1"]
@@ -218,7 +218,7 @@ class TestBatchTransform:
 
     @patch("contextunity.brain.ingestion.rag.core.batch.llm_generate")
     def test_skips_items_when_parser_returns_none(
-        self, mock_llm: MagicMock, core_cfg: Config
+        self, mock_llm: MagicMock, core_cfg: BrainConfig
     ) -> None:
         mock_llm.return_value = "0\tgood\n1\t\n2\tgood"  # idx 1 is empty
         items = ["a", "b", "c"]

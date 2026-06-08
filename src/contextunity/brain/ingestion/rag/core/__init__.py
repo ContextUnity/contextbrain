@@ -20,6 +20,7 @@ from .types import IngestionMetadata, RawData, ShadowRecord
 from .utils import (
     clean_str_list,
     get_graph_enrichment,
+    is_str_dict,
     load_taxonomy_safe,
     normalize_ambiguous_unicode,
     normalize_clean_text,
@@ -51,5 +52,6 @@ __all__ = [
     "resolve_workers",
     "clean_str_list",
     "get_graph_enrichment",
+    "is_str_dict",
     "load_taxonomy_safe",
 ]

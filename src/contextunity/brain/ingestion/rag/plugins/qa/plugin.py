@@ -4,19 +4,29 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.types import JsonDict
+from typing_extensions import override
 
 if TYPE_CHECKING:
     from .transformer import QATransformer
 
-from contextunity.brain.core import Config
+from contextunity.core.narrowing import (
+    as_json_dict_list,
+    as_str,
+    as_str_list,
+    json_dict_list_as_json,
+)
+
+from contextunity.brain.core import BrainConfig
 from contextunity.brain.core.types import StructData
 
 from ...core import (
-    IngestionMetadata,
     IngestionPlugin,
     RawData,
     ShadowRecord,
@@ -52,36 +62,76 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
     """Plugin for processing conversational Q&A transcripts with speaker identification."""
 
     @property
+    @override
     def source_type(self) -> str:
+        """Source type.
+
+        Returns:
+            str: The resulting string value.
+        """
         return "qa"
 
     @property
+    @override
     def default_source_dir(self) -> str:
+        """Default source dir.
+
+        Returns:
+            str: The resulting string value.
+        """
         return "qa"
 
     def __init__(self) -> None:
+        """Initialize a new instance of QAPlugin."""
         super().__init__()
-        self._core_cfg: Config | None = None
+        self._core_cfg: BrainConfig | None = None
         self._transformer: QATransformer | None = None
 
-    def set_core_cfg(self, core_cfg: Config) -> None:
+    def set_core_cfg(self, core_cfg: BrainConfig) -> None:
+        """Configure the core cfg settings.
+
+        Args:
+            core_cfg (BrainConfig): The core cfg parameter.
+        """
         self._core_cfg = core_cfg
 
-    def _require_core_cfg(self) -> Config:
+    def _require_core_cfg(self) -> BrainConfig:
+        """require core cfg.
+
+        Returns:
+            BrainConfig: An instance of BrainConfig.
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         if self._core_cfg is None:
-            raise ValueError("QAPlugin requires core_cfg (contextunity.brain.core.config.Config)")
+            raise ConfigurationError(
+                "QAPlugin requires core_cfg (contextunity.brain.core.config.BrainConfig)"
+            )
         return self._core_cfg
 
     def _get_transformer(self) -> QATransformer:
-        """Lazy initialization of transformer."""
+        """Lazy initialization of transformer.
+
+        Returns:
+            QATransformer: An instance of QATransformer.
+        """
         if self._transformer is None:
             from .transformer import QATransformer
 
             self._transformer = QATransformer(self._require_core_cfg())
         return self._transformer
 
+    @override
     def load(self, assets_path: str) -> list[RawData]:
-        """Load Q&A transcripts from text files."""
+        """Load Q&A transcripts from text files.
+
+        Args:
+            assets_path (str): The assets path parameter.
+
+        Returns:
+            list[RawData]: A list of list[RawData].
+        """
         # Resolve directory with q&a fallback (supports both "qa" and "q&a" directory names)
         if not (source_dir := self._resolve_source_dir(assets_path, alternatives=("q&a",))):
             return []
@@ -103,7 +153,7 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
                 # UI-visible session_title is built later by appending the detected speaker.
                 source_title = self._derive_session_title(text_file)
 
-                metadata: IngestionMetadata = {
+                metadata: JsonDict = {
                     "session_title": source_title,
                     "source_title": source_title,
                 }
@@ -148,31 +198,41 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         return "Q&A Session"
 
     def _derive_session_title(self, path: Path) -> str:
-        """Derive session title from filename."""
+        """Derive session title from filename.
+
+        Args:
+            path (Path): The filesystem path.
+
+        Returns:
+            str: The resulting string value.
+        """
         title = re.sub(r"[_\-]+", " ", path.stem)
         title = re.sub(r"\s*transcript\s*[\d\s]*", "", title, flags=re.IGNORECASE)
         title = re.sub(r"\s+\d{5,}", "", title)
         title = re.sub(r"\s+", " ", title).strip()
         return title or path.stem
 
+    @override
     def transform(
         self,
         data: list[RawData],
         enrichment_func: Callable[[str], GraphEnrichmentResult],
         taxonomy_path: Path | None = None,
         config: RagIngestionConfig | None = None,
-        core_cfg: Config | None = None,
+        core_cfg: BrainConfig | None = None,
         **kwargs: object,
     ) -> list[ShadowRecord]:
         """Transform conversational transcripts into Q&A chunks.
 
-        Process:
-        1. Split by speaker changes (LLM-based)
-        2. Merge short interruptions (< 5 words) with previous segment
-        3. Group consecutive speakers into logical chunks (400-1500 chars)
-        4. Use LLM to identify topic and primary speaker (batch processing)
-        5. Add taxonomy category to question header
-        6. Create ShadowRecords with proper metadata
+        Args:
+            data (list[RawData]): The raw data dictionary or object.
+            enrichment_func (Callable[[str], GraphEnrichmentResult]): The enrichment func parameter.
+            taxonomy_path (Path | None): The taxonomy path parameter.
+            config (RagIngestionConfig | None): The configuration settings dict or object.
+            core_cfg (BrainConfig | None): The core cfg parameter.
+
+        Returns:
+            list[ShadowRecord]: A list of list[ShadowRecord].
         """
         _ = kwargs
         self._core_cfg = core_cfg
@@ -193,8 +253,8 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
 
         for idx, raw in enumerate(data, 1):
             # Extract session title (prefer metadata, then first line, then default)
-            session_title = raw.metadata.get("session_title") or self._extract_session_title(
-                raw.content
+            session_title = str(
+                raw.metadata.get("session_title") or self._extract_session_title(raw.content)
             )
 
             logger.info(
@@ -206,27 +266,20 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
 
             # Extract session host/interviewer (identified during preprocess)
             # Used for fallback headers: "Speaker Name sharing thoughts on 'topic' with {Host}"
-            session_host = ""
-            if isinstance(raw.metadata, dict):
-                session_host = str(raw.metadata.get("session_host") or "").strip()
+            session_host = str(raw.metadata.get("session_host") or "").strip()
 
             # 1. Split by speaker changes (prefer precomputed turns from preprocess)
             interactions: list[dict[str, str]] = []
-            if isinstance(raw.metadata, dict):
-                interactions_data = raw.metadata.get("interactions", [])
-                if isinstance(interactions_data, list):
-                    for it in interactions_data:
-                        if not isinstance(it, dict):
-                            continue
-                        speaker = it.get("speaker")
-                        text = it.get("text")
-                        if isinstance(speaker, str) and isinstance(text, str) and text.strip():
-                            interactions.append(
-                                {
-                                    "speaker": speaker.strip() or "Unknown",
-                                    "text": text.strip(),
-                                }
-                            )
+            for it_raw in as_json_dict_list(raw.metadata.get("interactions", [])):
+                speaker = as_str(it_raw.get("speaker"))
+                text = as_str(it_raw.get("text"))
+                if text.strip():
+                    interactions.append(
+                        {
+                            "speaker": speaker.strip() or "Unknown",
+                            "text": text.strip(),
+                        }
+                    )
 
             if interactions:
                 logger.info("    Using precomputed speaker turns from CleanText metadata")
@@ -259,7 +312,7 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
                     i,
                     {
                         "topic": "Discussion",
-                        "primary_speaker": chunk.get("primary_speaker", "Unknown"),
+                        "primary_speaker": as_str(chunk.get("primary_speaker"), default="Unknown"),
                         "category": "",
                     },
                 )
@@ -268,7 +321,7 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
                     analysis=analysis,
                     session_title=session_title,
                     enrichment_func=enrichment_func,
-                    persona_name=persona_name,
+                    _persona_name=persona_name,
                     session_host=session_host,
                     initial_keywords=raw.metadata.get("keywords", []),
                     config=config,
@@ -279,8 +332,17 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         return shadow_records
 
     def _get_taxonomy_categories(self, taxonomy: StructData) -> list[str]:
-        """Extract category names from taxonomy for prompt."""
+        """Extract category names from taxonomy for prompt.
+
+        Args:
+            taxonomy (StructData): The taxonomy parameter.
+
+        Returns:
+            list[str]: A list of list[str].
+        """
         categories = taxonomy.get("categories", {})
+        if not isinstance(categories, dict):
+            return []
         return [cat_name.replace("_", " ").title() for cat_name in categories.keys()]
 
     def merge_interruptions(self, interactions: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -322,11 +384,11 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
 
     def _create_shadow_record(
         self,
-        chunk: dict[str, Any],
+        chunk: JsonDict,
         analysis: dict[str, str],
         session_title: str,
-        enrichment_func: Any,
-        persona_name: str,
+        enrichment_func: Callable[[str], GraphEnrichmentResult],
+        _persona_name: str,
         *,
         session_host: str = "",
         initial_keywords: list[str] | object | None = None,
@@ -335,23 +397,19 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         """Create a ShadowRecord from a chunk with analysis.
 
         Args:
-            chunk: Chunk dict with combined_text and primary_speaker
-            analysis: Analysis dict with topic, primary_speaker, and category
-            session_title: Session title
-            enrichment_func: Function to get graph context
-            persona_name: Name of the persona/expert speaker
-            session_host: Session host/interviewer name (from preprocess)
-            config: Optional config dict for validation settings
+            chunk (JsonDict): The chunk parameter.
+            analysis (dict[str, str]): The analysis parameter.
+            session_title (str): The session title parameter.
+            enrichment_func (Any): The enrichment func parameter.
+            _persona_name (str): The persona name parameter.
 
         Returns:
-            ShadowRecord ready for ingestion, or None if answer is not valuable
+            ShadowRecord | None: An instance of ShadowRecord | None.
         """
-        combined_text = chunk["combined_text"]
-        topic = analysis.get("topic", "Discussion")
+        combined_text = as_str(chunk.get("combined_text"))
+        topic = as_str(analysis.get("topic"), default="Discussion")
 
-        interactions = (
-            chunk.get("interactions") if isinstance(chunk.get("interactions"), list) else []
-        )
+        interactions = as_json_dict_list(chunk.get("interactions"))
 
         # Load speaker corrections (from video.corrections or qa.corrections)
         # These handle transcription errors like "John Doe" → "Speaker Name"
@@ -361,7 +419,14 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
             corrections.update(config.qa.corrections)
 
         def apply_corrections(name: str) -> str:
-            """Apply corrections to speaker name."""
+            """Apply corrections to speaker name.
+
+            Args:
+                name (str): The name of the entity.
+
+            Returns:
+                str: The resulting string value.
+            """
             for wrong, correct in corrections.items():
                 if wrong.casefold() in name.casefold():
                     name = name.replace(wrong, correct)
@@ -376,16 +441,14 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         norm_to_original: dict[str, str] = {}
 
         for it in interactions:
-            if not isinstance(it, dict):
-                continue
-            if not (sp := it.get("speaker")) or not isinstance(sp, str):
-                continue
-            if not (tx := it.get("text")) or not isinstance(tx, str):
+            sp = as_str(it.get("speaker"))
+            tx = as_str(it.get("text"))
+            if not sp or not tx:
                 continue
             # Apply corrections to speaker name before normalizing
             corrected_sp = apply_corrections(sp.strip()) or "Unknown"
             norm = corrected_sp.casefold()
-            norm_to_original.setdefault(norm, corrected_sp)
+            _ = norm_to_original.setdefault(norm, corrected_sp)
             speaker_word_counts[norm] += len(tx.split())
 
         # Infer answer speaker: dominant speaker in THIS chunk by word count
@@ -406,17 +469,12 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         )
 
         # Build answer text from answer speaker only
-        answer_parts = [
-            tx.strip()
-            for it in interactions
-            if isinstance(it, dict)
-            and (sp := it.get("speaker"))
-            and isinstance(sp, str)
-            and (tx := it.get("text"))
-            and isinstance(tx, str)
-            and tx.strip()
-            and sp.strip().casefold() == ans_norm
-        ]
+        answer_parts: list[str] = []
+        for it in interactions:
+            sp = as_str(it.get("speaker"))
+            tx = as_str(it.get("text"))
+            if tx.strip() and sp.strip().casefold() == ans_norm:
+                answer_parts.append(tx.strip())
 
         answer_text = " ".join(answer_parts).strip()
         if not answer_text:
@@ -450,18 +508,13 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         # Build question text from question speaker's interactions
         # Extract question text from question speaker's turns
         q_norm = question_speaker.casefold()
-        question_parts = [
-            tx.strip()
-            for it in interactions
-            if isinstance(it, dict)
-            and question_speaker != "Unknown"
-            and (sp := it.get("speaker"))
-            and isinstance(sp, str)
-            and (tx := it.get("text"))
-            and isinstance(tx, str)
-            and tx.strip()
-            and sp.strip().casefold() == q_norm
-        ]
+        question_parts: list[str] = []
+        if question_speaker != "Unknown":
+            for it in interactions:
+                sp = as_str(it.get("speaker"))
+                tx = as_str(it.get("text"))
+                if tx.strip() and sp.strip().casefold() == q_norm:
+                    question_parts.append(tx.strip())
         raw_question_text = " ".join(question_parts).strip()
 
         # Validate question using LLM - filters out:
@@ -535,12 +588,16 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         keywords, _, parent_categories = get_graph_enrichment(
             text=enrichment_text, enrichment_func=enrichment_func
         )
-        base = initial_keywords if isinstance(initial_keywords, list) else []
+        base = as_str_list(initial_keywords)
         keywords = list(dict.fromkeys([*base, *keywords]))[:10]
 
         # Build shadow context (input_text)
         input_text = self._build_input_text(
-            topic, answer_speaker, answer_text, keywords, parent_categories
+            content=answer_text,
+            keywords=keywords,
+            topic=topic,
+            speaker=answer_speaker,
+            parent_categories=parent_categories,
         )
 
         # Generate stable ID
@@ -573,17 +630,17 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         return ShadowRecord(
             id=record_id,
             input_text=input_text,
-            struct_data=struct_data,
+            struct_data=dict(struct_data) if struct_data else {},
             title=display_session_title,
             source_type="qa",
         )
 
     def _build_input_text(
         self,
-        topic: str,
-        speaker: str,
         content: str,
         keywords: list[str],
+        topic: str = "",
+        speaker: str = "",
         parent_categories: list[str] | None = None,
     ) -> str:
         """Build shadow context input_text from components with natural language enrichment.
@@ -628,7 +685,14 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         return "\n".join(parts)
 
     def _is_speaker_name(self, text: str) -> bool:
-        """Check if text looks like a speaker name (e.g., 'Speaker A')."""
+        """Check if text looks like a speaker name (e.g., 'Speaker A').
+
+        Args:
+            text (str): The text parameter.
+
+        Returns:
+            bool: True if the operation was successful, False otherwise.
+        """
         # Pattern: FirstName LastName (2-3 words, capitalized)
         pattern = r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$"
         return bool(re.match(pattern, text.strip()))
@@ -636,14 +700,11 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
     def split_by_speakers_llm(self, content: str) -> list[dict[str, str]]:
         """Split content by speaker changes using LLM.
 
-        LLM identifies speakers and their segments, handling variations in formatting
-        and normalizing speaker names (e.g., "Speaker A", "A", "Speaker A Name" -> "Speaker A").
+        Args:
+            content (str): The content parameter.
 
-        This is more robust than regex because it:
-        - Handles various formatting styles (names on separate lines, inline, etc.)
-        - Normalizes speaker name variations to canonical forms
-        - Works even when speaker names aren't explicitly marked
-        - Can infer speakers from context
+        Returns:
+            list[dict[str, str]]: A list of list[dict[str, str]].
         """
         try:
             # Process in chunks if content is very long (to avoid token limits)
@@ -654,7 +715,7 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
 
             # For very long transcripts, process in chunks with overlap
             logger.info("Processing long transcript in chunks (%d chars)", len(content))
-            all_interactions = []
+            all_interactions: list[dict[str, str]] = []
             overlap_size = 500  # Overlap to avoid breaking mid-conversation
 
             for i in range(0, len(content), max_chunk_size):
@@ -675,7 +736,15 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
     def _split_by_speakers_llm_chunk(
         self, content: str, is_full: bool = True
     ) -> list[dict[str, str]]:
-        """Process a single chunk of content for speaker detection."""
+        """Process a single chunk of content for speaker detection.
+
+        Args:
+            content (str): The content parameter.
+            is_full (bool): The is full parameter.
+
+        Returns:
+            list[dict[str, str]]: A list of list[dict[str, str]].
+        """
         # Truncate to avoid token limits while preserving context
         truncated = content[:80000] if len(content) > 80000 else content
         if len(content) > 80000:
@@ -691,7 +760,7 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
             retries=3,
         )
 
-        interactions = []
+        interactions: list[dict[str, str]] = []
         for ln in text.splitlines():
             ln = ln.strip()
             if not ln:
@@ -720,22 +789,24 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         interactions: list[dict[str, str]],
         min_chars: int = 400,
         max_chars: int = 1500,
-    ) -> list[dict[str, Any]]:
+    ) -> list[JsonDict]:
         """Group consecutive speaker interactions into logical chunks.
 
-        Rules:
-        - Minimum chunk size: min_chars (default 400)
-        - Maximum chunk size: max_chars (default 1500)
-        - Never break mid-sentence
-        - Group consecutive speakers until a "significant thought" is formed
+        Args:
+            interactions (list[dict[str, str]]): The interactions parameter.
+            min_chars (int): The min chars parameter.
+            max_chars (int): The max chars parameter.
+
+        Returns:
+            list[JsonDict]: A list of list[JsonDict].
         """
         if not interactions:
             return []
 
-        groups = []
-        current_group: list[dict[str, str]] = []
+        groups: list[JsonDict] = []
+        current_group: list[JsonDict] = []
         current_len = 0
-        current_speaker = None
+        current_speaker: str | None = None
 
         for inter in interactions:
             speaker = inter["speaker"]
@@ -745,24 +816,29 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
             # Check if adding this interaction would exceed max_chars
             if current_len + text_len > max_chars and current_len >= min_chars:
                 # Finalize current group
-                combined_text = self._combine_interactions(current_group)
+                combined_text = self._combine_interactions(
+                    [
+                        {"speaker": as_str(row.get("speaker")), "text": as_str(row.get("text"))}
+                        for row in current_group
+                    ]
+                )
                 groups.append(
                     {
                         "combined_text": combined_text,
                         "primary_speaker": (
-                            current_speaker or current_group[0]["speaker"]
+                            current_speaker or as_str(current_group[0].get("speaker"))
                             if current_group
                             else "Unknown"
                         ),
-                        "interactions": current_group.copy(),
+                        "interactions": json_dict_list_as_json(current_group),
                     }
                 )
-                current_group = [inter]
+                current_group = [{"speaker": speaker, "text": text}]
                 current_len = text_len
                 current_speaker = speaker
             else:
                 # Add to current group
-                current_group.append(inter)
+                current_group.append({"speaker": speaker, "text": text})
                 current_len += text_len
                 # Track the first speaker in the group as primary
                 if current_speaker is None:
@@ -770,33 +846,45 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
 
         # Add final group if it meets minimum size
         if current_group and current_len >= min_chars:
-            combined_text = self._combine_interactions(current_group)
+            combined_text = self._combine_interactions(
+                [
+                    {"speaker": as_str(row.get("speaker")), "text": as_str(row.get("text"))}
+                    for row in current_group
+                ]
+            )
             groups.append(
                 {
                     "combined_text": combined_text,
-                    "primary_speaker": current_speaker or current_group[0]["speaker"],
-                    "interactions": current_group.copy(),
+                    "primary_speaker": current_speaker or as_str(current_group[0].get("speaker")),
+                    "interactions": json_dict_list_as_json(current_group),
                 }
             )
         elif current_group and current_len < min_chars and groups:
             # Merge small final group with last group if possible
-            last_group = groups[-1]
-            last_combined = last_group["combined_text"]
-            final_combined = self._combine_interactions(current_group)
+            last_group: JsonDict = groups[-1]
+            last_combined = as_str(last_group.get("combined_text"))
+            final_combined = self._combine_interactions(
+                [
+                    {"speaker": as_str(row.get("speaker")), "text": as_str(row.get("text"))}
+                    for row in current_group
+                ]
+            )
             merged = f"{last_combined}\n\n{final_combined}"
             if len(merged) <= max_chars:
+                prior = as_json_dict_list(last_group.get("interactions"))
                 groups[-1] = {
                     "combined_text": merged,
-                    "primary_speaker": last_group["primary_speaker"],
-                    "interactions": (last_group.get("interactions") or []) + current_group,
+                    "primary_speaker": as_str(last_group.get("primary_speaker")),
+                    "interactions": json_dict_list_as_json(prior + current_group),
                 }
             else:
                 # Can't merge, create separate small chunk
                 groups.append(
                     {
                         "combined_text": final_combined,
-                        "primary_speaker": current_speaker or current_group[0]["speaker"],
-                        "interactions": current_group.copy(),
+                        "primary_speaker": current_speaker
+                        or as_str(current_group[0].get("speaker")),
+                        "interactions": json_dict_list_as_json(current_group),
                     }
                 )
 
@@ -805,9 +893,13 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
     def _combine_interactions(self, interactions: list[dict[str, str]]) -> str:
         """Combine interactions into clean transcript format.
 
-        Ensures no mid-sentence breaks by preserving sentence boundaries.
+        Args:
+            interactions (list[dict[str, str]]): The interactions parameter.
+
+        Returns:
+            str: The resulting string value.
         """
-        parts = []
+        parts: list[str] = []
         for inter in interactions:
             speaker = inter["speaker"]
             text = inter["text"].strip()
@@ -819,16 +911,17 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
 
     def _analyze_segments_batch(
         self,
-        chunks: list[dict[str, Any]],
+        chunks: list[JsonDict],
         taxonomy_categories: list[str] | None = None,
     ) -> dict[int, dict[str, str]]:
         """Batch LLM processing to identify topic, primary speaker, and category for each chunk.
 
         Args:
-            chunks: List of chunk dictionaries
-            taxonomy_categories: Optional list of taxonomy category names
+            chunks (list[JsonDict]): The chunks parameter.
+            taxonomy_categories (list[str] | None): The taxonomy categories parameter.
 
-        Returns dict mapping chunk index to analysis results.
+        Returns:
+            dict[int, dict[str, str]]: A dictionary containing the results.
         """
         if not chunks:
             return {}
@@ -837,9 +930,9 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
         logger.info("    Analyzing %d chunks with LLM...", total_chunks)
 
         # Prepare batch prompt
-        batch_items = []
+        batch_items: list[JsonDict] = []
         for i, chunk in enumerate(chunks):
-            combined_text = chunk["combined_text"]
+            combined_text = as_str(chunk.get("combined_text"))
             # Truncate to avoid token limits (keep first 2000 chars)
             truncated = combined_text[:2000] + ("..." if len(combined_text) > 2000 else "")
             batch_items.append(
@@ -887,7 +980,7 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
                     analyses[idx] = {
                         "topic": parts[1].strip() or "Discussion",
                         "primary_speaker": parts[2].strip()
-                        or chunks[idx].get("primary_speaker", "Unknown"),
+                        or as_str(chunks[idx].get("primary_speaker"), default="Unknown"),
                         "category": parts[3].strip() if len(parts) > 3 else "",
                     }
 
@@ -896,7 +989,9 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
                 if i not in analyses:
                     analyses[i] = {
                         "topic": "Discussion",
-                        "primary_speaker": chunks[i].get("primary_speaker", "Unknown"),
+                        "primary_speaker": as_str(
+                            chunks[i].get("primary_speaker"), default="Unknown"
+                        ),
                         "category": "",
                     }
 
@@ -906,12 +1001,19 @@ class QAPlugin(IngestionPlugin, FileLoaderMixin):
             logger.warning("LLM batch analysis failed: %s, using fallback", e)
             return self._fallback_analysis(chunks)
 
-    def _fallback_analysis(self, chunks: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
-        """Fallback analysis when LLM fails - extract topic from first sentence."""
-        analyses = {}
+    def _fallback_analysis(self, chunks: list[JsonDict]) -> dict[int, dict[str, str]]:
+        """Fallback analysis when LLM fails - extract topic from first sentence.
+
+        Args:
+            chunks (list[JsonDict]): The chunks parameter.
+
+        Returns:
+            dict[int, dict[str, str]]: A dictionary containing the results.
+        """
+        analyses: dict[int, dict[str, str]] = {}
         for i, chunk in enumerate(chunks):
-            combined_text = chunk["combined_text"]
-            primary_speaker = chunk.get("primary_speaker", "Unknown")
+            combined_text = as_str(chunk.get("combined_text"))
+            primary_speaker = as_str(chunk.get("primary_speaker"), default="Unknown")
 
             # Extract first sentence as topic (truncate to ~50 chars)
             first_sentence = combined_text.split(".")[0].strip()

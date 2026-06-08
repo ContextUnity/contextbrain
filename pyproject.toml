@@ -1,6 +1,6 @@
 [project]
 name = "contextunity-brain"
-version = "0.17.0"
+version = "0.18.0"
 description = "Semantic Memory service for ContextUnity — knowledge storage, vector search, RAG retrieval, and gRPC-native API with PostgreSQL + pgvector"
 readme = "README.md"
 requires-python = "==3.13.*"
@@ -32,7 +32,7 @@ dependencies = [
     "protobuf>=4.25.0",
     "networkx>=3.0",
     "PyYAML>=6.0",
-    "contextunity-core>=0.5.1",
+    "contextunity-core>=0.7.0",
     "psycopg[binary]>=3.1.0",
     "psycopg-pool>=3.2.0",
     "duckdb>=1.0.0",
@@ -67,7 +67,6 @@ vertex = [
 # Extended providers
 storage = [
     "google-cloud-storage>=3.0.0",
-    "google-cloud-firestore>=2.16.0",
     "psycopg[binary]>=3.1.0",
     "psycopg-pool>=3.2.0",
     "sqlalchemy>=2.0.0",
@@ -158,6 +157,9 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.14.0",
     "alembic>=1.13.0",
+
+    "pytest-timeout>=2.4.0",
+    "pytest-randomly>=4.1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -174,6 +176,7 @@ addopts = [
 markers = [
     "unit: Unit tests",
     "integration: Integration tests",
+    "integration_live: Requires real Postgres / external infra",
     "slow: Slow running tests",
 ]
 

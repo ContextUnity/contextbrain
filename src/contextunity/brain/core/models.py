@@ -6,8 +6,7 @@ citations, and state management.
 
 from __future__ import annotations
 
-from typing import Any
-
+from contextunity.core.types import JsonDict
 from pydantic import BaseModel, Field
 
 
@@ -21,7 +20,7 @@ class RetrievedDoc(BaseModel):
     source_type: str = Field(..., description="Type of source (book, video, qa, web, etc.)")
     content: str = Field(..., description="Main content of the document")
     title: str | None = Field(None, description="Title of the document")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: JsonDict = Field(default_factory=dict, description="Additional metadata")
     relevance: float | None = Field(0.0, description="Relevance score from retrieval")
 
     # Optional fields for different source types
@@ -66,6 +65,4 @@ class Citation(BaseModel):
     title: str | None = Field(None, description="Title of the cited document")
     content: str = Field(..., description="Cited content excerpt")
     url: str | None = Field(None, description="URL to the source")
-    metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Additional citation metadata"
-    )
+    metadata: JsonDict = Field(default_factory=dict, description="Additional citation metadata")

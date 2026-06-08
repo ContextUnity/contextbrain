@@ -6,14 +6,18 @@ import html
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.narrowing import as_float, as_json_dict_list, as_str, as_str_list
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, is_json_dict, is_object_list
+from typing_extensions import override
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ..core import (
-    IngestionMetadata,
     IngestionPlugin,
     RawData,
     ShadowRecord,
@@ -62,32 +66,34 @@ def extract_youtube_id_from_filename(filename: str) -> tuple[str | None, str]:
     return None, filename.strip()
 
 
-def smart_glue_words(words: list[dict]) -> list[dict]:
+def smart_glue_words(words: list[JsonDict]) -> list[JsonDict]:
     """Combine words into sentences using smart gluing logic.
 
-    Breaks on:
-    - Pause > 0.8s between words
-    - Word ends with punctuation (.?!)
+    Args:
+        words (list[dict]): The words parameter.
+
+    Returns:
+        list[dict]: A list of list[dict].
     """
-    sentences = []
-    current: list[dict] = []
+    sentences: list[JsonDict] = []
+    current: list[JsonDict] = []
     start_time = 0.0
 
-    for i, w in enumerate(words):
-        word = w.get("word", "")
-        word_start = w.get("start", 0.0)
-        word_end = w.get("end", word_start)
+    for w in words:
+        word = as_str(w.get("word"))
+        word_start = as_float(w.get("start"))
+        word_end = as_float(w.get("end"), default=word_start)
 
         if not current:
             start_time = word_start
 
         # Check for pause > 0.8s
         if current:
-            prev_end = current[-1].get("end", word_start)
+            prev_end = as_float(current[-1].get("end"), default=word_start)
             pause = word_start - prev_end
             if pause > 0.8:
                 # Break sentence
-                text = " ".join(item.get("word", "") for item in current)
+                text = " ".join(as_str(item.get("word")) for item in current)
                 sentences.append(
                     {
                         "text": text,
@@ -102,7 +108,7 @@ def smart_glue_words(words: list[dict]) -> list[dict]:
 
         # Check for punctuation
         if str(word).rstrip().endswith((".", "!", "?", "...")):
-            text = " ".join(item.get("word", "") for item in current)
+            text = " ".join(as_str(item.get("word")) for item in current)
             sentences.append(
                 {
                     "text": text,
@@ -114,8 +120,8 @@ def smart_glue_words(words: list[dict]) -> list[dict]:
 
     # Handle remaining words
     if current:
-        text = " ".join(item.get("word", "") for item in current)
-        last_end = current[-1].get("end", start_time)
+        text = " ".join(as_str(item.get("word")) for item in current)
+        last_end = as_float(current[-1].get("end"), default=start_time)
         sentences.append(
             {
                 "text": text,
@@ -130,16 +136,15 @@ def smart_glue_words(words: list[dict]) -> list[dict]:
 def _generate_video_summaries(
     records: list[ShadowRecord],
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     batch_size: int,
     max_sentences: int,
     persona_name: str = "",
 ) -> None:
     """Generate LLM summaries for video chunks in batches.
 
-    Updates struct_data["summary"] in-place for each record.
-    Retries batches if success rate < 80%.
-    After initial pass, collects failed records and retries them in smaller batches.
+    Args:
+        records (list[ShadowRecord]): The records parameter.
     """
     if not records:
         return
@@ -162,10 +167,10 @@ def _generate_video_summaries(
         if not batch:
             return []
 
-        batch_data = []
+        batch_data: list[JsonDict] = []
         for i, rec in enumerate(batch):
-            quote = rec.struct_data.get("quote", "")
-            video_name = rec.struct_data.get("video_name", "Video")
+            quote = as_str(rec.struct_data.get("quote"))
+            video_name = as_str(rec.struct_data.get("video_name"), default="Video")
             batch_data.append({"idx": i, "video": video_name, "text": quote})
 
         prompt = f"""Create concise summaries for video transcript segments from {speaker_ref}'s live presentations.
@@ -329,19 +334,36 @@ SEGMENTS:
 def _validate_video_segments(
     records: list[ShadowRecord],
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     batch_size: int = 50,
 ) -> list[ShadowRecord]:
-    """Validate video segments using LLM to filter out non-valuable content."""
+    """Validate video segments using LLM to filter out non-valuable content.
+
+    Args:
+        records (list[ShadowRecord]): The records parameter.
+
+    Returns:
+        list[ShadowRecord]: A list of list[ShadowRecord].
+    """
     if not records:
         return records
 
     from ..core.batch import batch_validate, filter_by_indices
 
     def build_prompt(batch: list[tuple[int, ShadowRecord]]) -> str:
+        """Build prompt.
+
+        Args:
+            batch (list[tuple[int, ShadowRecord]]): The batch parameter.
+
+        Returns:
+            str: The resulting string value.
+        """
         items = "\n".join(
-            f"SEGMENT {idx}:\nVideo: {rec.struct_data.get('video_name', 'Video')}\n"
-            f"Content: {rec.struct_data.get('quote', '')[:300]}"
+            (
+                f"SEGMENT {idx}:\nVideo: {rec.struct_data.get('video_name', 'Video')}\n"
+                f"Content: {as_str(rec.struct_data.get('quote'))[:300]}"
+            )
             for idx, rec in batch
         )
         return f"""Evaluate which video segments are WORTH INDEXING for search.
@@ -389,11 +411,25 @@ class VideoPlugin(IngestionPlugin):
     """Plugin for processing video transcripts."""
 
     @property
+    @override
     def source_type(self) -> str:
+        """Source type.
+
+        Returns:
+            str: The resulting string value.
+        """
         return "video"
 
+    @override
     def load(self, assets_path: str) -> list[RawData]:
-        """Load video transcripts from JSON files or youtube_transcript_api format."""
+        """Load video transcripts from JSON files or youtube_transcript_api format.
+
+        Args:
+            assets_path (str): The assets path parameter.
+
+        Returns:
+            list[RawData]: A list of list[RawData].
+        """
         source_dir = Path(assets_path)
         if not source_dir.exists():
             logger.warning("Video source directory does not exist: %s", assets_path)
@@ -404,7 +440,7 @@ class VideoPlugin(IngestionPlugin):
         # Look for JSON files (transcript format)
         for json_file in source_dir.glob("*.json"):
             try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
+                payload = json_loads(json_file.read_text(encoding="utf-8"))
 
                 # Extract YouTube ID and clean title from filename
                 extracted_id, clean_filename = extract_youtube_id_from_filename(json_file.stem)
@@ -412,21 +448,18 @@ class VideoPlugin(IngestionPlugin):
                 # Handle different JSON formats:
                 # 1. List format: [{"word": "...", "start": ..., "end": ...}, ...] (direct words list)
                 # 2. Dict format: {"video_id": "...", "video_title": "...", "words": [...]}
-                if isinstance(data, list):
-                    # Direct list of words - use filename for metadata
-                    words = data
+                words: list[JsonDict] = []
+                if is_object_list(payload):
+                    words = as_json_dict_list(payload)
                     video_id = extracted_id or json_file.stem
                     video_title = clean_filename or video_id
-                elif isinstance(data, dict):
-                    # Dictionary format - extract metadata and words
-                    video_id = data.get("video_id") or extracted_id or json_file.stem
-                    video_title = data.get("video_title") or clean_filename or video_id
-
-                    # Handle different word formats in dict
-                    words = data.get("words", [])
+                elif is_json_dict(payload):
+                    data = payload
+                    video_id = as_str(data.get("video_id")) or extracted_id or json_file.stem
+                    video_title = as_str(data.get("video_title")) or clean_filename or video_id
+                    words = as_json_dict_list(data.get("words"))
                     if not words:
-                        # Try youtube_transcript_api format
-                        words = data.get("transcript", [])
+                        words = as_json_dict_list(data.get("transcript"))
                 else:
                     logger.warning(
                         "Unexpected JSON format in %s (expected list or dict)", json_file
@@ -441,8 +474,8 @@ class VideoPlugin(IngestionPlugin):
                 sentences = smart_glue_words(words)
 
                 # Create RawData for each sentence (or combine into one)
-                content = " ".join(s["text"] for s in sentences)
-                metadata: IngestionMetadata = {
+                content = " ".join(as_str(s.get("text")) for s in sentences)
+                metadata: JsonDict = {
                     "video_id": video_id,
                     "video_title": video_title,
                     "video_url": f"https://youtu.be/{video_id}",
@@ -462,20 +495,35 @@ class VideoPlugin(IngestionPlugin):
 
         return raw_data
 
+    @override
     def transform(
         self,
         data: list[RawData],
         enrichment_func: Callable[[str], GraphEnrichmentResult],
         taxonomy_path: Path | None = None,
         config: RagIngestionConfig | None = None,
-        core_cfg: Config | None = None,
+        core_cfg: BrainConfig | None = None,
         **kwargs: object,
     ) -> list[ShadowRecord]:
-        """Transform video data using sliding window chunking."""
+        """Transform video data using sliding window chunking.
+
+        Args:
+            data (list[RawData]): The raw data dictionary or object.
+            enrichment_func (Callable[[str], GraphEnrichmentResult]): The enrichment func parameter.
+            taxonomy_path (Path | None): The taxonomy path parameter.
+            config (RagIngestionConfig | None): The configuration settings dict or object.
+            core_cfg (BrainConfig | None): The core cfg parameter.
+
+        Returns:
+            list[ShadowRecord]: A list of list[ShadowRecord].
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         _ = taxonomy_path, kwargs
         if core_cfg is None:
-            raise ValueError(
-                "VideoPlugin.transform requires core_cfg (contextunity.brain.core.config.Config)"
+            raise ConfigurationError(
+                "VideoPlugin.transform requires core_cfg (contextunity.brain.core.config.BrainConfig)"
             )
         shadow_records: list[ShadowRecord] = []
 
@@ -499,27 +547,21 @@ class VideoPlugin(IngestionPlugin):
             persona_name = ""
 
         for vid_idx, raw in enumerate(data, 1):
-            video_id = raw.metadata.get("video_id", "unknown")
-            video_title = raw.metadata.get("video_title", "Video")
-            video_url = raw.metadata.get("video_url", f"https://youtu.be/{video_id}")
+            video_id = str(raw.metadata.get("video_id", "unknown"))
+            video_title = str(raw.metadata.get("video_title", "Video"))
+            video_url = str(raw.metadata.get("video_url", f"https://youtu.be/{video_id}"))
 
             # Prefer timing-aware sentences produced at preprocess stage
             sent_meta = raw.metadata.get("sentences")
-            sentences_timed: list[dict[str, Any]] = []
-            if isinstance(sent_meta, list):
-                for s in sent_meta:
-                    if not isinstance(s, dict):
+            sentences_timed: list[dict[str, str | float]] = []
+            if is_object_list(sent_meta):
+                for sentence_row in as_json_dict_list(sent_meta):
+                    text = as_str(sentence_row.get("text"))
+                    start = as_float(sentence_row.get("start"))
+                    end = as_float(sentence_row.get("end"), default=start)
+                    if not text.strip():
                         continue
-                    text = s.get("text")
-                    start = s.get("start")
-                    end = s.get("end")
-                    if not isinstance(text, str) or not text.strip():
-                        continue
-                    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
-                        continue
-                    sentences_timed.append(
-                        {"text": text.strip(), "start": float(start), "end": float(end)}
-                    )
+                    sentences_timed.append({"text": text.strip(), "start": start, "end": end})
 
             if sentences_timed:
                 total_windows = max(0, len(sentences_timed) - 2)
@@ -540,20 +582,18 @@ class VideoPlugin(IngestionPlugin):
                         )
 
                     window = sentences_timed[i : i + 3]
-                    window_text = " ".join(w.get("text", "") for w in window).strip()
+                    window_text = " ".join(str(w.get("text", "")) for w in window).strip()
                     if not window_text:
                         continue
 
-                    start_seconds = int(max(0, window[0].get("start", 0.0)))
+                    start_seconds = int(max(0, float(window[0].get("start", 0.0))))
                     ts = format_timestamp(start_seconds)
 
                     # Enrichment
                     keywords, summary, parent_categories = get_graph_enrichment(
                         text=window_text, enrichment_func=enrichment_func
                     )
-                    initial_keywords = raw.metadata.get("keywords", [])
-                    if not isinstance(initial_keywords, list):
-                        initial_keywords = []
+                    initial_keywords: list[str] = as_str_list(raw.metadata.get("keywords", []))
                     keywords = list(dict.fromkeys([*initial_keywords, *keywords]))[:10]
 
                     # Build input_text with QA-style explicit enrichment format
@@ -583,7 +623,7 @@ class VideoPlugin(IngestionPlugin):
                         ShadowRecord(
                             id=record_id,
                             input_text=input_text,
-                            struct_data=struct_data,
+                            struct_data=dict(struct_data) if struct_data else {},
                             title=f"{video_title} [{ts}]",
                             source_type="video",
                         )
@@ -629,10 +669,8 @@ class VideoPlugin(IngestionPlugin):
                 keywords, summary, parent_categories = get_graph_enrichment(
                     text=window_text, enrichment_func=enrichment_func
                 )
-                initial_keywords = raw.metadata.get("keywords", [])
-                if not isinstance(initial_keywords, list):
-                    initial_keywords = []
-                keywords = list(dict.fromkeys([*initial_keywords, *keywords]))[:10]
+                initial_keywords_fb: list[str] = as_str_list(raw.metadata.get("keywords", []))
+                keywords = list(dict.fromkeys([*initial_keywords_fb, *keywords]))[:10]
 
                 # Build input_text with QA-style explicit enrichment format
                 input_text = self._build_input_text(
@@ -649,8 +687,8 @@ class VideoPlugin(IngestionPlugin):
                 # Generate ID
                 record_id = generate_id(video_id, str(start_seconds), window_text[:50])
 
-                # Build struct_data matching frontend schema
-                struct_data: VideoStructData = {
+                # Build struct_data matching frontend schema (no timing data path)
+                fallback_struct: VideoStructData = {
                     "source_type": "video",
                     # snake_case for retriever/citations compatibility
                     "video_name": video_title,
@@ -666,7 +704,7 @@ class VideoPlugin(IngestionPlugin):
                     ShadowRecord(
                         id=record_id,
                         input_text=input_text,
-                        struct_data=struct_data,
+                        struct_data=dict(fallback_struct) if fallback_struct else {},
                         title=f"{video_title} [{ts}]",
                         source_type="video",
                     )
@@ -721,7 +759,7 @@ class VideoPlugin(IngestionPlugin):
 
         # Add taxonomy categories from graph enrichment (QA-style)
         if parent_categories:
-            cats = [c for c in parent_categories if isinstance(c, str) and c.strip()]
+            cats = [c for c in parent_categories if c.strip()]
             if cats:
                 cat_str = ", ".join(cats[:5])
                 parts.append(f"Categories: {cat_str}")

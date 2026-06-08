@@ -1,11 +1,15 @@
+"""Module providing Module docstring is missing capabilities."""
+
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_json_dict, as_str
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import is_json_dict
 
-from contextunity.brain.core.types import StructData, StructDataValue
+from contextunity.brain.core.types import StructData
 
 from ...settings import RagIngestionConfig
 from .common import (
@@ -22,12 +26,16 @@ logger = get_contextunit_logger(__name__)
 def collect_clean_text_samples_from_dir(
     *, clean_text_dir: Path, config: RagIngestionConfig, max_samples: int
 ) -> list[TaxonomySample]:
-    """Pass A: deterministic, doc-aware sampling from CleanText JSONL files."""
+    """Pass A: deterministic, doc-aware sampling from CleanText JSONL files.
+
+    Returns:
+        list[TaxonomySample]: A list of list[TaxonomySample].
+    """
     include_types = config.taxonomy.include_types
     if not include_types:
         include_types = ["video", "book", "qa", "knowledge", "web"]
 
-    paths = [clean_text_dir / f"{t}.jsonl" for t in include_types if isinstance(t, str)]
+    paths = [clean_text_dir / f"{t}.jsonl" for t in include_types]
     paths = [p for p in paths if p.exists()]
     if not paths:
         return []
@@ -40,26 +48,44 @@ def collect_clean_text_samples_from_dir(
     per_type_pool = max(50, min(per_type_pool, 20000))
 
     def _doc_key(t: str, meta: StructData, content: str) -> str:
+        """doc key.
+
+        Args:
+            t (str): The t parameter.
+            meta (StructData): The meta parameter.
+            content (str): The content parameter.
+
+        Returns:
+            str: The resulting string value.
+        """
         if t == "book":
-            v = meta.get("book_title") or meta.get("title") or meta.get("id")
-            if isinstance(v, str) and v.strip():
-                return v.strip()
+            v = (
+                as_str(meta.get("book_title"))
+                or as_str(meta.get("title"))
+                or as_str(meta.get("id"))
+            )
+            if v:
+                return v
         if t == "video":
-            v = meta.get("video_id") or meta.get("id") or meta.get("video_url")
-            if isinstance(v, str) and v.strip():
-                return v.strip()
+            v = (
+                as_str(meta.get("video_id"))
+                or as_str(meta.get("id"))
+                or as_str(meta.get("video_url"))
+            )
+            if v:
+                return v
         if t == "web":
-            v = meta.get("url") or meta.get("id")
-            if isinstance(v, str) and v.strip():
-                return v.strip()
+            v = as_str(meta.get("url")) or as_str(meta.get("id"))
+            if v:
+                return v
         if t == "qa":
-            v = meta.get("session_title") or meta.get("id")
-            if isinstance(v, str) and v.strip():
-                return v.strip()
+            v = as_str(meta.get("session_title")) or as_str(meta.get("id"))
+            if v:
+                return v
         if t == "knowledge":
-            v = meta.get("filename") or meta.get("title") or meta.get("id")
-            if isinstance(v, str) and v.strip():
-                return v.strip()
+            v = as_str(meta.get("filename")) or as_str(meta.get("title")) or as_str(meta.get("id"))
+            if v:
+                return v
         return f"anon:{stable_hash_u64((content or '')[:400])}"
 
     type_to_samples: dict[str, list[TaxonomySample]] = {}
@@ -74,22 +100,16 @@ def collect_clean_text_samples_from_dir(
                     if not line.strip():
                         continue
                     try:
-                        obj: StructDataValue = json.loads(line)
+                        obj_wire = json_loads(line)
                     except Exception as e:
                         logger.debug("Failed to parse JSON line: %s", e)
                         continue
-                    if not isinstance(obj, dict):
+                    if not is_json_dict(obj_wire):
                         continue
-                    obj_dict: StructData = {k: v for k, v in obj.items() if isinstance(k, str)}
-                    content = obj_dict.get("content")
-                    if not isinstance(content, str) or not content.strip():
+                    content = as_str(obj_wire.get("content"))
+                    if not content.strip():
                         continue
-                    meta_raw = obj_dict.get("metadata") or {}
-                    meta: StructData = (
-                        {k: v for k, v in meta_raw.items() if isinstance(k, str)}
-                        if isinstance(meta_raw, dict)
-                        else {}
-                    )
+                    meta: StructData = as_json_dict(obj_wire.get("metadata"))
                     dk = _doc_key(t, meta, content)
                     counts[dk] = counts.get(dk, 0) + 1
                     if dk not in first:
@@ -111,22 +131,16 @@ def collect_clean_text_samples_from_dir(
                     if not line.strip():
                         continue
                     try:
-                        obj2: StructDataValue = json.loads(line)
+                        obj2_wire = json_loads(line)
                     except Exception as e:
                         logger.debug("Failed to parse JSON line: %s", e)
                         continue
-                    if not isinstance(obj2, dict):
+                    if not is_json_dict(obj2_wire):
                         continue
-                    obj2_dict: StructData = {k: v for k, v in obj2.items() if isinstance(k, str)}
-                    content2 = obj2_dict.get("content")
-                    if not isinstance(content2, str) or not content2.strip():
+                    content2 = as_str(obj2_wire.get("content"))
+                    if not content2.strip():
                         continue
-                    meta2_raw = obj2_dict.get("metadata") or {}
-                    meta2: StructData = (
-                        {k: v for k, v in meta2_raw.items() if isinstance(k, str)}
-                        if isinstance(meta2_raw, dict)
-                        else {}
-                    )
+                    meta2: StructData = as_json_dict(obj2_wire.get("metadata"))
                     dk2 = _doc_key(t, meta2, content2)
                     i = seen_idx.get(dk2, 0)
                     if dk2 not in mid and i == mid_target.get(dk2, -1):
@@ -140,8 +154,9 @@ def collect_clean_text_samples_from_dir(
         for dk in counts:
             segments: list[str] = []
             for raw_seg in [first.get(dk, ""), mid.get(dk, ""), last.get(dk, "")]:
-                if not isinstance(raw_seg, str) or not raw_seg.strip():
+                if not as_str(raw_seg).strip():
                     continue
+                raw_seg = as_str(raw_seg)
                 s = clean_for_taxonomy_sample(raw_seg)
                 if s:
                     segments.append(s)
@@ -186,6 +201,12 @@ def collect_clean_text_samples_from_dir(
         used_prefixes: set[str] = set()
 
         def _maybe_add(dk: str, snippet: str) -> None:
+            """maybe add.
+
+            Args:
+                dk (str): The dk parameter.
+                snippet (str): The snippet parameter.
+            """
             k = snippet[:DEDUP_PREFIX_CHARS].lower()
             if k in used_prefixes:
                 return

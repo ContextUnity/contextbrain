@@ -1,31 +1,40 @@
 """Typed ingestion configuration (Pydantic).
-
 This module defines the single source of truth for the RAG ingestion pipeline config.
-All ingestion code should accept `RagIngestionConfig` instead of `dict[str, Any]`.
+All ingestion code should accept `RagIngestionConfig` instead of `JsonDict`.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
+from contextunity.core.types import is_json_dict
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def _default_assets_folder() -> Path:
     # Default to a user-writable folder relative to the current working directory.
     # This avoids writing into site-packages when the library is installed.
+    """default assets folder.
+
+    Returns:
+        Path: An instance of Path.
+    """
     return Path.cwd() / "assets" / "ingestion"
 
 
 class IngestionSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Ingestion Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     workers: int = Field(default_factory=lambda: max(1, int(((os.cpu_count()) or 2) // 2)))
 
 
 class TaxonomySection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Taxonomy Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     philosophy_focus: str = (
         "Extract core concepts, terminology, and relationships from the material."
     )
@@ -39,6 +48,17 @@ class TaxonomySection(BaseModel):
     @field_validator("scan_model")
     @classmethod
     def _validate_model_key(cls, v: str) -> str:
+        """validate model key.
+
+        Args:
+            v (str): The v parameter.
+
+        Returns:
+            str: The resulting string value.
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         vv = (v or "").strip()
         if vv and "/" not in vv:
             raise ValueError("taxonomy.scan_model must be a model key: 'provider/name'")
@@ -46,7 +66,9 @@ class TaxonomySection(BaseModel):
 
 
 class GraphSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Graph Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     include_types: list[str] = Field(default_factory=lambda: ["video", "book", "qa", "knowledge"])
     incremental: bool = False
     # If empty, use core config: `core_cfg.models.ingestion.graph.model`
@@ -57,6 +79,17 @@ class GraphSection(BaseModel):
     @field_validator("model")
     @classmethod
     def _validate_model_key(cls, v: str) -> str:
+        """validate model key.
+
+        Args:
+            v (str): The v parameter.
+
+        Returns:
+            str: The resulting string value.
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         vv = (v or "").strip()
         if vv and "/" not in vv:
             raise ValueError("graph.model must be a model key: 'provider/name'")
@@ -64,12 +97,16 @@ class GraphSection(BaseModel):
 
 
 class BookSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Book Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     llm_topic_extraction_enabled: bool = True
 
 
 class QASection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Q A Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     llm_speaker_detect_enabled: bool = False
     llm_question_filter_enabled: bool = True
     # Use an LLM to detect the session host when multiple speakers exist.
@@ -82,15 +119,28 @@ class QASection(BaseModel):
     @field_validator("corrections", mode="before")
     @classmethod
     def _validate_corrections(cls, v: object) -> dict[str, str]:
+        """validate corrections.
+
+        Args:
+            v (object): The v parameter.
+
+        Returns:
+            dict[str, str]: A dictionary containing the results.
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         if v is None:
             raise ValueError("qa.corrections must be a table/dict, not null")
-        if isinstance(v, dict):
-            return v
+        if is_json_dict(v):
+            return {str(k): str(val) for k, val in v.items()}
         raise ValueError("qa.corrections must be a table/dict")
 
 
 class VideoSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Video Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     llm_clean_enabled: bool = False
     llm_clean_batch_size: int = Field(default=40, ge=1)
     corrections: dict[str, str] = Field(default_factory=dict)
@@ -103,15 +153,28 @@ class VideoSection(BaseModel):
     @field_validator("corrections", mode="before")
     @classmethod
     def _validate_corrections(cls, v: object) -> dict[str, str]:
+        """validate corrections.
+
+        Args:
+            v (object): The v parameter.
+
+        Returns:
+            dict[str, str]: A dictionary containing the results.
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         if v is None:
             raise ValueError("video.corrections must be a table/dict, not null")
-        if isinstance(v, dict):
-            return v
+        if is_json_dict(v):
+            return {str(k): str(val) for k, val in v.items()}
         raise ValueError("video.corrections must be a table/dict")
 
 
 class WebSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Web Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     url_file: str = "url.toml"
     force_reindex: bool = False
     user_agent: str = "ContextbrainIngestionBot/1.0 (+https://example.com/bot)"
@@ -130,7 +193,9 @@ class WebSection(BaseModel):
 
 
 class PersonaSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Persona Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     enabled: bool = False
     output_path: str = "persona.txt"
     persona_name: str = "Speaker Name"
@@ -145,7 +210,9 @@ class PersonaSection(BaseModel):
 
 
 class NerSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Ner Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     mode: Literal["llm", "spacy", "transformers"] = "llm"
     model: str = ""
     entity_types: list[str] = Field(default_factory=list)
@@ -153,7 +220,9 @@ class NerSection(BaseModel):
 
 
 class KeyphrasesSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Keyphrases Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     mode: Literal["llm"] = "llm"
     max_phrases: int = Field(default=15, ge=1, le=50)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -161,7 +230,9 @@ class KeyphrasesSection(BaseModel):
 
 
 class EnrichmentSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Enrichment Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     ner_enabled: bool = False
     keyphrases_enabled: bool = False
     ner: NerSection = Field(default_factory=NerSection)
@@ -169,7 +240,9 @@ class EnrichmentSection(BaseModel):
 
 
 class ModelsSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Models Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     ingestion_taxonomy_model: str = ""
     ingestion_preprocess_model: str = ""
     ingestion_graph_model: str = ""
@@ -190,6 +263,17 @@ class ModelsSection(BaseModel):
     )
     @classmethod
     def _validate_model_key(cls, v: object) -> str:
+        """validate model key.
+
+        Args:
+            v (object): The v parameter.
+
+        Returns:
+            str: The resulting string value.
+
+        Raises:
+            ValueError: If parameter values are invalid.
+        """
         if v is None:
             return ""
         value = str(v).strip()
@@ -201,13 +285,17 @@ class ModelsSection(BaseModel):
 
 
 class LocalSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Local Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     vllm_base_url: str = ""
     ollama_base_url: str = ""
 
 
 class UploadGCloudSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Upload G Cloud Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     project_id: str | None = None
     location: str | None = None
     gcs_bucket: str | None = None
@@ -215,7 +303,9 @@ class UploadGCloudSection(BaseModel):
 
 
 class UploadPostgresSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Upload Postgres Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     dsn: str | None = None
     pool_min_size: int = 2
     pool_max_size: int = 10
@@ -225,7 +315,9 @@ class UploadPostgresSection(BaseModel):
 
 
 class UploadSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Upload Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     provider: Literal["gcloud", "postgres"] = "gcloud"
     db_name: str = "green"
     include_date: bool = True
@@ -234,18 +326,24 @@ class UploadSection(BaseModel):
 
 
 class ValidationSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Validation Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     min_chunk_length: int = Field(default=50, ge=1)
     require_uppercase_start: bool = True
 
 
 class PluginDir(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Plugin Dir logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     dir: str
 
 
 class PluginsSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Plugins Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     video: PluginDir = Field(default_factory=lambda: PluginDir(dir="video"))
     book: PluginDir = Field(default_factory=lambda: PluginDir(dir="book"))
     qa: PluginDir = Field(default_factory=lambda: PluginDir(dir="qa"))
@@ -254,7 +352,9 @@ class PluginsSection(BaseModel):
 
 
 class PathsSection(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Represent and manage Paths Section logic within the system."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
     assets_folder: Path = Field(default_factory=_default_assets_folder)
     source_dir: str = "source"
     clean_text_dir: str = "clean_text"
@@ -266,6 +366,14 @@ class PathsSection(BaseModel):
     @field_validator("assets_folder", mode="before")
     @classmethod
     def _coerce_path(cls, v: object) -> Path:
+        """coerce path.
+
+        Args:
+            v (object): The v parameter.
+
+        Returns:
+            Path: An instance of Path.
+        """
         if isinstance(v, Path):
             return v
         if isinstance(v, str) and v.strip():
@@ -274,7 +382,9 @@ class PathsSection(BaseModel):
 
 
 class RagIngestionConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """Configuration settings for RagIngestionConfig."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     ingestion: IngestionSection = Field(default_factory=IngestionSection)
     taxonomy: TaxonomySection = Field(default_factory=TaxonomySection)
@@ -293,6 +403,11 @@ class RagIngestionConfig(BaseModel):
     paths: PathsSection = Field(default_factory=PathsSection)
 
     def assets_paths(self) -> dict[str, Path]:
+        """Assets paths.
+
+        Returns:
+            dict[str, Path]: A dictionary containing the results.
+        """
         assets_folder = self.paths.assets_folder
         if not assets_folder.is_absolute():
             assets_folder = Path.cwd() / assets_folder

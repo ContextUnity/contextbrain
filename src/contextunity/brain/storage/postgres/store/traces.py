@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, List
+from abc import ABC
 
 from contextunity.core.logging import get_contextunit_logger
+from contextunity.core.types import JsonDict
 
+from .base import PostgresStoreBase
 from .helpers import Json, execute, fetch_all
 
 logger = get_contextunit_logger(__name__)
 
 
-class TracesMixin:
+class TracesMixin(PostgresStoreBase, ABC):
     """Mixin for agent trace persistence and retrieval."""
 
     async def log_trace(
@@ -23,11 +25,11 @@ class TracesMixin:
         session_id: str | None = None,
         user_id: str | None = None,
         graph_name: str | None = None,
-        tool_calls: list[dict[str, Any]] | None = None,
-        token_usage: dict[str, Any] | None = None,
+        tool_calls: list[JsonDict] | None = None,
+        token_usage: JsonDict | None = None,
         timing_ms: int | None = None,
-        security_flags: dict[str, Any] | None = None,
-        metadata: dict[str, Any] | None = None,
+        security_flags: JsonDict | None = None,
+        metadata: JsonDict | None = None,
         provenance: list[str] | None = None,
     ) -> str:
         """Log an agent execution trace.
@@ -38,7 +40,7 @@ class TracesMixin:
         trace_id = str(uuid.uuid4())
 
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
-            await execute(
+            _ = await execute(
                 conn,
                 """
                 INSERT INTO agent_traces
@@ -77,7 +79,7 @@ class TracesMixin:
         session_id: str | None = None,
         limit: int = 20,
         since: str | None = None,
-    ) -> List[dict]:
+    ) -> list[JsonDict]:
         """Get agent traces with optional filters.
 
         Args:
@@ -92,7 +94,7 @@ class TracesMixin:
             List of trace dicts ordered by created_at DESC.
         """
         conditions = ["tenant_id = %(tenant_id)s"]
-        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+        params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit}
 
         if user_id:
             conditions.append("user_id = %(user_id)s")

@@ -11,11 +11,20 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import (
+    as_json_dict,
+    as_json_dict_map,
+    as_str,
+    as_str_list,
+    str_list_as_json,
+)
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, JsonValue, is_json_dict
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ..core.utils import (
     llm_generate_tsv,
@@ -32,8 +41,10 @@ from .taxonomy.sampling import (
 logger = get_contextunit_logger(__name__)
 
 _META_TERM_RE = re.compile(
-    r"\b(public domain|original text|author'?s|preface|foreword|appendix|"
-    r"toc|table of contents|chapter|page|copyright|isbn)\b",
+    (
+        r"\b(public domain|original text|author'?s|preface|foreword|appendix|"
+        + r"toc|table of contents|chapter|page|copyright|isbn)\b"
+    ),
     re.IGNORECASE,
 )
 _PROMO_TERM_RE = re.compile(
@@ -46,16 +57,17 @@ def build_taxonomy(
     source_root: Path,
     output_path: Path,
     config: RagIngestionConfig,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     *,
     force_rebuild: bool = False,
     workers: int = 4,
-) -> dict[str, Any]:
+) -> JsonDict:
     """Build taxonomy from CleanText samples."""
-    existing: dict[str, Any] | None = None
+    existing: JsonDict | None = None
     if output_path.exists() and not force_rebuild:
         try:
-            existing = json.loads(output_path.read_text(encoding="utf-8"))
+            existing_wire = json_loads(output_path.read_text(encoding="utf-8"))
+            existing = as_json_dict(existing_wire) if is_json_dict(existing_wire) else None
         except Exception as e:
             logger.warning("Failed to load existing taxonomy: %s", e)
 
@@ -108,30 +120,28 @@ def build_taxonomy(
 
     new_tax = _finalize_taxonomy(new_tax)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(new_tax, ensure_ascii=False, indent=2), encoding="utf-8")
+    _ = output_path.write_text(json.dumps(new_tax, ensure_ascii=False, indent=2), encoding="utf-8")
     return new_tax
 
 
 def _load_predefined_categories(cats: dict[str, str]) -> dict[str, str]:
     """Load predefined categories from config. Returns {name: description}."""
     return {
-        _to_snake_case(k): str(v).strip()
-        for k, v in cats.items()
-        if isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip()
+        _to_snake_case(k): str(v).strip() for k, v in cats.items() if k.strip() and str(v).strip()
     }
 
 
 def _extract_terms(
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     samples: list[str],
     focus: str,
     model: str,
     workers: int,
-) -> list[dict[str, Any]]:
+) -> list[JsonDict]:
     """Extract domain terms from samples. No category assignment here."""
     batch_size = 10
-    terms: list[dict[str, Any]] = []
+    terms: list[JsonDict] = []
 
     prompts: list[str] = []
     for start in range(0, len(samples), batch_size):
@@ -190,9 +200,9 @@ Return TSV: term<TAB>synonyms<TAB>description
     return terms
 
 
-def _parse_terms_tsv(text: str) -> list[dict[str, Any]]:
+def _parse_terms_tsv(text: str) -> list[JsonDict]:
     """Parse TSV output into term dicts."""
-    out: list[dict[str, Any]] = []
+    out: list[JsonDict] = []
     for ln in (text or "").splitlines():
         ln = ln.strip()
         if not ln or ln.lower().startswith("term\t"):
@@ -229,38 +239,28 @@ def _parse_terms_tsv(text: str) -> list[dict[str, Any]]:
             if s.strip() and s.strip().lower() != term.lower()
         ]
 
+        synonym_values: list[JsonValue] = []
+        for syn in synonyms:
+            synonym_values.append(syn)
         out.append(
-            {"term": term, "synonyms": synonyms, "description": desc, "category": "concepts"}
+            {
+                "term": term,
+                "synonyms": synonym_values,
+                "description": desc,
+                "category": "concepts",
+            }
         )
     return out
 
 
-# ---------------------------------------------------------------------------
-# Helper aliases
-# ---------------------------------------------------------------------------
-
-
-def _collect_clean_text_samples_from_dir(
-    *, clean_text_dir: Path, config: RagIngestionConfig, max_samples: int
-):
-    return collect_clean_text_samples_from_dir(
-        clean_text_dir=clean_text_dir, config=config, max_samples=max_samples
-    )
-
-
-def _parse_concepts_tsv(text: str) -> list[dict[str, Any]]:
-    # Current implementation parses "terms" but outputs taxonomy concept entries.
-    return _parse_terms_tsv(text)
-
-
 def _assign_terms_to_categories(
-    core_cfg: Config,
-    terms: list[dict[str, Any]],
+    core_cfg: BrainConfig,
+    terms: list[JsonDict],
     categories: dict[str, str],
     *,
     model: str,
     batch_size: int = 20,
-) -> list[dict[str, Any]]:
+) -> list[JsonDict]:
     """Assign each term to one of the predefined categories."""
     if not terms or not categories:
         return terms
@@ -268,8 +268,8 @@ def _assign_terms_to_categories(
     cat_names = list(categories.keys())
     cat_lines = "\n".join([f"- {name}: {desc}" for name, desc in categories.items()])
 
-    term_list = [t["term"] for t in terms]
-    term_map = {t["term"].lower(): t for t in terms}
+    term_list = [as_str(t.get("term")) for t in terms]
+    term_map = {as_str(t.get("term")).lower(): t for t in terms}
 
     logger.info("taxonomy: assigning %d terms to %d categories", len(terms), len(categories))
 
@@ -322,13 +322,34 @@ One line per term. Category must be one of: {", ".join(cat_names)}
     return terms
 
 
+class _TaxonomyCategory(TypedDict):
+    description: str
+    keywords: list[str]
+    synonyms: dict[str, list[str]]
+
+
+def _category_to_json(cat: _TaxonomyCategory) -> JsonDict:
+    synonyms_json: dict[str, JsonValue] = {}
+    for term, values in cat["synonyms"].items():
+        synonyms_json[term] = str_list_as_json(values)
+    return {
+        "description": cat["description"],
+        "keywords": str_list_as_json(cat["keywords"]),
+        "synonyms": synonyms_json,
+    }
+
+
+def _categories_to_json(cats: dict[str, _TaxonomyCategory]) -> dict[str, JsonValue]:
+    return {name: _category_to_json(cat) for name, cat in cats.items()}
+
+
 def _build_taxonomy_structure(
-    terms: list[dict[str, Any]],
+    terms: list[JsonDict],
     predefined_cats: dict[str, str],
     focus: str,
-) -> dict[str, Any]:
+) -> JsonDict:
     """Build taxonomy dict from assigned terms."""
-    cats: dict[str, dict[str, Any]] = {}
+    cats: dict[str, _TaxonomyCategory] = {}
 
     # Initialize predefined categories
     for name, desc in predefined_cats.items():
@@ -336,8 +357,8 @@ def _build_taxonomy_structure(
 
     # Add terms to categories
     for t in terms:
-        term = t.get("term", "").strip()
-        cat = t.get("category", "concepts")
+        term = as_str(t.get("term")).strip()
+        cat = as_str(t.get("category"), default="concepts")
         if not term:
             continue
 
@@ -350,7 +371,7 @@ def _build_taxonomy_structure(
 
         cats[cat]["keywords"].append(term)
 
-        syns = t.get("synonyms", [])
+        syns = as_str_list(t.get("synonyms"))
         if syns:
             cats[cat]["synonyms"][term] = syns
 
@@ -358,7 +379,7 @@ def _build_taxonomy_structure(
     for cat_data in cats.values():
         seen: set[str] = set()
         uniq: list[str] = []
-        for kw in cat_data.get("keywords", []):
+        for kw in cat_data["keywords"]:
             k = kw.lower()
             if k not in seen:
                 seen.add(k)
@@ -366,63 +387,73 @@ def _build_taxonomy_structure(
         cat_data["keywords"] = uniq
 
     # Remove empty categories
-    cats = {k: v for k, v in cats.items() if v.get("keywords")}
+    cats = {k: v for k, v in cats.items() if v["keywords"]}
 
-    return {"philosophy_focus": focus, "categories": cats}
+    return {"philosophy_focus": focus, "categories": _categories_to_json(cats)}
 
 
-def _merge_taxonomy(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+def _merge_taxonomy(existing: JsonDict, new: JsonDict) -> JsonDict:
     """Merge new taxonomy into existing."""
-    merged = {
-        "philosophy_focus": new.get("philosophy_focus", existing.get("philosophy_focus", "")),
-        "categories": {},
-    }
+    focus = as_str(new.get("philosophy_focus"), default=as_str(existing.get("philosophy_focus")))
+    ex_cats = as_json_dict_map(existing.get("categories"))
+    new_cats = as_json_dict_map(new.get("categories"))
+    merged_categories: dict[str, JsonValue] = {}
 
-    all_cats = set(existing.get("categories", {}).keys()) | set(new.get("categories", {}).keys())
+    all_cats = set(ex_cats.keys()) | set(new_cats.keys())
     for cat in all_cats:
-        e = existing.get("categories", {}).get(cat, {}) or {}
-        n = new.get("categories", {}).get(cat, {}) or {}
+        e = ex_cats.get(cat, {})
+        n = new_cats.get(cat, {})
 
         # Merge keywords (new first, then existing)
         seen: set[str] = set()
         kws: list[str] = []
-        for kw in list(n.get("keywords", [])) + list(e.get("keywords", [])):
-            if isinstance(kw, str) and kw.strip():
-                k = kw.strip().lower()
-                if k not in seen:
-                    seen.add(k)
-                    kws.append(kw.strip())
+        for kw in as_str_list(n.get("keywords")) + as_str_list(e.get("keywords")):
+            k = kw.strip().lower()
+            if k and k not in seen:
+                seen.add(k)
+                kws.append(kw.strip())
 
-        # Merge synonyms
-        syns = dict(e.get("synonyms", {}))
-        syns.update(n.get("synonyms", {}))
+        # Merge synonyms (string lists only)
+        syns: dict[str, list[str]] = {}
+        for src in (e, n):
+            raw_syns = src.get("synonyms")
+            if not isinstance(raw_syns, dict):
+                continue
+            for key, value in raw_syns.items():
+                merged = syns.get(key, [])
+                merged.extend(as_str_list(value))
+                syns[key] = merged
 
-        merged["categories"][cat] = {
-            "description": n.get("description") or e.get("description") or "",
-            "keywords": kws,
-            "synonyms": syns,
-        }
+        merged_categories[cat] = _category_to_json(
+            {
+                "description": as_str(n.get("description"), default=as_str(e.get("description"))),
+                "keywords": kws,
+                "synonyms": syns,
+            }
+        )
 
-    return merged
+    return {"philosophy_focus": focus, "categories": merged_categories}
 
 
-def _finalize_taxonomy(taxonomy: dict[str, Any]) -> dict[str, Any]:
+def _finalize_taxonomy(taxonomy: JsonDict) -> JsonDict:
     """Add all_keywords, canonical_map, total_count."""
     all_keywords: list[str] = []
     canonical_map: dict[str, str] = {}
 
-    for cat_data in taxonomy.get("categories", {}).values():
-        if not isinstance(cat_data, dict):
-            continue
-        for kw in cat_data.get("keywords", []):
-            if isinstance(kw, str) and kw.strip():
+    for cat_data in as_json_dict_map(taxonomy.get("categories")).values():
+        for kw in as_str_list(cat_data.get("keywords")):
+            if kw.strip():
                 all_keywords.append(kw.strip())
-        for canonical, syn_list in cat_data.get("synonyms", {}).items():
-            if isinstance(canonical, str) and canonical.strip():
-                canonical_map[canonical.strip().lower()] = canonical.strip()
-                for s in syn_list if isinstance(syn_list, list) else []:
-                    if isinstance(s, str) and s.strip():
-                        canonical_map[s.strip().lower()] = canonical.strip()
+        raw_syns = cat_data.get("synonyms")
+        if not isinstance(raw_syns, dict):
+            continue
+        for canonical, syn_list in raw_syns.items():
+            if not canonical.strip():
+                continue
+            canonical_map[canonical.strip().lower()] = canonical.strip()
+            for s in as_str_list(syn_list):
+                if s.strip():
+                    canonical_map[s.strip().lower()] = canonical.strip()
 
     # Dedup
     seen: set[str] = set()
@@ -433,13 +464,13 @@ def _finalize_taxonomy(taxonomy: dict[str, Any]) -> dict[str, Any]:
             seen.add(k)
             uniq.append(kw)
 
-    taxonomy["all_keywords"] = uniq
-    taxonomy["canonical_map"] = canonical_map
+    taxonomy["all_keywords"] = str_list_as_json(uniq)
+    taxonomy["canonical_map"] = dict(canonical_map)
     taxonomy["total_count"] = len(uniq)
     return taxonomy
 
 
-def _empty_taxonomy(focus: str) -> dict[str, Any]:
+def _empty_taxonomy(focus: str) -> JsonDict:
     return {
         "philosophy_focus": focus,
         "categories": {},
@@ -457,10 +488,3 @@ def _to_snake_case(val: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9_]+", "", s)
     s = re.sub(r"_+", "_", s)
     return s.lower().strip("_")
-
-
-def _int_or(val: Any, default: int) -> int:
-    try:
-        return int(val)
-    except Exception:
-        return default

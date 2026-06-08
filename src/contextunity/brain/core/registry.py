@@ -1,5 +1,4 @@
 """Simplified registry system with factory pattern.
-
 Design goals:
 - **Minimal abstraction** - only essential registries remain
 - **Factory pattern** for core components (providers, connectors)
@@ -11,10 +10,14 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Protocol, TypeVar
 
 from contextunity.core import get_contextunit_logger
+
+from contextunity.brain.core.exceptions import BrainRegistryError
 
 # ---- Graph Registry -------------------------------------------------
 
@@ -22,8 +25,17 @@ from contextunity.core import get_contextunit_logger
 graph_registry: "Registry"
 
 
-def register_graph(name: str) -> Callable[[Callable[[], object]], Callable[[], object]]:
-    """Decorator to register a custom graph builder.
+class GraphBuilder(Protocol):
+    """Factory object that builds and returns a graph instance."""
+
+    def __call__(self) -> object: ...
+
+
+C = TypeVar("C", bound=type)
+
+
+def register_graph(name: str) -> Callable[[GraphBuilder], GraphBuilder]:
+    """Decorator to register a graph builder.
 
     Args:
         name: Graph name/key for lookup in config
@@ -32,13 +44,13 @@ def register_graph(name: str) -> Callable[[Callable[[], object]], Callable[[], o
         Decorator function
 
     Example:
-        @register_graph("my_custom_graph")
+        @register_graph("my_project_graph")
         def build_my_graph():
-            # Custom graph building logic
+            # Inline graph building logic
             return StateGraph(...)
     """
 
-    def decorator(func: Callable[[], object]) -> Callable[[], object]:
+    def decorator(func: GraphBuilder) -> GraphBuilder:
         graph_registry.register(name, func)
         return func
 
@@ -48,26 +60,64 @@ def register_graph(name: str) -> Callable[[Callable[[], object]], Callable[[], o
 # ---- Factory Classes ------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ComponentConstructor:
+    """Runtime class constructor wrapper with an explicit object return type."""
+
+    target: type[object]
+
+    def __call__(self, **kwargs: object) -> object:
+        instance: object = self.target(**kwargs)
+        return instance
+
+
+def _constructor_for(target: type[object]) -> ComponentConstructor:
+    return ComponentConstructor(target)
+
+
+def _module_symbol(module_name: str, symbol_name: str) -> object:
+    module = importlib.import_module(module_name)
+    exports: dict[str, object] = dict(vars(module))
+    if symbol_name not in exports:
+        raise BrainRegistryError(f"{module_name} has no symbol {symbol_name!r}")
+    return exports[symbol_name]
+
+
+def _load_constructor(module_name: str, class_name: str) -> ComponentConstructor:
+    candidate = _module_symbol(module_name, class_name)
+    if not isinstance(candidate, type):
+        raise BrainRegistryError(f"{module_name}.{class_name} is not a class constructor")
+    return _constructor_for(candidate)
+
+
 class ComponentFactory:
     """Factory for creating core components."""
 
     # Dynamic factories populated by decorators
-    _provider_factories: dict[str, Any] = {}
-    _connector_factories: dict[str, Any] = {}
-    _transformer_factories: dict[str, Any] = {}
+    _provider_factories: dict[str, ComponentConstructor] = {}
+    _connector_factories: dict[str, ComponentConstructor] = {}
+    _transformer_factories: dict[str, ComponentConstructor] = {}
+
+    @classmethod
+    def register_provider_factory(cls, name: str, factory: ComponentConstructor) -> None:
+        cls._provider_factories[name] = factory
+
+    @classmethod
+    def register_connector_factory(cls, name: str, factory: ComponentConstructor) -> None:
+        cls._connector_factories[name] = factory
+
+    @classmethod
+    def register_transformer_factory(cls, name: str, factory: ComponentConstructor) -> None:
+        cls._transformer_factories[name] = factory
 
     @staticmethod
-    def create_provider(name: str, **kwargs: Any) -> Any:
+    def create_provider(name: str, **kwargs: object) -> object:
         """Create a storage provider instance."""
         if name in ComponentFactory._provider_factories:
             return ComponentFactory._provider_factories[name](**kwargs)
 
         # Fallback to built-in providers
         providers = {
-            "vertex": (
-                "contextunity.brain.modules.providers.storage.vertex",
-                "VertexProvider",
-            ),
             "postgres": (
                 "contextunity.brain.modules.providers.storage.postgres.provider",
                 "PostgresProvider",
@@ -76,15 +126,14 @@ class ComponentFactory:
         }
 
         if name not in providers:
-            raise ValueError(f"Unknown provider: {name}")
+            raise BrainRegistryError(f"Unknown provider: {name}")
 
         module_name, class_name = providers[name]
-        module = importlib.import_module(module_name)
-        cls = getattr(module, class_name)
-        return cls(**kwargs)
+        constructor = _load_constructor(module_name, class_name)
+        return constructor(**kwargs)
 
     @staticmethod
-    def create_connector(name: str, **kwargs: Any) -> Any:
+    def create_connector(name: str, **kwargs: object) -> object:
         """Create a data connector instance."""
         if name in ComponentFactory._connector_factories:
             return ComponentFactory._connector_factories[name](**kwargs)
@@ -102,15 +151,14 @@ class ComponentFactory:
         }
 
         if name not in connectors:
-            raise ValueError(f"Unknown connector: {name}")
+            raise BrainRegistryError(f"Unknown connector: {name}")
 
         module_name, class_name = connectors[name]
-        module = importlib.import_module(module_name)
-        cls = getattr(module, class_name)
-        return cls(**kwargs)
+        constructor = _load_constructor(module_name, class_name)
+        return constructor(**kwargs)
 
     @staticmethod
-    def create_transformer(name: str, **kwargs: Any) -> Any:
+    def create_transformer(name: str, **kwargs: object) -> object:
         """Create a transformer instance."""
         if name in ComponentFactory._transformer_factories:
             return ComponentFactory._transformer_factories[name](**kwargs)
@@ -128,19 +176,18 @@ class ComponentFactory:
         }
 
         if name not in transformers:
-            raise ValueError(f"Unknown transformer: {name}")
+            raise BrainRegistryError(f"Unknown transformer: {name}")
 
         module_name, class_name = transformers[name]
-        module = importlib.import_module(module_name)
-        cls = getattr(module, class_name)
-        return cls(**kwargs)
+        constructor = _load_constructor(module_name, class_name)
+        return constructor(**kwargs)
 
 
 def _lazy_import_object(path: str) -> object:
     """Import an object by dotted path."""
     raw = (path or "").strip()
     if not raw:
-        raise ValueError("Empty import path")
+        raise BrainRegistryError("Empty import path")
     if ":" in raw:
         mod_name, attr = raw.split(":", 1)
     elif "." in raw:
@@ -149,15 +196,16 @@ def _lazy_import_object(path: str) -> object:
         mod_name = raw
         attr = raw
     mod = importlib.import_module(mod_name)
-    return getattr(mod, attr)
+    return _module_symbol(mod.__name__, attr)
 
 
 class Registry:
     """Minimal registry for dynamic component registration."""
 
     def __init__(self, *, name: str, builtin_map: dict[str, str] | None = None) -> None:
-        self._name = name
-        self._items: dict[str, Any] = {}
+        """Initialize a new instance of Registry."""
+        self._name: str = name
+        self._items: dict[str, object] = {}
         self._builtin_map: dict[str, str] = builtin_map or {}
 
     def has(self, key: str) -> bool:
@@ -169,7 +217,8 @@ class Registry:
         """List all available keys in the registry."""
         return sorted(set(self._items.keys()) | set(self._builtin_map.keys()))
 
-    def get(self, key: str) -> Any:
+    def get(self, key: str) -> object:
+        """Retrieve the requested operation."""
         k = key.strip()
         if k not in self._items and k in self._builtin_map:
             self._items[k] = _lazy_import_object(self._builtin_map[k])
@@ -177,10 +226,11 @@ class Registry:
             raise KeyError(f"{self._name}: unknown key '{k}'")
         return self._items[k]
 
-    def register(self, key: str, value: Any, *, overwrite: bool = False) -> None:
+    def register(self, key: str, value: object, *, overwrite: bool = False) -> None:
+        """Register the specified operation."""
         k = key.strip()
         if not k:
-            raise ValueError(f"{self._name}: registry key must be non-empty")
+            raise BrainRegistryError(f"{self._name}: registry key must be non-empty")
         if not overwrite and k in self._items:
             raise KeyError(f"{self._name}: '{k}' already registered")
         self._items[k] = value
@@ -192,49 +242,52 @@ graph_registry = Registry(name="graphs", builtin_map={})
 # ---- Component Registration (Dynamic Registries) ----
 
 # Dynamic registries for hot-swapping components
-_provider_registry: dict[str, Any] = {}
-_connector_registry: dict[str, Any] = {}
-_transformer_registry: dict[str, Any] = {}
+_provider_registry: dict[str, ComponentConstructor] = {}
+_connector_registry: dict[str, ComponentConstructor] = {}
+_transformer_registry: dict[str, ComponentConstructor] = {}
 
 
-def register_agent(name: str) -> Any:
+def register_agent(name: str) -> Callable[[C], C]:
     """Register an agent class."""
 
-    def decorator(cls: Any) -> Any:
+    def decorator(cls: C) -> C:
         agent_registry.register(name, cls, overwrite=True)
         return cls
 
     return decorator
 
 
-def register_connector(name: str) -> Any:
+def register_connector(name: str) -> Callable[[C], C]:
     """Register a connector class for dynamic selection."""
 
-    def decorator(cls: Any) -> Any:
-        _connector_registry[name] = cls
-        ComponentFactory._connector_factories[name] = lambda **kwargs: cls(**kwargs)
+    def decorator(cls: C) -> C:
+        factory = _constructor_for(cls)
+        _connector_registry[name] = factory
+        ComponentFactory.register_connector_factory(name, factory)
         return cls
 
     return decorator
 
 
-def register_provider(name: str) -> Any:
+def register_provider(name: str) -> Callable[[C], C]:
     """Register a provider class for dynamic selection."""
 
-    def decorator(cls: Any) -> Any:
-        _provider_registry[name] = cls
-        ComponentFactory._provider_factories[name] = lambda **kwargs: cls(**kwargs)
+    def decorator(cls: C) -> C:
+        factory = _constructor_for(cls)
+        _provider_registry[name] = factory
+        ComponentFactory.register_provider_factory(name, factory)
         return cls
 
     return decorator
 
 
-def register_transformer(name: str) -> Any:
+def register_transformer(name: str) -> Callable[[C], C]:
     """Register a transformer class for dynamic selection."""
 
-    def decorator(cls: Any) -> Any:
-        _transformer_registry[name] = cls
-        ComponentFactory._transformer_factories[name] = lambda **kwargs: cls(**kwargs)
+    def decorator(cls: C) -> C:
+        factory = _constructor_for(cls)
+        _transformer_registry[name] = factory
+        ComponentFactory.register_transformer_factory(name, factory)
         return cls
 
     return decorator
@@ -243,21 +296,21 @@ def register_transformer(name: str) -> Any:
 # ---- Dynamic Selection Functions ----
 
 
-def select_provider(name: str, **kwargs: Any) -> Any:
+def select_provider(name: str, **kwargs: object) -> object:
     """Dynamically select a provider from registry."""
     if name in _provider_registry:
         return _provider_registry[name](**kwargs)
     return ComponentFactory.create_provider(name, **kwargs)
 
 
-def select_connector(name: str, **kwargs: Any) -> Any:
+def select_connector(name: str, **kwargs: object) -> object:
     """Dynamically select a connector from registry."""
     if name in _connector_registry:
         return _connector_registry[name](**kwargs)
     return ComponentFactory.create_connector(name, **kwargs)
 
 
-def select_transformer(name: str, **kwargs: Any) -> Any:
+def select_transformer(name: str, **kwargs: object) -> object:
     """Dynamically select a transformer from registry."""
     if name in _transformer_registry:
         return _transformer_registry[name](**kwargs)
@@ -278,37 +331,27 @@ BUILTIN_AGENTS: dict[str, str] = {
 
 agent_registry: Registry = Registry(name="agents", builtin_map=BUILTIN_AGENTS)
 
-
 # ---- Plugin scanning -------------------------------------------------------
 
 logger = get_contextunit_logger(__name__)
 
 
 def scan(plugin_dir: Path) -> None:
-    """Scan a directory for Python plugins and import them.
-
-    This allows users to extend contextunity.brain with custom components
-    (agents, tools, connectors, etc.) without modifying the core code.
-
-    Args:
-        plugin_dir: Directory containing Python plugin modules
-    """
+    """Scan a directory for Python plugins and import them."""
     if not plugin_dir.exists() or not plugin_dir.is_dir():
-        logger.debug(f"Plugin directory does not exist: {plugin_dir}")
+        logger.debug("Plugin directory does not exist: %s", plugin_dir)
         return
 
-    # Find all .py files in the directory
     plugin_files = list(plugin_dir.glob("*.py"))
     if not plugin_files:
-        logger.debug(f"No Python files found in plugin directory: {plugin_dir}")
+        logger.debug("No Python files found in plugin directory: %s", plugin_dir)
         return
 
-    logger.info(f"Scanning {len(plugin_files)} plugin files in {plugin_dir}")
+    logger.info("Scanning %d plugin files in %s", len(plugin_files), plugin_dir)
 
-    # Import each plugin file
     for plugin_file in plugin_files:
         if plugin_file.name.startswith("_"):
-            continue  # Skip private files
+            continue
 
         try:
             module_name = plugin_file.stem
@@ -316,24 +359,24 @@ def scan(plugin_dir: Path) -> None:
             if spec and spec.loader:
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
-                logger.info(f"Loaded plugin: {module_name} from {plugin_file}")
+                logger.info("Loaded plugin: %s from %s", module_name, plugin_file)
             else:
-                logger.warning(f"Could not load plugin: {plugin_file}")
+                logger.warning("Could not load plugin: %s", plugin_file)
         except Exception as e:
-            logger.error(f"Failed to load plugin {plugin_file}: {e}")
+            logger.error("Failed to load plugin %s: %s", plugin_file, e)
 
 
 __all__ = [
     "ComponentFactory",
-    "agent_registry",  # Essential for cortex agent hot-swapping
-    "graph_registry",  # Dynamic graph registration
-    "register_agent",  # For custom agents
-    "register_connector",  # For custom connectors
-    "register_graph",  # For custom graphs
-    "register_provider",  # For custom providers
-    "register_transformer",  # For custom transformers
-    "select_provider",  # Dynamic provider selection
-    "select_connector",  # Dynamic connector selection
-    "scan",  # Plugin directory scanning
-    "select_transformer",  # Dynamic transformer selection
+    "agent_registry",
+    "graph_registry",
+    "register_agent",
+    "register_connector",
+    "register_graph",
+    "register_provider",
+    "register_transformer",
+    "select_provider",
+    "select_connector",
+    "scan",
+    "select_transformer",
 ]

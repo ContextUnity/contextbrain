@@ -2,47 +2,52 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List
+from abc import ABC
+from collections.abc import Iterable
+from typing import override
 
 from contextunity.core import get_contextunit_logger
 from contextunity.core.exceptions import StorageError
+from contextunity.core.narrowing import as_float, as_str
+from contextunity.core.types import is_json_dict
 from psycopg import errors as pg_errors
 from psycopg import sql
 from psycopg.rows import dict_row
 
 from ..models import GraphNode, SearchResult, TaxonomyPath
-from .helpers import vec
+from .base import PostgresStoreBase
+from .helpers import PgConnection, vec
 
 logger = get_contextunit_logger(__name__)
 
 
-class SearchMixin:
+class SearchMixin(PostgresStoreBase, ABC):
     """Mixin for hybrid vector + text search."""
 
+    @override
     async def hybrid_search(
         self,
         *,
         query_text: str,
-        query_vec: List[float],
+        query_vec: list[float],
         tenant_id: str,
         candidate_k: int = 50,
         limit: int = 8,
         scope: TaxonomyPath | None = None,
-        source_types: List[str] | None = None,
+        source_types: list[str] | None = None,
         user_id: str | None = None,
         fusion: str = "weighted",
         rrf_k: int = 60,
         vector_weight: float = 0.8,
         text_weight: float = 0.2,
-        **_,
-    ) -> List[SearchResult]:
+        **kwargs: object,
+    ) -> list[SearchResult]:
         """Hybrid vector + text search with configurable fusion."""
+        _ = kwargs
         if not tenant_id or candidate_k <= 0 or limit <= 0:
             return []
 
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
-            conn.row_factory = dict_row
-
             where, params = self._build_scope_filters(
                 tenant_id=tenant_id, user_id=user_id, scope=scope, source_types=source_types
             )
@@ -50,10 +55,12 @@ class SearchMixin:
 
             # Vector search
             vec_query = (
-                sql.SQL("""
-                SELECT id, 1 - (embedding <=> %s::vector) AS score FROM knowledge_nodes
-                WHERE node_kind = 'chunk' AND embedding IS NOT NULL AND
-            """)
+                sql.SQL(
+                    (
+                        "SELECT id, 1 - (embedding <=> %s::vector) AS score FROM knowledge_nodes"
+                        " WHERE node_kind = 'chunk' AND embedding IS NOT NULL AND "
+                    )
+                )
                 + where_sql
                 + sql.SQL(" ORDER BY embedding <=> %s::vector LIMIT %s")
             )
@@ -66,15 +73,17 @@ class SearchMixin:
             text_hits = {}
             if query_text.strip():
                 text_query = (
-                    sql.SQL("""
-                    SELECT id, ts_rank_cd(
-                        search_vector || COALESCE(keywords_vector, ''::tsvector),
-                        websearch_to_tsquery('simple', %s)
-                    ) AS score FROM knowledge_nodes
-                    WHERE node_kind = 'chunk' AND (
-                        search_vector || COALESCE(keywords_vector, ''::tsvector)
-                    ) @@ websearch_to_tsquery('simple', %s) AND
-                """)
+                    sql.SQL(
+                        (
+                            "SELECT id, ts_rank_cd("
+                            "search_vector || COALESCE(keywords_vector, ''::tsvector),"
+                            "websearch_to_tsquery('simple', %s)"
+                            ") AS score FROM knowledge_nodes"
+                            " WHERE node_kind = 'chunk' AND ("
+                            "search_vector || COALESCE(keywords_vector, ''::tsvector)"
+                            ") @@ websearch_to_tsquery('simple', %s) AND "
+                        )
+                    )
                     + where_sql
                     + sql.SQL(" ORDER BY score DESC LIMIT %s")
                 )
@@ -111,11 +120,11 @@ class SearchMixin:
         tenant_id: str,
         user_id: str | None,
         scope: TaxonomyPath | None,
-        source_types: List[str] | None,
-    ) -> tuple[list, list]:
+        source_types: list[str] | None,
+    ) -> tuple[list[sql.SQL], list[object]]:
         """Build WHERE clause filters."""
         where = [sql.SQL("tenant_id = %s")]
-        params = [tenant_id]
+        params: list[object] = [tenant_id]
         if user_id:
             where.append(sql.SQL("(user_id = %s OR user_id IS NULL)"))
             params.append(user_id)
@@ -127,20 +136,34 @@ class SearchMixin:
             params.append(source_types)
         return where, params
 
-    async def _fetch_scores(self, conn, query, params: list, key: str) -> dict[str, float]:
+    async def _fetch_scores(
+        self, conn: PgConnection, query: sql.Composed, params: list[object], key: str
+    ) -> dict[str, float]:
         """Execute query and extract scores."""
         try:
-            rows = await conn.execute(query, params)
+            cur = conn.cursor(row_factory=dict_row)
+            rows = await cur.execute(query, params)
         except pg_errors.UndefinedColumn as e:
             raise StorageError(f"Schema mismatch: {e}", code="SCHEMA_MISMATCH") from e
         except pg_errors.DatabaseError as e:
             raise StorageError(f"Query failed: {e}", code="DB_QUERY_ERROR") from e
 
-        return {str(r["id"]): float(r[key]) async for r in rows if r.get(key) is not None}
+        scores: dict[str, float] = {}
+        async for raw_row in rows:
+            if not is_json_dict(raw_row):
+                continue
+            score_cell = raw_row.get(key)
+            if score_cell is None:
+                continue
+            scores[as_str(raw_row.get("id"))] = as_float(score_cell)
+        return scores
 
-    async def _fetch_nodes(self, conn, tenant_id: str, ids: Iterable[str]) -> List[GraphNode]:
+    async def _fetch_nodes(
+        self, conn: PgConnection, tenant_id: str, ids: Iterable[str]
+    ) -> list[GraphNode]:
         """Fetch full node data."""
-        rows = await conn.execute(
+        cur = conn.cursor(row_factory=dict_row)
+        rows = await cur.execute(
             """
             SELECT id, node_kind, source_type, source_id, title, content,
                    struct_data, taxonomy_path, tenant_id, user_id
@@ -149,26 +172,32 @@ class SearchMixin:
             [tenant_id, list(ids)],
         )
 
-        return [
-            GraphNode(
-                id=r["id"],
-                node_kind=r["node_kind"],
-                content=r.get("content") or "",
-                source_type=r.get("source_type"),
-                source_id=r.get("source_id"),
-                title=r.get("title"),
-                metadata=r.get("struct_data") or {},
-                taxonomy_path=r.get("taxonomy_path"),
-                tenant_id=r.get("tenant_id"),
-                user_id=r.get("user_id"),
+        nodes: list[GraphNode] = []
+        async for raw_row in rows:
+            if not is_json_dict(raw_row):
+                continue
+            struct_data = raw_row.get("struct_data")
+            metadata = struct_data if is_json_dict(struct_data) else {}
+            nodes.append(
+                GraphNode(
+                    id=as_str(raw_row.get("id")),
+                    node_kind=as_str(raw_row.get("node_kind")),
+                    content=as_str(raw_row.get("content")),
+                    source_type=as_str(raw_row.get("source_type")) or None,
+                    source_id=as_str(raw_row.get("source_id")) or None,
+                    title=as_str(raw_row.get("title")) or None,
+                    metadata=metadata,
+                    taxonomy_path=as_str(raw_row.get("taxonomy_path")) or None,
+                    tenant_id=as_str(raw_row.get("tenant_id")) or None,
+                    user_id=as_str(raw_row.get("user_id")) or None,
+                )
             )
-            async for r in rows
-        ]
+        return nodes
 
     def _fuse_results(
         self,
-        vec_hits: dict,
-        txt_hits: dict,
+        vec_hits: dict[str, float],
+        txt_hits: dict[str, float],
         fusion: str,
         rrf_k: int,
         vec_w: float,

@@ -2,23 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
+from contextunity.core.narrowing import as_float, as_int, as_str
+from contextunity.core.types import is_json_dict
 from psycopg.rows import dict_row
+
+from .models import GraphTraversalEdge, GraphTraversalNode, GraphTraversalResult
+from .store.helpers import PgConnection
 
 
 async def fetch_kg_facts(
     *,
-    conn,
+    conn: PgConnection,
     tenant_id: str,
     entrypoints: Iterable[str],
     allowed_relations: list[str] | None,
     max_depth: int,
     max_facts: int,
 ) -> list[tuple[str, str, str]]:
+    """Fetch kg facts.
+
+    Returns:
+        list[tuple[str, str, str]]: A list of list[tuple[str, str, str]].
+    """
     if not entrypoints:
         return []
-    conn.row_factory = dict_row
+    cur = conn.cursor(row_factory=dict_row)
     sql = """
     WITH RECURSIVE walk AS (
         SELECT source_id, target_id, relation, 1 AS depth
@@ -49,22 +59,30 @@ async def fetch_kg_facts(
         allowed_relations,
         max_facts,
     ]
-    rows = await conn.execute(sql, params)
+    rows = await cur.execute(sql, params)
     out: list[tuple[str, str, str]] = []
-    async for row in rows:
-        out.append((row["source_id"], row["target_id"], row["relation"]))
+    async for raw_row in rows:
+        if not is_json_dict(raw_row):
+            continue
+        out.append(
+            (
+                as_str(raw_row.get("source_id")),
+                as_str(raw_row.get("target_id")),
+                as_str(raw_row.get("relation")),
+            )
+        )
     return out
 
 
 async def graph_search(
     *,
-    conn,
+    conn: PgConnection,
     tenant_id: str,
     entrypoint_ids: list[str],
     allowed_relations: list[str] | None,
     max_hops: int,
     max_results: int = 200,
-) -> dict:
+) -> GraphTraversalResult:
     """Structural graph traversal returning nodes and edges.
 
     Uses recursive CTE to walk the knowledge_edges table starting from
@@ -77,7 +95,7 @@ async def graph_search(
     if not entrypoint_ids:
         return {"nodes": [], "edges": []}
 
-    conn.row_factory = dict_row
+    cur = conn.cursor(row_factory=dict_row)
 
     # Step 1: Recursive edge traversal
     edge_sql = """
@@ -113,22 +131,26 @@ async def graph_search(
         max_results,
     ]
 
-    edge_rows = await conn.execute(edge_sql, edge_params)
-    edges: list[dict] = []
+    edge_rows = await cur.execute(edge_sql, edge_params)
+    edges: list[GraphTraversalEdge] = []
     node_ids: set[str] = set(entrypoint_ids)
 
-    async for row in edge_rows:
+    async for raw_row in edge_rows:
+        if not is_json_dict(raw_row):
+            continue
+        source_id = as_str(raw_row.get("source_id"))
+        target_id = as_str(raw_row.get("target_id"))
         edges.append(
             {
-                "source_id": row["source_id"],
-                "target_id": row["target_id"],
-                "relation": row["relation"],
-                "weight": float(row.get("weight", 1.0) or 1.0),
-                "depth": row.get("depth", 1),
+                "source_id": source_id,
+                "target_id": target_id,
+                "relation": as_str(raw_row.get("relation")),
+                "weight": as_float(raw_row.get("weight"), default=1.0),
+                "depth": as_int(raw_row.get("depth"), default=1),
             }
         )
-        node_ids.add(row["source_id"])
-        node_ids.add(row["target_id"])
+        node_ids.add(source_id)
+        node_ids.add(target_id)
 
     if not node_ids:
         return {"nodes": [], "edges": edges}
@@ -140,19 +162,24 @@ async def graph_search(
     FROM knowledge_nodes
     WHERE tenant_id = %s AND id = ANY(%s::text[])
     """
-    node_rows = await conn.execute(node_sql, [tenant_id, list(node_ids)])
+    node_rows = await cur.execute(node_sql, [tenant_id, list(node_ids)])
 
-    nodes: list[dict] = []
-    async for row in node_rows:
+    nodes: list[GraphTraversalNode] = []
+    async for raw_row in node_rows:
+        if not is_json_dict(raw_row):
+            continue
+        content = as_str(raw_row.get("content"))
+        struct_data = raw_row.get("struct_data")
+        metadata = struct_data if is_json_dict(struct_data) else {}
         nodes.append(
             {
-                "id": row["id"],
-                "node_kind": row.get("node_kind", ""),
-                "source_type": row.get("source_type", ""),
-                "title": row.get("title", ""),
-                "content": (row.get("content") or "")[:500],  # Truncate for response size
-                "taxonomy_path": row.get("taxonomy_path", ""),
-                "metadata": row.get("struct_data") or {},
+                "id": as_str(raw_row.get("id")),
+                "node_kind": as_str(raw_row.get("node_kind")),
+                "source_type": as_str(raw_row.get("source_type")),
+                "title": as_str(raw_row.get("title")),
+                "content": content[:500],
+                "taxonomy_path": as_str(raw_row.get("taxonomy_path")),
+                "metadata": metadata,
             }
         )
 

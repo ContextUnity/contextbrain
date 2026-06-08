@@ -5,29 +5,35 @@ from __future__ import annotations
 import asyncio
 import time
 
-from contextunity.brain.transformers.keyphrases import KeyphraseTransformer
-from contextunity.brain.transformers.ner import NERTransformer
-from contextunity.core import ContextUnit, get_contextunit_logger
+from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import (
+    as_json_dict,
+    as_str,
+    as_str_list,
+    json_dict_list_as_json,
+    str_list_as_json,
+)
+from contextunity.core.types import JsonDict, is_json_dict, is_object_list
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 from contextunity.brain.ingestion.rag.config import get_assets_paths
+from contextunity.brain.ingestion.rag.core.types import RawData
 from contextunity.brain.ingestion.rag.core.utils import resolve_workers
 from contextunity.brain.ingestion.rag.settings import RagIngestionConfig
 from contextunity.brain.ingestion.rag.stages.store import (
     read_raw_data_jsonl,
     write_raw_data_jsonl,
 )
+from contextunity.brain.modules.intelligence.keyphrases import KeyphraseExtractor
+from contextunity.brain.modules.intelligence.ner import EntityExtractor
 
 logger = get_contextunit_logger(__name__)
 
 
 def _merge_keywords(existing: object, new: object) -> list[str]:
-    base = (
-        [str(x).strip() for x in (existing or []) if str(x).strip()]
-        if isinstance(existing, list)
-        else []
-    )
-    add = [str(x).strip() for x in (new or []) if str(x).strip()] if isinstance(new, list) else []
+    """Merge keyword lists preserving order and case-insensitive uniqueness."""
+    base = as_str_list(existing) if is_object_list(existing) else []
+    add = as_str_list(new) if is_object_list(new) else []
     merged: list[str] = []
     seen: set[str] = set()
     for item in base + add:
@@ -42,11 +48,13 @@ def _merge_keywords(existing: object, new: object) -> list[str]:
 async def enrich_clean_text(
     *,
     config: RagIngestionConfig,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     only_types: list[str],
     overwrite: bool = True,
     workers: int = 1,
 ) -> dict[str, str]:
+    """Enrich clean text."""
+    _ = core_cfg
     if not config.enrichment.ner_enabled and not config.enrichment.keyphrases_enabled:
         logger.info("enrich: disabled (enrichment.ner_enabled/keyphrases_enabled=false)")
         return {}
@@ -58,60 +66,62 @@ async def enrich_clean_text(
     paths = get_assets_paths(config)
     out_paths: dict[str, str] = {}
 
-    async def _enrich_items(items):
-        ner = None
+    async def _enrich_items(items: list[RawData]) -> list[RawData]:
+        ner: EntityExtractor | None = None
         if config.enrichment.ner_enabled:
-            ner = NERTransformer()
-            ner.configure(
-                {
-                    "mode": config.enrichment.ner.mode,
-                    "model": config.enrichment.ner.model,
-                    "entity_types": config.enrichment.ner.entity_types,
-                    "min_confidence": config.enrichment.ner.min_confidence,
-                    "core_cfg": core_cfg,
-                }
-            )
-        keyphrases = None
-        if config.enrichment.keyphrases_enabled:
-            keyphrases = KeyphraseTransformer()
-            keyphrases.configure(
-                {
-                    "mode": config.enrichment.keyphrases.mode,
-                    "max_phrases": config.enrichment.keyphrases.max_phrases,
-                    "min_score": config.enrichment.keyphrases.min_score,
-                    "model": config.enrichment.keyphrases.model,
-                    "core_cfg": core_cfg,
-                }
-            )
+            ner = EntityExtractor(default_mode=config.enrichment.ner.mode)
 
-        enriched = []
+        keyphrases: KeyphraseExtractor | None = None
+        if config.enrichment.keyphrases_enabled:
+            keyphrases = KeyphraseExtractor()
+
+        enriched: list[RawData] = []
         for item in items:
-            envelope = ContextUnit(
-                payload={
-                    "content": item.content,
-                    "metadata": dict(item.metadata or {}),
-                },
-                provenance=["brain:enrich"],
-            )
+            metadata: JsonDict = as_json_dict(item.metadata)
             try:
                 if ner:
-                    envelope = await ner.transform(envelope)
+                    entities = await ner.extract(item.content, mode=config.enrichment.ner.mode)
+                    if entities:
+                        entity_rows: list[JsonDict] = [
+                            {
+                                "text": ent.text,
+                                "label": ent.label,
+                                "confidence": ent.confidence,
+                            }
+                            for ent in entities
+                        ]
+                        metadata["ner_entities"] = json_dict_list_as_json(entity_rows)
+                        metadata["ner_entity_count"] = len(entities)
+                        by_type: dict[str, list[JsonDict]] = {}
+                        for ent in entities:
+                            by_type.setdefault(ent.label, []).append(
+                                {"text": ent.text, "confidence": ent.confidence}
+                            )
+                        metadata["ner_entities_by_type"] = {
+                            label: json_dict_list_as_json(rows) for label, rows in by_type.items()
+                        }
                 if keyphrases:
-                    envelope = await keyphrases.transform(envelope)
+                    phrases = keyphrases.extract(
+                        item.content, limit=config.enrichment.keyphrases.max_phrases
+                    )
+                    metadata["keyphrase_texts"] = str_list_as_json(phrases)
             except Exception:
                 logger.exception("enrich: failed to enrich item, keeping original metadata")
-            metadata = dict(envelope.payload.get("metadata", {}) if envelope.payload else {})
-            ner_entities = metadata.get("ner_entities")
-            if isinstance(ner_entities, list):
-                ner_texts = [
-                    str(ent.get("text", "")).strip()
-                    for ent in ner_entities
-                    if isinstance(ent, dict)
-                ]
-                metadata["keywords"] = _merge_keywords(metadata.get("keywords"), ner_texts)
+
+            ner_entities_obj = metadata.get("ner_entities")
+            if is_object_list(ner_entities_obj):
+                ner_texts: list[str] = []
+                for ent in ner_entities_obj:
+                    if is_json_dict(ent):
+                        text = as_str(ent.get("text")).strip()
+                        if text:
+                            ner_texts.append(text)
+                metadata["keywords"] = str_list_as_json(
+                    _merge_keywords(metadata.get("keywords"), ner_texts)
+                )
             if keyphrases:
-                metadata["keywords"] = _merge_keywords(
-                    metadata.get("keywords"), metadata.get("keyphrase_texts")
+                metadata["keywords"] = str_list_as_json(
+                    _merge_keywords(metadata.get("keywords"), metadata.get("keyphrase_texts"))
                 )
             item.metadata = metadata
             enriched.append(item)
@@ -122,7 +132,6 @@ async def enrich_clean_text(
             t0 = time.perf_counter()
             in_path = paths["clean_text"] / f"{t}.jsonl"
 
-            # Blocking IO -> Thread
             try:
                 items = await asyncio.to_thread(read_raw_data_jsonl, in_path)
             except Exception:
@@ -133,12 +142,10 @@ async def enrich_clean_text(
                 logger.warning("enrich: no clean_text items for type=%s at %s", t, in_path)
                 return (t, "")
 
-            # Async Logic
             enriched = await _enrich_items(items)
 
             out_path = paths["clean_text"] / f"{t}.jsonl"
 
-            # Blocking IO -> Thread
             count = await asyncio.to_thread(
                 write_raw_data_jsonl, enriched, out_path, overwrite=True
             )

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from contextunity.core import get_contextunit_logger
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
 
 from ..core.types import RawData
 from ..utils.llm import llm_generate
@@ -19,7 +19,7 @@ def generate_persona_profile(
     all_data: list[RawData],
     output_path: Path,
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     persona_name: str = "Speaker Name",
     bio_text: str | None = None,
     sample_count: int = 50,
@@ -100,10 +100,10 @@ Rules:
     if not isinstance(persona_text, str):
         persona_text = str(persona_text)
 
-    if isinstance(persona_text, str) and "END_SYSTEM_INSTRUCTION" not in persona_text:
+    if "END_SYSTEM_INSTRUCTION" not in persona_text:
         logger.warning("Persona output may be truncated (missing END_SYSTEM_INSTRUCTION)")
 
     # Save to file
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(persona_text, encoding="utf-8")
+    _ = output_path.write_text(persona_text, encoding="utf-8")
     logger.info("Saved persona profile to %s", output_path)

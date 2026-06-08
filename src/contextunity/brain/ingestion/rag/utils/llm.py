@@ -10,12 +10,13 @@ import asyncio
 
 from contextunity.core import get_contextunit_logger
 
-from contextunity.brain.core import Config
+from contextunity.brain.core import BrainConfig
+from contextunity.brain.core.exceptions import ContextbrainError
 
 logger = get_contextunit_logger(__name__)
 
 
-def _resolve_json_model(core_cfg: Config, model: str) -> str:
+def _resolve_json_model(core_cfg: BrainConfig, model: str) -> str:
     """Resolve model for JSON-critical ingestion steps via config override."""
     json_model = core_cfg.models.ingestion.json_model.model.strip()
     if json_model:
@@ -25,7 +26,7 @@ def _resolve_json_model(core_cfg: Config, model: str) -> str:
 
 def llm_generate(
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     prompt: str,
     model: str,
     max_tokens: int = 16384,
@@ -36,7 +37,7 @@ def llm_generate(
     """Generate using a chat model (synchronous wrapper)."""
 
     try:
-        asyncio.get_running_loop()
+        _ = asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(
             _llm_generate_impl(
@@ -51,15 +52,17 @@ def llm_generate(
         )
 
     # Running loop exists. This function is intentionally synchronous; do not nest event loops.
-    raise RuntimeError(
-        "llm_generate() is synchronous and cannot run inside an active asyncio loop. "
-        "Call `await llm_generate_async(...)` instead."
+    raise ContextbrainError(
+        (
+            "llm_generate() is synchronous and cannot run inside an active asyncio loop. "
+            "Call `await llm_generate_async(...)` instead."
+        )
     )
 
 
 async def llm_generate_async(
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     prompt: str,
     model: str,
     max_tokens: int = 16384,
@@ -81,7 +84,7 @@ async def llm_generate_async(
 
 async def _llm_generate_impl(
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     prompt: str,
     model: str,
     max_tokens: int,
@@ -90,14 +93,17 @@ async def _llm_generate_impl(
     parse_json: bool,
 ) -> dict[str, object] | list[object] | str:
     """LLM generation implementation - requires model registry."""
+    del prompt, max_tokens, temperature, max_retries
     if parse_json:
         model = _resolve_json_model(core_cfg, model)
 
     # TODO: Implement model registry or use alternative LLM interface
     raise NotImplementedError(
-        "LLM generation requires model registry which is not yet implemented in contextunity.brain. "
-        f"Requested model: {model}. "
-        "This functionality will be available once model registry is implemented."
+        (
+            "LLM generation requires model registry which is not yet implemented in "
+            f"contextunity.brain. Requested model: {model}. "
+            "This functionality will be available once model registry is implemented."
+        )
     )
 
 

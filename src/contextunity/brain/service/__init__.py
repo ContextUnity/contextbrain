@@ -7,7 +7,6 @@ This module re-exports the main service classes for backward compatibility.
 """
 
 from .brain_service import BrainService
-from .commerce_service import HAS_COMMERCE, CommerceService
 from .embedders import ApiEmbedder, LocalEmbedder, get_embedder
 from .helpers import make_response, parse_unit
 from .server import serve
@@ -15,8 +14,6 @@ from .server import serve
 __all__ = [
     # Services
     "BrainService",
-    "CommerceService",
-    "HAS_COMMERCE",
     # Embedders
     "ApiEmbedder",
     "LocalEmbedder",

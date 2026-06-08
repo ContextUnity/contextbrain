@@ -1,5 +1,8 @@
 """Security configuration for contextunity.brain."""
 
+from typing import ClassVar
+
+from contextunity.core.config.models import SharedSecurityConfig
 from contextunity.core.permissions import Permissions
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,13 +13,13 @@ class SecurityPoliciesConfig(BaseModel):
     Uses canonical Permissions.* constants from contextunity.core.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     read_permission: str = Permissions.BRAIN_READ
     write_permission: str = Permissions.BRAIN_WRITE
 
 
-class SecurityConfig(BaseModel):
+class SecurityConfig(SharedSecurityConfig):
     """Security settings for contextunity.brain.
 
     Security is always enforced — there is no toggle.
@@ -24,6 +27,6 @@ class SecurityConfig(BaseModel):
     (auto-detected: HmacBackend or SessionTokenBackend).
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     policies: SecurityPoliciesConfig = Field(default_factory=SecurityPoliciesConfig)

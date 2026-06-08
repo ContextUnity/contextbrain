@@ -2,21 +2,33 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import override
 
 from contextunity.core import ContextToken, ContextUnit
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.types import JsonDict, is_json_dict
 
 from contextunity.brain.core import get_core_config
+from contextunity.brain.core.exceptions import BrainValidationError
 from contextunity.brain.core.interfaces import BaseProvider, IRead, IWrite
 from contextunity.brain.core.models import RetrievedDoc
 from contextunity.brain.core.types import coerce_struct_data
 
 # NOTE: Router-specific logic (model_registry, get_rag_retrieval_settings) removed.
 # Brain should use a simpler embedding interface when implemented.
-from .store import GraphNode, PostgresKnowledgeStore
+from .models import GraphNode
+from .store import PostgresKnowledgeStore
 
 
-def _flatten_keywords(metadata: dict[str, Any]) -> str | None:
+def _flatten_keywords(metadata: JsonDict) -> str | None:
+    """flatten keywords.
+
+    Args:
+        metadata: Keyword metadata map.
+
+    Returns:
+        str | None: An instance of str | None.
+    """
     keywords = metadata.get("keywords")
     keyphrases = metadata.get("keyphrase_texts")
     parts: list[str] = []
@@ -40,45 +52,79 @@ def _flatten_keywords(metadata: dict[str, Any]) -> str | None:
 
 
 class PostgresProvider(BaseProvider, IRead, IWrite):
+    """Represent and manage Postgres Provider logic within the system."""
+
+    _store: PostgresKnowledgeStore
+
     def __init__(self, *, store: PostgresKnowledgeStore | None = None) -> None:
+        """Initialize a new instance of PostgresProvider.
+
+        Raises:
+            ConfigurationError: If a validation error occurs.
+        """
         cfg = get_core_config()
         if store is not None:
             self._store = store
         else:
             if not getattr(cfg, "postgres", None):
-                raise RuntimeError("Postgres config is missing from core config")
+                raise ConfigurationError("Postgres config is missing from core config")
             self._store = PostgresKnowledgeStore(
                 dsn=cfg.postgres.dsn,
                 pool_min_size=cfg.postgres.pool_min_size,
                 pool_max_size=cfg.postgres.pool_max_size,
             )
 
+    @override
     async def read(
         self,
         query: str,
         *,
         limit: int = 5,
-        filters: dict[str, Any] | None = None,
+        filters: JsonDict | None = None,
         token: ContextToken,
     ) -> list[ContextUnit]:
         """Read/search from Postgres knowledge store.
 
-        NOTE: This is a simplified version for brain. Full retrieval logic
-        (reranking, fusion, etc.) belongs in router.
+        Args:
+            query (str): The query parameter.
+
+        Returns:
+            list[ContextUnit]: A list of list[ContextUnit].
+
+        Raises:
+            NotImplementedError: If a validation error occurs.
+            SecurityError: If security credentials fail or permissions are insufficient.
         """
-        tenant_id = (filters or {}).get("tenant_id")
+        filter_map = filters or {}
+        tenant_id = filter_map.get("tenant_id")
+        if not isinstance(tenant_id, str):
+            tenant_id = None
         if not tenant_id:
-            raise PermissionError("tenant_id is required for Postgres retrieval")
+            from contextunity.core.exceptions import SecurityError
+
+            raise SecurityError("tenant_id is required for Postgres retrieval")
 
         # TODO: Embeddings should come from a simpler interface in brain
         # Router-specific logic (model_registry, rag_cfg) removed.
         # Brain needs its own embedding interface when implemented.
         raise NotImplementedError(
-            "PostgresProvider.read requires embeddings which are not yet implemented in brain. "
-            "This functionality should use a simpler interface than router's model_registry."
+            (
+                "PostgresProvider.read requires embeddings which are not yet implemented in brain. "
+                "This functionality should use a simpler interface than router's model_registry."
+            )
         )
 
+    @override
     async def write(self, data: ContextUnit, *, token: ContextToken) -> None:
+        """Write.
+
+        Args:
+            data (ContextUnit): The raw data dictionary or object.
+
+        Raises:
+            SecurityError: If security credentials fail or permissions are insufficient.
+            BrainValidationError: If parameter values are invalid.
+        """
         payload = data.payload or {}
         content = payload.get("content")
         if isinstance(content, RetrievedDoc):
@@ -86,13 +132,17 @@ class PostgresProvider(BaseProvider, IRead, IWrite):
         elif isinstance(content, dict):
             doc = RetrievedDoc.model_validate(content)
         else:
-            raise ValueError("PostgresProvider.write expects RetrievedDoc content")
+            raise BrainValidationError("PostgresProvider.write expects RetrievedDoc content")
 
-        metadata = payload.get("metadata", {})
-        tenant_id = metadata.get("tenant_id") if isinstance(metadata, dict) else None
-        if not tenant_id:
-            raise PermissionError("tenant_id is required for Postgres write")
-        user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+        metadata_raw = payload.get("metadata", {})
+        metadata = metadata_raw if is_json_dict(metadata_raw) else {}
+        tenant_id = metadata.get("tenant_id")
+        if not isinstance(tenant_id, str) or not tenant_id:
+            from contextunity.core.exceptions import SecurityError
+
+            raise SecurityError("tenant_id is required for Postgres write")
+        user_id_raw = metadata.get("user_id")
+        user_id = user_id_raw if isinstance(user_id_raw, str) else None
 
         node_id = str(data.unit_id)
         doc_metadata = coerce_struct_data(doc.metadata or {})
@@ -108,20 +158,34 @@ class PostgresProvider(BaseProvider, IRead, IWrite):
             title=doc.title,
             metadata=doc_metadata,
             keywords_text=keywords_text,
-            tenant_id=str(tenant_id),
-            user_id=str(user_id) if user_id else None,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
-        await self._store.upsert_graph([node], [], tenant_id=str(tenant_id), user_id=user_id)
+        await self._store.upsert_graph([node], [], tenant_id=tenant_id, user_id=user_id)
 
-    async def sink(self, envelope: ContextUnit, *, token: ContextToken) -> Any:
+    @override
+    async def sink(self, envelope: ContextUnit, *, token: ContextToken) -> None:
+        """Sink.
+
+        Args:
+            envelope (ContextUnit): The envelope parameter.
+
+        """
         await self.write(envelope, token=token)
-        return None
 
     def _to_retrieved_doc(self, node: GraphNode, *, score: float) -> RetrievedDoc:
+        """to retrieved doc.
+
+        Args:
+            node (GraphNode): The node parameter.
+
+        Returns:
+            RetrievedDoc: An instance of RetrievedDoc.
+        """
         metadata = coerce_struct_data(node.metadata or {})
         if not isinstance(metadata, dict):
             metadata = {}
-        doc_data = {
+        doc_data: dict[str, object] = {
             "source_type": node.source_type or "unknown",
             "content": node.content,
             "title": node.title,

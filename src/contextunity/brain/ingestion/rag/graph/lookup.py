@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
 import networkx as nx
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_json_dict, as_json_dict_map, as_str, as_str_list
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, is_json_dict
+
+from contextunity.brain.ingestion.rag.core.types import GraphEnrichmentResult
 
 from .serialization import load_graph_secure
 
@@ -16,6 +19,11 @@ logger = get_contextunit_logger(__name__)
 
 class GraphEnricher:
     """Enriches text chunks with knowledge graph context."""
+
+    graph: nx.Graph[str]
+    _graph_enabled: bool
+    taxonomy: JsonDict | None
+    _keyword_to_category: dict[str, str]
 
     def __init__(
         self,
@@ -31,7 +39,7 @@ class GraphEnricher:
         # Load graph
         if not graph_path.exists():
             logger.warning("Graph file not found: %s. Graph enrichment disabled.", graph_path)
-            self.graph = nx.Graph()
+            self.graph = nx.Graph[str]()
             self._graph_enabled = False
         else:
             try:
@@ -49,20 +57,23 @@ class GraphEnricher:
                     graph_path,
                     e,
                 )
-                self.graph = nx.Graph()
+                self.graph = nx.Graph[str]()
                 self._graph_enabled = False
 
         # Load taxonomy
-        self.taxonomy: dict[str, Any] | None = None
-        self._keyword_to_category: dict[str, str] = {}
+        self.taxonomy = None
+        self._keyword_to_category = {}
 
         if taxonomy_path and taxonomy_path.exists():
             try:
                 with open(taxonomy_path, encoding="utf-8") as f:
-                    self.taxonomy = json.load(f)
+                    tax_wire = json_loads(f.read())
+                self.taxonomy = as_json_dict(tax_wire) if is_json_dict(tax_wire) else None
                 # Build reverse lookup: keyword -> category
-                for cat_name, cat_data in self.taxonomy.get("categories", {}).items():
-                    for keyword in cat_data.get("keywords", []):
+                for cat_name, cat_data in as_json_dict_map(
+                    (self.taxonomy or {}).get("categories")
+                ).items():
+                    for keyword in as_str_list(cat_data.get("keywords")):
                         self._keyword_to_category[keyword.lower()] = cat_name
                 logger.info(
                     "Loaded taxonomy with %d keyword->category mappings",
@@ -90,14 +101,14 @@ class GraphEnricher:
             return self._keyword_to_category[entity_lower]
 
         # Try canonical map lookup
-        canonical_map = self.taxonomy.get("canonical_map", {})
-        canonical = canonical_map.get(entity_lower)
+        canonical_map = as_json_dict(self.taxonomy.get("canonical_map"))
+        canonical = as_str(canonical_map.get(entity_lower))
         if canonical and canonical.lower() in self._keyword_to_category:
             return self._keyword_to_category[canonical.lower()]
 
         return None
 
-    def get_context(self, text_chunk: str) -> dict[str, Any]:
+    def get_context(self, text_chunk: str) -> GraphEnrichmentResult:
         """Get graph context for a text chunk.
 
         Args:
@@ -137,30 +148,29 @@ class GraphEnricher:
         # but if the graph grows large, we should build an index (e.g., token->nodes or
         # ngram->nodes) and use that for candidate selection.
         for node in self.graph.nodes():
-            node_lower = str(node).lower()
+            node_lower = node.lower()
             if node_lower in text_lower or text_lower in node_lower:
-                matched_entities.append(str(node))
+                matched_entities.append(node)
 
                 # Get parent category from taxonomy
-                category = self._get_category_for_entity(str(node))
+                category = self._get_category_for_entity(node)
                 if category:
                     parent_categories.add(category)
 
                 # Find 1-hop neighbors
                 for neighbor in self.graph.neighbors(node):
-                    neighbors.append(str(neighbor))
+                    neighbors.append(neighbor)
 
                     # Get parent category for neighbor too
-                    neighbor_category = self._get_category_for_entity(str(neighbor))
+                    neighbor_category = self._get_category_for_entity(neighbor)
                     if neighbor_category:
                         parent_categories.add(neighbor_category)
 
                     # Get relation label if available
                     edge_data = self.graph.get_edge_data(node, neighbor)
-                    if edge_data:
-                        relation_label = edge_data.get("relation", "")
-                        if relation_label:
-                            relations.append(f"{node} connects to {neighbor} via {relation_label}")
+                    relation_label = as_str(as_json_dict(edge_data).get("relation"))
+                    if relation_label:
+                        relations.append(f"{node} connects to {neighbor} via {relation_label}")
 
         # Build keywords list (matched entities + neighbors, deduplicated)
         all_keywords = sorted(set(matched_entities + neighbors))

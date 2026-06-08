@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-from contextunity.core import get_contextunit_logger
-from contextunity.core.exceptions import grpc_error_handler, grpc_stream_error_handler
+from collections.abc import AsyncIterator
+
+import grpc
+from contextunity.core import contextunit_pb2, get_contextunit_logger
+from contextunity.core.grpc_errors import grpc_error_handler, grpc_stream_error_handler
 from contextunity.core.permissions import Permissions
+from contextunity.core.types import is_json_dict
 
 from ...payloads import (
     AddEpisodePayload,
+    GetEpisodeStatsPayload,
     GetRecentEpisodesPayload,
     GetUserFactsPayload,
     RetentionCleanupPayload,
     UpsertFactPayload,
 )
+from ..handler_base import BrainHandlerBase
 from ..helpers import (
     extract_token_from_context,
     make_response,
@@ -26,16 +32,33 @@ from ..helpers import (
 logger = get_contextunit_logger(__name__)
 
 
-class MemoryHandlersMixin:
+def _row_float(value: object, *, default: float = 0.0) -> float:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return default
+    return default
+
+
+class MemoryHandlersMixin(BrainHandlerBase):
     """Mixin for episodic and entity memory handlers."""
 
     @grpc_error_handler
-    async def AddEpisode(self, request, context):
+    async def AddEpisode(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Persist a conversation turn into Episodic memory."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
-        params = AddEpisodePayload(**unit.payload)
+        params = AddEpisodePayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -46,7 +69,7 @@ class MemoryHandlersMixin:
 
         await self.storage.add_episode(
             id=str(unit.unit_id),
-            user_id=params.user_id,
+            user_id=params.user_id or "*",
             tenant_id=params.tenant_id,
             session_id=params.session_id,
             content=params.content,
@@ -58,12 +81,16 @@ class MemoryHandlersMixin:
         )
 
     @grpc_stream_error_handler
-    async def GetRecentEpisodes(self, request, context):
+    async def GetRecentEpisodes(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
         """Get recent episodes for a user."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
-        params = GetRecentEpisodesPayload(**unit.payload)
+        params = GetRecentEpisodesPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -78,19 +105,27 @@ class MemoryHandlersMixin:
                 payload={
                     "id": str(row.get("id", "")),
                     "content": row.get("content", ""),
-                    "metadata": {k: str(v) for k, v in (row.get("metadata") or {}).items()},
+                    "metadata": (
+                        {k: str(v) for k, v in meta.items()}
+                        if is_json_dict(meta := row.get("metadata"))
+                        else {}
+                    ),
                     "created_at": str(row.get("created_at", "")),
                 },
                 parent_unit=unit,
             )
 
     @grpc_error_handler
-    async def UpsertFact(self, request, context):
+    async def UpsertFact(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Update Entity memory with persistent user facts."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
-        params = UpsertFactPayload(**unit.payload)
+        params = UpsertFactPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -108,12 +143,16 @@ class MemoryHandlersMixin:
         )
 
     @grpc_stream_error_handler
-    async def GetUserFacts(self, request, context):
+    async def GetUserFacts(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
         """Get all known facts about a user."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
-        params = GetUserFactsPayload(**unit.payload)
+        params = GetUserFactsPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -127,14 +166,18 @@ class MemoryHandlersMixin:
                 payload={
                     "fact_key": row.get("fact_key", ""),
                     "fact_value": row.get("fact_value", ""),
-                    "confidence": float(row.get("confidence", 1.0)),
+                    "confidence": _row_float(row.get("confidence"), default=1.0),
                     "updated_at": str(row.get("updated_at", "")),
                 },
                 parent_unit=unit,
             )
 
     @grpc_error_handler
-    async def RetentionCleanup(self, request, context):
+    async def RetentionCleanup(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Delete old episodic events (for retention policy).
 
         Requires MEMORY_WRITE permission.
@@ -142,7 +185,7 @@ class MemoryHandlersMixin:
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
-        params = RetentionCleanupPayload(**unit.payload)
+        params = RetentionCleanupPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, None, context)  # Must be an admin/system token
 
@@ -163,21 +206,25 @@ class MemoryHandlersMixin:
         )
 
     @grpc_error_handler
-    async def GetEpisodeStats(self, request, context):
+    async def GetEpisodeStats(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Get episode count and date range for a tenant."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
-        tenant_id = unit.payload.get("tenant_id", "default")
-        validate_tenant_access(token, tenant_id, context)
+        params = GetEpisodeStatsPayload.model_validate(unit.payload or {})
+        validate_tenant_access(token, params.tenant_id, context)
 
-        stats = await self.storage.count_episodes(tenant_id=tenant_id)
+        stats = await self.storage.count_episodes(tenant_id=params.tenant_id)
         return make_response(
             payload={
                 "total": stats.get("total", 0),
                 "oldest": str(stats.get("oldest", "")),
                 "newest": str(stats.get("newest", "")),
-                "tenant_id": tenant_id,
+                "tenant_id": params.tenant_id,
             },
             parent_unit=unit,
         )

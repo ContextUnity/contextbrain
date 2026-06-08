@@ -8,44 +8,35 @@ import grpc
 from contextunity.core import (
     brain_pb2_grpc,
     get_contextunit_logger,
-    load_shared_config_from_env,
     setup_logging,
 )
 
 from .brain_service import BrainService
-from .commerce_service import HAS_COMMERCE
-
-if HAS_COMMERCE:
-    from contextunity.core import commerce_pb2_grpc
-
-    from .commerce_service import CommerceService
 
 logger = get_contextunit_logger(__name__)
 
 
 async def serve():
-    """Start the gRPC server. Config: .env loaded only via Config.load() (single entry)."""
-    from contextunity.brain.core.config import Config
+    """Start the gRPC server."""
+    from contextunity.brain.core.config import get_core_config
 
-    Config.load()  # Load service .env once; port and rest from env
-    config = load_shared_config_from_env()
-    setup_logging(config=config, service_name="contextunity.brain")
-
-    # Load Brain-specific config for security settings
-    from contextunity.brain.core import get_core_config
-
-    brain_config = get_core_config()
+    brain_config = get_core_config()  # Load service config once
+    setup_logging(config=brain_config, service_name="contextunity.brain")
 
     # Build interceptor list: security + domain permission checks
     from .interceptors import BrainPermissionInterceptor
 
-    interceptors = []
-    interceptors.append(BrainPermissionInterceptor(shield_url=config.shield_url))
+    interceptors: list[grpc.aio.ServerInterceptor] = [
+        BrainPermissionInterceptor(
+            shield_url=brain_config.shield_url,
+            config=brain_config,
+        ),
+    ]
 
     server = grpc.aio.server(
         interceptors=interceptors,
         options=(
-            ("grpc.so_reuseport", 1 if config.grpc_reuse_port else 0),
+            ("grpc.so_reuseport", 1 if brain_config.grpc_reuse_port else 0),
             ("grpc.max_send_message_length", 50 * 1024 * 1024),
             ("grpc.max_receive_message_length", 50 * 1024 * 1024),
         ),
@@ -54,17 +45,12 @@ async def serve():
     brain = BrainService()
 
     # Ensure schema exists on startup (idempotent — uses IF NOT EXISTS)
-    include_commerce = HAS_COMMERCE
     await brain.storage.ensure_schema(
-        include_commerce=include_commerce,
+        include_commerce=True,
         vector_dim=brain_config.postgres.vector_dim,
     )
 
     brain_pb2_grpc.add_BrainServiceServicer_to_server(brain, server)
-
-    if HAS_COMMERCE:
-        commerce_pb2_grpc.add_CommerceServiceServicer_to_server(CommerceService(brain), server)
-        logger.info("Commerce Service registered")
 
     from contextunity.core.grpc_utils import graceful_shutdown, start_grpc_server
 
@@ -72,13 +58,16 @@ async def serve():
         server,
         "brain",
         brain_config.port,
+        host=brain_config.host,
         instance_name=brain_config.instance_name,
         tenants=brain_config.tenants,
+        redis_url=brain_config.redis.url,
+        config=brain_config,
     )
 
     await graceful_shutdown(server, "Brain", heartbeat_task=heartbeat_task)
 
 
 if __name__ == "__main__":
-    # .env loaded in serve() via Config.load()
+    # .env loaded in serve() via get_core_config()
     asyncio.run(serve())

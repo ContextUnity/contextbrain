@@ -8,10 +8,12 @@ Modules:
 
 from __future__ import annotations
 
-from typing import List, Sequence
+from collections.abc import Sequence
+
+from contextunity.brain.core.exceptions import BrainValidationError
 
 
-def _extension_statements() -> List[str]:
+def _extension_statements() -> list[str]:
     """Extensions required by Brain — need superuser privileges.
 
     These are separated from table DDL because they may require
@@ -24,7 +26,7 @@ def _extension_statements() -> List[str]:
     ]
 
 
-def _core_schema(vector_dim: int) -> List[str]:
+def _core_schema(vector_dim: int) -> list[str]:
     """Core Brain tables - always required."""
     return [
         # Nodes table
@@ -174,7 +176,7 @@ def _core_schema(vector_dim: int) -> List[str]:
     ]
 
 
-def _commerce_schema(vector_dim: int) -> List[str]:
+def _commerce_schema(vector_dim: int) -> list[str]:
     """Commerce/Taxonomy tables - for e-commerce integrations."""
     return [
         # Catalog Taxonomy (The Gold Standard)
@@ -207,7 +209,7 @@ def _commerce_schema(vector_dim: int) -> List[str]:
     ]
 
 
-def _column_backfill() -> List[str]:
+def _column_backfill() -> list[str]:
     """Idempotent column additions for tables that already exist.
 
     Problem: ``CREATE TABLE IF NOT EXISTS`` skips the entire statement when
@@ -229,7 +231,7 @@ def _column_backfill() -> List[str]:
     ]
 
 
-def _constraint_upgrades() -> List[str]:
+def _constraint_upgrades() -> list[str]:
     """Idempotent constraint updates for evolved schemas.
 
     CHECK constraints and other DDL that may need updating on existing tables.
@@ -244,7 +246,114 @@ def _constraint_upgrades() -> List[str]:
     ]
 
 
-def _rls_policies() -> List[str]:
+def _blackboard_schema(vector_dim: int) -> list[str]:
+    """Blackboard scratch data table — Flat Memory Phase A.
+
+    UNLOGGED table: no WAL overhead (2-3x faster writes). Acceptable because
+    blackboard is ephemeral scratch data — loss on PostgreSQL crash is OK,
+    the graph will re-execute. Trade-off: not replicated to standby.
+    """
+    return [
+        """
+        CREATE UNLOGGED TABLE IF NOT EXISTS blackboard_records (
+            id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id   TEXT NOT NULL,
+            scope_path  LTREE NOT NULL,
+            content     JSONB NOT NULL,
+            embedding   VECTOR(%d) NULL,
+            metadata    JSONB NOT NULL DEFAULT '{}'::jsonb,
+            ttl_until   TIMESTAMPTZ NULL,
+            created_by  TEXT NULL,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """
+        % int(vector_dim),
+        """
+        CREATE INDEX IF NOT EXISTS blackboard_scope_gist
+            ON blackboard_records USING GIST (scope_path);
+        """,
+        "CREATE INDEX IF NOT EXISTS blackboard_tenant_idx ON blackboard_records (tenant_id);",
+        """
+        CREATE INDEX IF NOT EXISTS blackboard_ttl_idx
+            ON blackboard_records (ttl_until) WHERE ttl_until IS NOT NULL;
+        """,
+    ]
+
+
+def _experiences_schema(vector_dim: int) -> list[str]:
+    """Agent experiences table — Flat Memory Phase B.
+
+    Stores agent action outcomes with Q-values for experience-driven
+    agent improvement. Each experience carries a composite Q-score
+    computed from action success, hypothesis quality, and context relevance.
+
+    Partitioned by created_at (monthly) for efficient retention management.
+    Use pg_partman for automatic partition creation, or manual:
+        sudo apt install postgresql-16-partman
+        CREATE EXTENSION pg_partman;
+    Alternatively, create partitions via Worker schedule or init script.
+    """
+    return [
+        """
+        CREATE TABLE IF NOT EXISTS agent_experiences (
+            id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id       TEXT NOT NULL,
+            agent_id        TEXT NOT NULL,
+            graph_name      TEXT NULL,
+            graph_run_id    UUID NULL,
+
+            -- What was done
+            action_type     TEXT NOT NULL,
+            action_data     JSONB NOT NULL,
+            context_summary TEXT NULL,
+            client_id       TEXT NULL,
+
+            -- Node classification (for credit assignment)
+            node_role       TEXT NOT NULL DEFAULT 'worker'
+                            CHECK (node_role IN ('planner','worker','terminal','router')),
+            fault_class     TEXT NULL
+                            CHECK (fault_class IN ('agent_fault','infra_fault','upstream_fault')),
+
+            -- Lifecycle (OpenExp 8-state pattern)
+            status          TEXT NOT NULL DEFAULT 'active'
+                            CHECK (status IN ('active','confirmed','outdated',
+                                              'archived','contradicted','superseded','merged','deleted')),
+
+            -- Outcome assessment (3-layer from OpenExp)
+            q_action        DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            q_hypothesis    DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            q_relevance     DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+            q_composite     DOUBLE PRECISION GENERATED ALWAYS AS (
+                                (q_action * 0.5) + (q_hypothesis * 0.3) + (q_relevance * 0.2)
+                            ) STORED,
+
+            -- Spatial + temporal
+            scope_path      LTREE NULL,
+            embedding       VECTOR(%d) NULL,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """
+        % int(vector_dim),
+        """
+        CREATE INDEX IF NOT EXISTS experiences_q_composite_idx
+            ON agent_experiences (q_composite DESC);
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS experiences_scope_gist
+            ON agent_experiences USING GIST (scope_path);
+        """,
+        "CREATE INDEX IF NOT EXISTS experiences_agent_idx ON agent_experiences (agent_id);",
+        "CREATE INDEX IF NOT EXISTS experiences_run_idx ON agent_experiences (graph_run_id);",
+        """
+        CREATE INDEX IF NOT EXISTS experiences_status_idx
+            ON agent_experiences (status) WHERE status IN ('active', 'confirmed');
+        """,
+        "CREATE INDEX IF NOT EXISTS experiences_tenant_idx ON agent_experiences (tenant_id);",
+    ]
+
+
+def _rls_policies() -> list[str]:
     """Row-Level Security policies for tenant isolation.
 
     Defence-in-depth (Layer 2): even if application-level tenant checks
@@ -267,6 +376,8 @@ def _rls_policies() -> List[str]:
         "user_facts",
         "agent_traces",
         "catalog_taxonomy",
+        "blackboard_records",
+        "agent_experiences",
     ]
 
     stmts: list[str] = []
@@ -395,9 +506,11 @@ def build_schema_sql(
         List of SQL statements to execute
     """
     if vector_dim <= 0:
-        raise ValueError("vector_dim must be positive")
+        raise BrainValidationError("vector_dim must be positive")
 
     statements = _core_schema(vector_dim)
+    statements.extend(_blackboard_schema(vector_dim))
+    statements.extend(_experiences_schema(vector_dim))
 
     if include_commerce:
         statements.extend(_commerce_schema(vector_dim))

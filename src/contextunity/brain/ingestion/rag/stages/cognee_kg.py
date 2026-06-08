@@ -7,8 +7,11 @@ import json
 from pathlib import Path
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_float
+from contextunity.core.types import JsonDict
 
-from ...tools.cognee import CogneeGraphBuilder
+from contextunity.brain.storage.graph.cognee import KnowledgeGraphOrchestrator
+
 from ..config import get_assets_paths
 from ..core.utils import parallel_map, resolve_workers
 from ..settings import RagIngestionConfig
@@ -24,6 +27,11 @@ def extract_cognee_kg(
     overwrite: bool = True,
     workers: int = 1,
 ) -> dict[str, str]:
+    """Extract cognee kg.
+
+    Returns:
+        dict[str, str]: A dictionary containing the results.
+    """
     paths = get_assets_paths(config)
     nodes_path = paths["assets"] / "knowledge_nodes.jsonl"
     edges_path = paths["assets"] / "knowledge_edges.jsonl"
@@ -33,18 +41,31 @@ def extract_cognee_kg(
             if p.exists():
                 p.unlink()
 
-    builder = CogneeGraphBuilder()
+    builder = KnowledgeGraphOrchestrator()
     if not builder.is_available():
         logger.warning("Cognee not available; KG extraction skipped")
         return {"nodes_path": str(nodes_path), "edges_path": str(edges_path)}
 
-    def _run_one(t: str) -> tuple[list[dict], list[dict]]:
+    def _run_one(t: str) -> tuple[list[JsonDict], list[JsonDict]]:
+        """run one.
+
+        Args:
+            t (str): The t parameter.
+
+        Returns:
+            tuple[list[dict], list[dict]]: A list of tuple[list[dict], list[dict]].
+        """
         clean_path = paths["clean_text"] / f"{t}.jsonl"
         records = read_raw_data_jsonl(clean_path)
-        nodes: list[dict] = []
-        edges: list[dict] = []
+        nodes: list[JsonDict] = []
+        edges: list[JsonDict] = []
         for rec in records:
-            entities, relations = builder.build_graph(rec.content or "")
+            import asyncio
+
+            result = asyncio.run(builder.build_graph(rec.content or ""))
+            if result is None:
+                continue
+            entities, relations = result
             for ent in entities:
                 name = str(ent.get("name") or ent.get("id") or "").strip()
                 if not name:
@@ -69,7 +90,7 @@ def extract_cognee_kg(
                         "source_id": _stable_id("concept", src),
                         "target_id": _stable_id("concept", tgt),
                         "relation": relation,
-                        "weight": float(rel.get("weight") or 1.0),
+                        "weight": as_float(rel.get("weight"), default=1.0),
                         "metadata": {},
                     }
                 )
@@ -77,8 +98,8 @@ def extract_cognee_kg(
 
     w = resolve_workers(config=config, workers=workers)
     results = parallel_map(only_types, _run_one, workers=w, ordered=False, swallow_exceptions=False)
-    all_nodes: list[dict] = []
-    all_edges: list[dict] = []
+    all_nodes: list[JsonDict] = []
+    all_edges: list[JsonDict] = []
     for r in results:
         if not r:
             continue
@@ -92,14 +113,29 @@ def extract_cognee_kg(
     return {"nodes_path": str(nodes_path), "edges_path": str(edges_path)}
 
 
-def _write_jsonl(path: Path, rows: list[dict]) -> None:
+def _write_jsonl(path: Path, rows: list[JsonDict]) -> None:
+    """write jsonl.
+
+    Args:
+        path (Path): The filesystem path.
+        rows (list[dict]): The rows parameter.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            _ = f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def _stable_id(prefix: str, value: str) -> str:
+    """stable id.
+
+    Args:
+        prefix (str): The prefix parameter.
+        value (str): The value to store or update.
+
+    Returns:
+        str: The resulting string value.
+    """
     h = hashlib.sha256(value.encode("utf-8")).hexdigest()
     return f"{prefix}_{h[:16]}"
 

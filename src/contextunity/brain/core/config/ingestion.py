@@ -1,7 +1,7 @@
 """Ingestion pipeline configuration."""
 
 import os
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -12,7 +12,7 @@ class RAGConfig(BaseModel):
     Controls the full ingestion pipeline from raw data to indexed knowledge.
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
 
     # Source data discovery
     data_path: str = "data"

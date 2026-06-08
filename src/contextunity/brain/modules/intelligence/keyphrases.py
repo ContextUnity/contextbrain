@@ -1,32 +1,33 @@
+"""Keyphrase extraction for Knowledge Base enrichment."""
+
+from __future__ import annotations
+
 import re
-from typing import List, Optional
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_str_list
 
 logger = get_contextunit_logger(__name__)
 
 
 class KeyphraseExtractor:
-    """
-    Modular intelligence component for identifying meaningful phrases.
-    """
+    """Modular intelligence component for identifying meaningful phrases."""
 
-    def __init__(self, stop_words: Optional[List[str]] = None):
+    stop_words: set[str]
+
+    def __init__(self, stop_words: list[str] | None = None) -> None:
         self.stop_words = set(stop_words or ["і", "на", "в", "до", "з", "за"])
 
-    def extract(self, text: str, limit: int = 5) -> List[str]:
-        """
-        Naive implementation based on frequency and length.
-        Can be upgraded to TextRank or LLM.
-        """
-        words = re.findall(r"\b\w{4,}\b", text.lower())
-        candidates = [w for w in words if w not in self.stop_words]
+    def extract(self, text: str, limit: int = 5) -> list[str]:
+        words = as_str_list(re.findall(r"\b\w{4,}\b", text.lower()))
+        candidates = [word for word in words if word not in self.stop_words]
 
-        # Simple frequency count
-        counts = {}
-        for w in candidates:
-            counts[w] = counts.get(w, 0) + 1
+        counts: dict[str, int] = {}
+        for word in candidates:
+            counts[word] = counts.get(word, 0) + 1
 
-        # Sort by frequency and then length
-        sorted_phrases = sorted(counts.keys(), key=lambda x: (counts[x], len(x)), reverse=True)
+        def sort_key(phrase: str) -> tuple[int, int]:
+            return (counts[phrase], len(phrase))
+
+        sorted_phrases = sorted(counts.keys(), key=sort_key, reverse=True)
         return sorted_phrases[:limit]

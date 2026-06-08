@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from abc import ABC
 
+from contextunity.core.types import JsonDict
+
+from .base import PostgresStoreBase
 from .helpers import Json, execute, fetch_all
 
 
-class TaxonomyMixin:
+class TaxonomyMixin(PostgresStoreBase, ABC):
     """Mixin for taxonomy operations."""
 
     async def upsert_taxonomy(
@@ -17,12 +20,12 @@ class TaxonomyMixin:
         domain: str,
         name: str,
         path: str,
-        keywords: List[str],
-        metadata: dict = None,
+        keywords: list[str],
+        metadata: JsonDict | None = None,
     ) -> None:
         """Upsert a taxonomy node."""
         async with await self.tenant_connection(tenant_id) as conn:
-            await execute(
+            _ = await execute(
                 conn,
                 """
                 INSERT INTO catalog_taxonomy (tenant_id, domain, name, path, keywords, metadata, updated_at)
@@ -41,7 +44,9 @@ class TaxonomyMixin:
                 },
             )
 
-    async def get_all_taxonomy(self, *, tenant_id: str, domain: Optional[str] = None) -> List[dict]:
+    async def get_all_taxonomy(
+        self, *, tenant_id: str, domain: str | None = None
+    ) -> list[JsonDict]:
         """Get all taxonomy nodes."""
         async with await self.tenant_connection(tenant_id) as conn:
             query = "SELECT * FROM catalog_taxonomy WHERE tenant_id = %(tenant_id)s"

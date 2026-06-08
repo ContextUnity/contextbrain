@@ -1,5 +1,10 @@
 """Prompts for knowledge graph extraction."""
 
+from __future__ import annotations
+
+from contextunity.core.narrowing import as_json_dict, as_json_dict_map, as_str, as_str_list
+from contextunity.core.types import JsonDict
+
 # Base prompt template - taxonomy context is injected dynamically
 # Uses TOON-style schema header for explicit column contract
 GRAPH_EXTRACTION_PROMPT = """Extract entities and relationships from this text.
@@ -39,7 +44,7 @@ Text:
 """
 
 
-def build_taxonomy_context(taxonomy: dict | None) -> str:
+def build_taxonomy_context(taxonomy: JsonDict | None) -> str:
     """Build taxonomy context string for the extraction prompt.
 
     Args:
@@ -51,38 +56,39 @@ def build_taxonomy_context(taxonomy: dict | None) -> str:
     if not taxonomy:
         return "Focus on the domain concepts, principles, and entities."
 
-    categories = taxonomy.get("categories", {})
+    categories = as_json_dict_map(taxonomy.get("categories"))
 
     context_parts = ["Focus on the following domain concepts and principles:\n"]
 
     # Explicitly list top-level taxonomy categories (for normalization guidance)
-    if isinstance(categories, dict) and categories:
-        cat_names = [c.replace("_", " ").title() for c in list(categories.keys())[:12]]
+    if categories:
+        cat_names = [name.replace("_", " ").title() for name in list(categories.keys())[:12]]
         context_parts.append(f"Taxonomy Categories: {', '.join(cat_names)}\n")
 
     # Add category descriptions
     for cat_name, cat_data in categories.items():
-        description = cat_data.get("description", "")
-        keywords = cat_data.get("keywords", [])[:10]  # Limit to 10 per category
+        description = as_str(cat_data.get("description"))
+        keywords = as_str_list(cat_data.get("keywords"))[:10]
         if keywords:
             context_parts.append(f"- **{cat_name.replace('_', ' ').title()}**: {description}")
             context_parts.append(f"  Keywords: {', '.join(keywords)}")
 
     # Add synonym mapping hints
-    canonical_map = taxonomy.get("canonical_map", {})
+    canonical_map = as_json_dict(taxonomy.get("canonical_map"))
     if canonical_map:
-        # Show a few example mappings
         examples = list(canonical_map.items())[:10]
         if examples:
             context_parts.append("\nSynonym mappings (use canonical terms on the right):")
             for syn, canonical in examples:
-                if syn.lower() != canonical.lower():
-                    context_parts.append(f"  - '{syn}' → '{canonical}'")
+                syn_s = as_str(syn)
+                canon_s = as_str(canonical)
+                if syn_s.lower() != canon_s.lower():
+                    context_parts.append(f"  - '{syn_s}' → '{canon_s}'")
 
     return "\n".join(context_parts)
 
 
-def format_extraction_prompt(text: str, taxonomy: dict | None = None) -> str:
+def format_extraction_prompt(text: str, taxonomy: JsonDict | None = None) -> str:
     """Format the extraction prompt with text and taxonomy context.
 
     Args:

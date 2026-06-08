@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
-from typing import Any
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.narrowing import as_float, as_json_dict, as_str
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import JsonDict, is_json_dict
 from psycopg_pool import AsyncConnectionPool
 
 from contextunity.brain.core import get_core_config
@@ -20,14 +22,27 @@ logger = get_contextunit_logger(__name__)
 
 
 def load_postgres_kg(*, config: RagIngestionConfig) -> dict[str, str]:
+    """Load postgres kg.
+
+    Returns:
+        dict[str, str]: A dictionary containing the results.
+    """
     return asyncio.run(_load_async(config=config))
 
 
 async def _load_async(*, config: RagIngestionConfig) -> dict[str, str]:
+    """load async.
+
+    Returns:
+        dict[str, str]: A dictionary containing the results.
+
+    Raises:
+        ValueError: If parameter values are invalid.
+    """
     core_cfg = get_core_config()
     dsn = config.upload.postgres.dsn or core_cfg.postgres.dsn
     if not dsn:
-        raise ValueError("Postgres DSN is required for KG load")
+        raise ConfigurationError("Postgres DSN is required for KG load")
     tenant_id = config.upload.postgres.tenant_id or "public"
     user_id = config.upload.postgres.user_id
 
@@ -61,77 +76,100 @@ async def _load_async(*, config: RagIngestionConfig) -> dict[str, str]:
 
 
 def _load_nodes(path: Path) -> list[GraphNode]:
+    """load nodes.
+
+    Args:
+        path (Path): The filesystem path.
+
+    Returns:
+        list[GraphNode]: A list of list[GraphNode].
+    """
     rows = _load_jsonl(path)
     nodes: list[GraphNode] = []
     for row in rows:
         nodes.append(
             GraphNode(
-                id=str(row.get("id") or ""),
-                content=str(row.get("content") or ""),
-                node_kind=str(row.get("node_kind") or "concept"),
-                source_type=row.get("source_type"),
-                source_id=row.get("source_id"),
-                title=row.get("title"),
-                taxonomy_path=row.get("taxonomy_path"),
-                metadata=row.get("struct_data") or {},
+                id=as_str(row.get("id")),
+                content=as_str(row.get("content")),
+                node_kind=as_str(row.get("node_kind"), default="concept"),
+                source_type=as_str(row.get("source_type")) or None,
+                source_id=as_str(row.get("source_id")) or None,
+                title=as_str(row.get("title")) or None,
+                taxonomy_path=as_str(row.get("taxonomy_path")) or None,
+                metadata=as_json_dict(row.get("struct_data")),
             )
         )
     return nodes
 
 
 def _load_edges(path: Path) -> list[GraphEdge]:
+    """load edges.
+
+    Args:
+        path (Path): The filesystem path.
+
+    Returns:
+        list[GraphEdge]: A list of list[GraphEdge].
+    """
     rows = _load_jsonl(path)
     edges: list[GraphEdge] = []
     for row in rows:
         edges.append(
             GraphEdge(
-                source_id=str(row.get("source_id") or ""),
-                target_id=str(row.get("target_id") or ""),
-                relation=str(row.get("relation") or "relates_to"),
-                weight=float(row.get("weight") or 1.0),
-                metadata=row.get("metadata") or {},
+                source_id=as_str(row.get("source_id")),
+                target_id=as_str(row.get("target_id")),
+                relation=as_str(row.get("relation"), default="relates_to"),
+                weight=as_float(row.get("weight"), default=1.0),
+                metadata=as_json_dict(row.get("metadata")),
             )
         )
     return edges
 
 
-async def _load_aliases(*, dsn: str, tenant_id: str, aliases: list[dict[str, Any]]) -> None:
-    pool = AsyncConnectionPool(dsn, min_size=2, max_size=10, open=False)
-    if not pool.opened:
-        await pool.open()
-    async with pool.connection() as conn:
-        async with conn.transaction():
-            for row in aliases:
-                alias = str(row.get("alias") or "").strip()
-                node_id = str(row.get("node_id") or "").strip()
-                source = str(row.get("source") or "").strip()
-                if not alias or not node_id or not source:
-                    continue
-                await conn.execute(
-                    """
-                    INSERT INTO knowledge_aliases (tenant_id, alias, node_id, source)
-                    VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (tenant_id, alias) DO UPDATE
-                    SET node_id = EXCLUDED.node_id,
-                        source = EXCLUDED.source
-                    """,
-                    [tenant_id, alias, node_id, source],
-                )
+async def _load_aliases(*, dsn: str, tenant_id: str, aliases: list[JsonDict]) -> None:
+    """load aliases."""
+    async with AsyncConnectionPool(dsn, min_size=2, max_size=10) as pool:
+        async with pool.connection() as conn:
+            async with conn.transaction():
+                for row in aliases:
+                    alias = str(row.get("alias") or "").strip()
+                    node_id = str(row.get("node_id") or "").strip()
+                    source = str(row.get("source") or "").strip()
+                    if not alias or not node_id or not source:
+                        continue
+                    _ = await conn.execute(
+                        """
+                        INSERT INTO knowledge_aliases (tenant_id, alias, node_id, source)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (tenant_id, alias) DO UPDATE
+                        SET node_id = EXCLUDED.node_id,
+                            source = EXCLUDED.source
+                        """,
+                        [tenant_id, alias, node_id, source],
+                    )
 
 
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+def _load_jsonl(path: Path) -> list[JsonDict]:
+    """load jsonl.
+
+    Args:
+        path (Path): The filesystem path.
+
+    Returns:
+        list[JsonDict]: A list of list[JsonDict].
+    """
     if not path.exists():
         return []
-    rows: list[dict[str, Any]] = []
+    rows: list[JsonDict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
-            row = json.loads(line)
+            row = json_loads(line)
         except Exception as e:
             logger.debug("Failed to decode JSON line: %s", e)
             continue
-        if isinstance(row, dict):
+        if is_json_dict(row):
             rows.append(row)
     return rows
 

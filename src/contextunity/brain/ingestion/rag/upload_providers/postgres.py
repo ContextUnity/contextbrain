@@ -6,9 +6,12 @@ import asyncio
 import base64
 import hashlib
 from pathlib import Path
-from typing import Any, Iterable
+from typing import override
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
+from contextunity.core.narrowing import as_json_dict, as_str
+from contextunity.core.types import JsonDict, is_json_dict
 from psycopg_pool import AsyncConnectionPool
 
 from contextunity.brain.core import get_core_config
@@ -22,41 +25,78 @@ logger = get_contextunit_logger(__name__)
 
 
 class PostgresUploadProvider(UploadProvider):
-    def __init__(self, config: dict[str, Any]):
-        self._config = config
+    """Represent and manage Postgres Upload Provider logic within the system."""
+
+    def __init__(self, config: JsonDict):
+        """Initialize a new instance of PostgresUploadProvider.
+
+        Args:
+            config (JsonDict): The configuration settings dict or object.
+        """
+        super().__init__(config)
         self._pool: AsyncConnectionPool | None = None
 
     @property
+    @override
     def name(self) -> str:
+        """Name.
+
+        Returns:
+            str: The resulting string value.
+        """
         return "postgres"
 
+    @override
     def upload_and_index(self, local_path: Path, *, wait: bool = False) -> UploadResult:
+        """Upload and index.
+
+        Args:
+            local_path (Path): The local path parameter.
+
+        Returns:
+            UploadResult: An instance of UploadResult.
+        """
         _ = wait
         try:
             asyncio.run(self._upload_async(local_path))
-            return UploadResult(success=True, provider=self.name)
+            return UploadResult(success=True, provider=self.name, details={})
         except Exception as e:
             logger.exception("Postgres upload failed")
-            return UploadResult(success=False, provider=self.name, error=str(e))
+            return UploadResult(success=False, provider=self.name, error=str(e), details={})
 
+    @override
     def get_config_summary(self) -> dict[str, str]:
+        """Retrieve the config summary information.
+
+        Returns:
+            dict[str, str]: A dictionary containing the results.
+        """
         return {"provider": self.name, "dsn": "***" if self._config.get("dsn") else "missing"}
 
-    async def _upload_async(self, local_path: Path) -> None:
-        cfg = get_core_config()
-        dsn = self._config.get("dsn") or cfg.postgres.dsn
-        if not dsn:
-            raise ValueError("Postgres DSN is required")
+    async def _upload_async(self, _local_path: Path) -> None:
+        """upload async.
 
-        await self._get_pool(dsn=dsn)
-        str(self._config.get("tenant_id") or "public")
-        self._config.get("user_id")
-        embeddings_key = self._config.get("embeddings_model") or cfg.models.default_embeddings
-        # TODO: Model registry not yet implemented
-        # embedder = model_registry.get_embeddings(embeddings_key, config=cfg)
+        Args:
+            local_path (Path): The local path parameter.
+
+        Raises:
+            NotImplementedError: If a validation error occurs.
+            ValueError: If parameter values are invalid.
+        """
+        cfg = get_core_config()
+        dsn = as_str(self._config.get("dsn")) or cfg.postgres.dsn
+        if not dsn:
+            raise ConfigurationError("Postgres DSN is required")
+
+        _ = await self._get_pool(dsn=dsn)
+        _ = as_str(self._config.get("tenant_id")) or "public"
+        _ = self._config.get("user_id")
+        embeddings_key = (
+            as_str(self._config.get("embeddings_model")) or cfg.models.default_embeddings
+        )
         raise NotImplementedError(
             "Embeddings require model registry which is not yet implemented. "
-            f"Requested embeddings: {embeddings_key}"
+            + f"Requested embeddings: {embeddings_key}"
         )
 
         # Placeholder code (will not execute):
@@ -76,23 +116,37 @@ class PostgresUploadProvider(UploadProvider):
         #     )
 
     async def _get_pool(self, *, dsn: str) -> AsyncConnectionPool:
+        """get pool.
+
+        Returns:
+            AsyncConnectionPool: An instance of AsyncConnectionPool.
+        """
         if self._pool is None:
             self._pool = AsyncConnectionPool(dsn, min_size=2, max_size=10, open=False)
-        if not self._pool.opened:
+        if not self._pool.closed:
             await self._pool.open()
         return self._pool
 
-    def _prepare_batch(self, batch: list[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    def _prepare_batch(self, batch: list[JsonDict]) -> tuple[list[str], list[JsonDict]]:
+        """prepare batch.
+
+        Args:
+            batch (list[JsonDict]): The batch parameter.
+
+        Returns:
+            tuple[list[str], list[JsonDict]]: A list of tuple[list[str], list[JsonDict]].
+        """
         texts: list[str] = []
-        payloads: list[dict[str, Any]] = []
+        payloads: list[JsonDict] = []
         for record in batch:
-            raw = record.get("content", {}).get("rawBytes")
+            content_obj = as_json_dict(record.get("content"))
+            raw = content_obj.get("rawBytes")
             if not raw:
                 continue
-            content = base64.b64decode(raw).decode("utf-8", errors="ignore")
-            struct_data = record.get("structData") or {}
-            struct_data = coerce_struct_data(struct_data)
-            if not isinstance(struct_data, dict):
+            content = base64.b64decode(as_str(raw)).decode("utf-8", errors="ignore")
+            struct_raw = record.get("structData") or {}
+            struct_data = coerce_struct_data(struct_raw)
+            if not is_json_dict(struct_data):
                 struct_data = {}
             keywords_text = _flatten_keywords(struct_data)
             payloads.append(
@@ -116,15 +170,16 @@ class PostgresUploadProvider(UploadProvider):
         pool: AsyncConnectionPool,
         tenant_id: str,
         user_id: str | None,
-        payloads: list[dict[str, Any]],
+        payloads: list[JsonDict],
         embeddings: list[list[float]],
     ) -> None:
+        """insert batch."""
         if not payloads:
             return
         async with pool.connection() as conn:
             async with conn.transaction():
                 for payload, embedding in zip(payloads, embeddings):
-                    await conn.execute(
+                    _ = await conn.execute(
                         """
                         INSERT INTO knowledge_nodes (
                             id, tenant_id, user_id, node_kind, source_type, source_id, title,
@@ -152,18 +207,15 @@ class PostgresUploadProvider(UploadProvider):
                     )
 
 
-def _chunks(seq: Iterable[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
-    batch: list[dict[str, Any]] = []
-    for item in seq:
-        batch.append(item)
-        if len(batch) >= size:
-            yield batch
-            batch = []
-    if batch:
-        yield batch
+def _flatten_keywords(struct_data: JsonDict) -> str | None:
+    """flatten keywords.
 
+    Args:
+        struct_data (JsonDict): The struct data parameter.
 
-def _flatten_keywords(struct_data: dict[str, Any]) -> str | None:
+    Returns:
+        str | None: An instance of str | None.
+    """
     keywords = struct_data.get("keywords")
     keyphrases = struct_data.get("keyphrase_texts")
     parts: list[str] = []

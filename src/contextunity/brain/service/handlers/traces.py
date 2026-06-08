@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from contextunity.core import get_contextunit_logger
-from contextunity.core.exceptions import grpc_error_handler, grpc_stream_error_handler
+from collections.abc import AsyncIterator
+
+import grpc
+from contextunity.core import contextunit_pb2, get_contextunit_logger
+from contextunity.core.grpc_errors import grpc_error_handler, grpc_stream_error_handler
 from contextunity.core.permissions import Permissions
 
 from ...payloads import GetTracesPayload, LogTracePayload
+from ..handler_base import BrainHandlerBase
 from ..helpers import (
     extract_token_from_context,
     make_response,
@@ -20,16 +24,20 @@ from ..helpers import (
 logger = get_contextunit_logger(__name__)
 
 
-class TraceHandlersMixin:
+class TraceHandlersMixin(BrainHandlerBase):
     """Mixin for agent trace handlers."""
 
     @grpc_error_handler
-    async def LogTrace(self, request, context):
+    async def LogTrace(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
         """Log an agent execution trace."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.TRACE_WRITE)
-        params = LogTracePayload(**unit.payload)
+        params = LogTracePayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
@@ -66,12 +74,16 @@ class TraceHandlersMixin:
         )
 
     @grpc_stream_error_handler
-    async def GetTraces(self, request, context):
+    async def GetTraces(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
         """Get agent traces with optional filters."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.TRACE_READ)
-        params = GetTracesPayload(**unit.payload)
+        params = GetTracesPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 

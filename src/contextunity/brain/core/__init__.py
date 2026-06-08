@@ -16,15 +16,17 @@ import types
 
 # Note: registry is imported dynamically via __getattr__ to avoid circular imports
 from contextunity.core import ContextToken, ContextUnit, TokenBuilder
+from contextunity.core.config import set_env_default
 
 from contextunity.brain.core.config import (
-    Config,
+    BrainConfig,
     get_bool_env,
     get_core_config,
     get_env,
+    load_config,
+    reset_core_config,
     set_core_config,
 )
-from contextunity.brain.core.config.base import set_env_default
 from contextunity.brain.core.interfaces import (
     BaseAgent,
     BaseConnector,
@@ -42,8 +44,10 @@ from contextunity.brain.core.registry import agent_registry, graph_registry
 __all__ = [
     # Kernel
     "ContextUnit",
-    "Config",
+    "BrainConfig",
     "get_core_config",
+    "load_config",
+    "reset_core_config",
     "set_core_config",
     "get_env",
     "get_bool_env",
@@ -58,22 +62,12 @@ __all__ = [
     # Registry
     "agent_registry",  # Direct access for compatibility
     "graph_registry",  # Direct access for compatibility
-    "registry",  # Access via contextunity.brain.core.registry
     # Security
     "ContextToken",
     "TokenBuilder",
     # Models
     "Citation",
     "RetrievedDoc",
-    # Types
-    "UserCtx",
-    # Modules (for backward compatibility)
-    "config",
-    "exceptions",
-    "env",
-    "interfaces",
-    "registry",
-    "types",
 ]
 
 

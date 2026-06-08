@@ -6,16 +6,19 @@ Keep ingestion plugins thin by centralizing common, deterministic utilities here
 from __future__ import annotations
 
 import html
-import json
 import re
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Iterable, TypeVar
+from typing import TypeGuard, TypeVar
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.narrowing import as_json_dict, as_str
+from contextunity.core.parsing import json_loads
+from contextunity.core.types import is_json_dict, is_object_list
 
-from contextunity.brain.core import Config
-from contextunity.brain.core.types import StructData, StructDataValue
+from contextunity.brain.core import BrainConfig
+from contextunity.brain.core.types import StructData
 
 from ..config import DEFAULT_TAXONOMY_PATH
 from ..settings import RagIngestionConfig
@@ -25,6 +28,16 @@ logger = get_contextunit_logger(__name__)
 
 T = TypeVar("T")
 R = TypeVar("R")
+
+
+def is_str_dict(obj: object) -> TypeGuard[dict[str, object]]:
+    """Narrow *obj* to ``dict[str, object]``.
+
+    Plain ``isinstance(obj, dict)`` narrows to ``dict[Never, Never]`` in ty,
+    making subsequent ``.get(str_key)`` calls fail.  This TypeGuard gives ty
+    the concrete key/value types it needs.
+    """
+    return isinstance(obj, dict)
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +59,7 @@ def parse_tsv_line(line: str) -> list[str]:
 
 def llm_generate_tsv(
     *,
-    core_cfg: Config,
+    core_cfg: BrainConfig,
     prompt: str,
     model: str,
     max_tokens: int = 2048,
@@ -111,15 +124,13 @@ def llm_generate_tsv(
 def load_taxonomy_safe(taxonomy_path: Path | None = None) -> StructData | None:
     """Load taxonomy JSON from disk with graceful degradation."""
     path = taxonomy_path or DEFAULT_TAXONOMY_PATH
-    if not isinstance(path, Path):
-        return None
     if not path.exists():
         logger.debug("Taxonomy file not found: %s", path)
         return None
     try:
         with open(path, encoding="utf-8") as f:
-            obj: StructDataValue = json.load(f)
-            return obj if isinstance(obj, dict) else None
+            wire = json_loads(f.read())
+            return wire if is_json_dict(wire) else None
     except Exception as e:
         logger.warning("Failed to load taxonomy: %s", e)
         return None
@@ -196,7 +207,7 @@ def clean_markdown_headers(text: str) -> str:
         Cleaned markdown with normalized headers
     """
     lines = text.split("\n")
-    cleaned_lines = []
+    cleaned_lines: list[str] = []
 
     for line in lines:
         # Check if line is a header
@@ -253,7 +264,7 @@ def filter_testimonial_signatures(content: str) -> str:
         Content with testimonial signatures converted to regular content
     """
     lines = content.split("\n")
-    filtered_lines = []
+    filtered_lines: list[str] = []
 
     for line in lines:
         stripped = line.strip()
@@ -363,14 +374,14 @@ def build_enriched_input_text(
     enrichment_parts: list[str] = []
 
     if parent_categories:
-        cats = [c for c in parent_categories if isinstance(c, str) and c.strip()]
+        cats = [c for c in parent_categories if c.strip()]
         if cats:
             enrichment_parts.append(f"Categories: {', '.join(cats[:5])}.")
 
-    if isinstance(summary, str) and summary.strip():
+    if summary and summary.strip():
         enrichment_parts.append(f"Additional Knowledge: {summary.strip()}")
 
-    kws = [k for k in (keywords or []) if isinstance(k, str) and k.strip()]
+    kws = [k for k in (keywords or []) if k.strip()]
     if kws:
         top = kws[:10]
         if len(top) == 1:
@@ -399,35 +410,27 @@ def get_graph_enrichment(
     except Exception:
         return ([], "", [])
 
-    if not isinstance(enrichment, dict):
+    if not is_json_dict(enrichment):
         return ([], "", [])
 
-    keywords_raw = enrichment.get("keywords", [])
-    keywords: list[str] = []
-    if isinstance(keywords_raw, list):
-        for k in keywords_raw:
-            if isinstance(k, str) and k.strip():
-                keywords.append(k.strip())
-            if len(keywords) >= 50:
-                break
-
-    summary = enrichment.get("summary", "")
-    summary_out = summary.strip() if isinstance(summary, str) else ""
-
-    cats_raw = enrichment.get("parent_categories", [])
-    cats: list[str] = []
-    if isinstance(cats_raw, list):
-        for c in cats_raw:
-            if isinstance(c, str) and c.strip():
-                cats.append(c.strip())
-            if len(cats) >= 20:
-                break
+    parsed = as_json_dict(enrichment)
+    keywords_raw = parsed.get("keywords")
+    categories_raw = parsed.get("parent_categories")
+    keywords = clean_str_list(
+        keywords_raw if is_object_list(keywords_raw) else None,
+        limit=50,
+    )
+    summary_out = as_str(parsed.get("summary")).strip()
+    cats = clean_str_list(
+        categories_raw if is_object_list(categories_raw) else None,
+        limit=20,
+    )
 
     return (keywords, summary_out, cats)
 
 
 def clean_str_list(
-    items: list[object] | None,
+    items: Sequence[object] | None,
     *,
     limit: int,
     dedupe_case_insensitive: bool = True,
