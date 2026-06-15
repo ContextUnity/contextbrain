@@ -300,3 +300,119 @@ class UpdateExperienceQPayload(StrictPayloadModel):
     q_relevance: float | None = None
     fault_class: str | None = None
     status: str | None = None
+
+
+# Admin RPCs (WS-8) — require admin:read
+# Cross-tenant observability owned by Brain (replaces View brain_db RLS bypass).
+
+
+class ListTenantsPayload(StrictPayloadModel):
+    """Payload for ListTenants admin RPC.
+
+    No fields required — token scoping determines which tenants are returned.
+    """
+
+
+class AdminSearchTracesPayload(StrictPayloadModel):
+    """Payload for AdminSearchTraces admin RPC.
+
+    tenant_id is required unless the token has admin:all.
+    The service enforces this: empty allowed_tenants is NEVER treated as "all tenants".
+    """
+
+    tenant_id: str | None = None
+    service: str | None = None
+    agent_id: str | None = None
+    status: str | None = None
+    hours: int | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
+
+
+class AdminGetTraceDetailsPayload(StrictPayloadModel):
+    """Payload for AdminGetTraceDetails admin RPC."""
+
+    trace_id: str
+
+
+class AdminGetSystemAnalyticsPayload(StrictPayloadModel):
+    """Payload for AdminGetSystemAnalytics admin RPC.
+
+    tenant_id is required unless the token has admin:all.
+    """
+
+    hours: int | None = None
+    tenant_id: str | None = None
+
+
+class AdminGetMemoryLayerStatsPayload(StrictPayloadModel):
+    """Payload for AdminGetMemoryLayerStats admin RPC.
+
+    tenant_id is required unless the token has admin:all.
+    """
+
+    layer: str | None = None
+    tenant_id: str | None = None
+
+
+class AdminGetFilterOptionsPayload(StrictPayloadModel):
+    """Payload for AdminGetFilterOptions admin RPC.
+
+    tenant_id is optional only when token has admin:all; otherwise required.
+    """
+
+    tenant_id: str | None = None
+
+
+class AdminGetSessionTracesPayload(StrictPayloadModel):
+    """Payload for AdminGetSessionTraces admin RPC.
+
+    tenant_id is optional only when token has admin:all; otherwise required.
+    """
+
+    session_id: str
+    tenant_id: str | None = None
+
+
+class AdminGetRelatedEpisodesPayload(StrictPayloadModel):
+    """Payload for AdminGetRelatedEpisodes admin RPC.
+
+    Tenant scope is resolved from the trace's own tenant_id after fetch.
+    """
+
+    trace_id: str
+
+
+class AdminSearchEpisodesPayload(StrictPayloadModel):
+    """Payload for AdminSearchEpisodes admin RPC.
+
+    tenant_id is optional only when token has admin:all; otherwise required.
+    """
+
+    tenant_id: str | None = None
+    user_id: str | None = None
+    session_id: str | None = None
+    hours: int | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
+
+
+class AdminGetKnowledgeNodesPayload(StrictPayloadModel):
+    """Payload for AdminGetKnowledgeNodes admin RPC.
+
+    tenant_id is optional only when token has admin:all; otherwise required.
+    """
+
+    tenant_id: str | None = None
+    kind: str | None = None
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class AdminGetAnalyticsSummaryPayload(StrictPayloadModel):
+    """Payload for AdminGetAnalyticsSummary admin RPC.
+
+    tenant_id is optional only when token has admin:all; otherwise required.
+    """
+
+    tenant_id: str | None = None
+    hours: int | None = None

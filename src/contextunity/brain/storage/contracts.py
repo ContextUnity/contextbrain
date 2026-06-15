@@ -7,7 +7,8 @@ calls in ``services/brain/src/contextunity/brain/service/handlers/``.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from contextlib import AbstractAsyncContextManager
+from typing import Any, Protocol, runtime_checkable
 
 from contextunity.core.types import JsonDict, JsonValue
 
@@ -432,5 +433,75 @@ class KnowledgeStoreProtocol(Protocol):
         """
         ...
 
+    async def tenant_connection(
+        self, tenant_id: str, user_id: str | None = None
+    ) -> AbstractAsyncContextManager[Any]:
+        """Return an async context manager yielding a pool connection with RLS tenant context.
 
-__all__ = ["KnowledgeStoreProtocol"]
+        Usage::
+
+            async with await self.storage.tenant_connection("*", user_id="*") as conn:
+                rows = await conn.execute(sql, params)
+        """
+        ...
+
+
+@runtime_checkable
+class AdminQueryProtocol(Protocol):
+    """Cross-tenant admin observability queries (Brain Admin RPC backing store).
+
+    All methods are async so handlers can ``await`` uniformly. SQLite backends
+    wrap sync SQL bodies; Postgres backends run async queries via tenant_connection.
+    """
+
+    async def list_tenants(self) -> list[JsonDict]: ...
+
+    async def search_traces(
+        self,
+        *,
+        tenant_id: str | None,
+        agent_id: str | None,
+        hours: int | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[JsonDict], int]: ...
+
+    async def get_trace_details(self, trace_id: str) -> JsonDict | None: ...
+
+    async def get_filter_options(self, *, tenant_id: str | None) -> JsonDict: ...
+
+    async def get_session_traces(
+        self, *, session_id: str, tenant_id: str | None
+    ) -> list[JsonDict]: ...
+
+    async def get_related_episodes(self, trace_id: str) -> list[JsonDict]: ...
+
+    async def get_trace_tenant(self, trace_id: str) -> str | None: ...
+
+    async def search_episodes(
+        self,
+        *,
+        tenant_id: str | None,
+        user_id: str | None,
+        session_id: str | None,
+        hours: int | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[JsonDict], int]: ...
+
+    async def get_knowledge_nodes(
+        self, *, tenant_id: str | None, kind: str | None, limit: int
+    ) -> list[JsonDict]: ...
+
+    async def get_memory_layer_stats(self, *, tenant_id: str | None) -> JsonDict: ...
+
+    async def get_analytics_summary(
+        self, *, tenant_id: str | None, hours: int | None
+    ) -> JsonDict: ...
+
+    async def get_system_analytics(
+        self, *, tenant_id: str | None, hours: int | None
+    ) -> JsonDict: ...
+
+
+__all__ = ["AdminQueryProtocol", "KnowledgeStoreProtocol"]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from abc import ABC
+from contextlib import AbstractAsyncContextManager
+from typing import Any
 
 from contextunity.core import get_contextunit_logger
 from psycopg import AsyncConnection, sql
@@ -84,7 +86,9 @@ class PostgresStoreBase(KnowledgeStoreInterface, ABC):
         await conn.set_autocommit(False)
         logger.debug("Connection configured with schema: %s", self._schema)
 
-    async def tenant_connection(self, tenant_id: str, user_id: str | None = None):
+    async def tenant_connection(
+        self, tenant_id: str, user_id: str | None = None
+    ) -> AbstractAsyncContextManager[AsyncConnection[Any]]:
         """Async context manager: pool connection with RLS tenant context.
 
         Usage::

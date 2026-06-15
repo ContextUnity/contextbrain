@@ -44,6 +44,20 @@ RPC_PERMISSION_MAP: dict[str, str] = {
     "UpsertTaxonomy": Permissions.BRAIN_WRITE,
     # Other
     "MatchDuckDB": Permissions.BRAIN_READ,
+    # Admin RPCs (WS-8) — cross-tenant observability; all require admin:read.
+    # Tenant scoping is enforced additionally inside the handler via
+    # _require_admin_tenant_scope(): empty allowed_tenants is NEVER "all tenants".
+    "ListTenants": Permissions.ADMIN_READ,
+    "AdminSearchTraces": Permissions.ADMIN_READ,
+    "AdminGetTraceDetails": Permissions.ADMIN_READ,
+    "AdminGetSystemAnalytics": Permissions.ADMIN_READ,
+    "AdminGetMemoryLayerStats": Permissions.ADMIN_READ,
+    "AdminGetFilterOptions": Permissions.ADMIN_READ,
+    "AdminGetSessionTraces": Permissions.ADMIN_READ,
+    "AdminGetRelatedEpisodes": Permissions.ADMIN_READ,
+    "AdminSearchEpisodes": Permissions.ADMIN_READ,
+    "AdminGetKnowledgeNodes": Permissions.ADMIN_READ,
+    "AdminGetAnalyticsSummary": Permissions.ADMIN_READ,
 }
 
 

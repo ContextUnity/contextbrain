@@ -26,7 +26,7 @@ def _sqlite_cell(value: object) -> JsonValue:
     return str(value)
 
 
-def _sqlite_row_to_json_dict(row: sqlite3.Row) -> JsonDict:
+def sqlite_row_to_json_dict(row: sqlite3.Row) -> JsonDict:
     return {key: _sqlite_cell(sqlite_cell(row, key)) for key in row.keys()}
 
 
@@ -126,7 +126,7 @@ class TracesMixin(SqliteConnectionMixin):
 
         results: list[JsonDict] = []
         for row in rows:
-            entry = _sqlite_row_to_json_dict(row)
+            entry = sqlite_row_to_json_dict(row)
             for key in ("tool_calls", "token_usage", "security_flags", "metadata"):
                 raw_val = entry.get(key)
                 parsed = json_loads(raw_val if isinstance(raw_val, str) else None)

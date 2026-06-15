@@ -13,6 +13,7 @@ from ..storage.postgres import PostgresKnowledgeStore
 from .embedders import ApiEmbedder, LocalEmbedder, get_embedder
 from .handler_base import BrainHandlerBase
 from .handlers import (
+    AdminHandlersMixin,
     BlackboardHandlersMixin,
     CommerceHandlersMixin,
     KnowledgeHandlersMixin,
@@ -31,6 +32,7 @@ class BrainService(
     TaxonomyHandlersMixin,
     CommerceHandlersMixin,
     BlackboardHandlersMixin,
+    AdminHandlersMixin,
     BrainHandlerBase,
     brain_pb2_grpc.BrainServiceServicer,
 ):
@@ -43,6 +45,7 @@ class BrainService(
     - TaxonomyHandlersMixin: taxonomy CRUD
     - CommerceHandlersMixin: verifications
     - BlackboardHandlersMixin: blackboard read/write (Flat Memory)
+    - AdminHandlersMixin: cross-tenant admin observability (WS-8)
     """
 
     def __init__(

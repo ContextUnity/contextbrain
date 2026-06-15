@@ -5,7 +5,10 @@ from __future__ import annotations
 import importlib
 import sqlite3
 import types
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncContextManager
 
 from contextunity.core import get_contextunit_logger
 
@@ -56,6 +59,22 @@ class SqliteConnectionMixin:
             bool: True if the operation was successful, False otherwise.
         """
         return _sqlite_vec_module is not None
+
+    async def tenant_connection(
+        self, tenant_id: str, user_id: str | None = None
+    ) -> AsyncContextManager[sqlite3.Connection]:
+        """Yield a SQLite connection (no RLS — tenant scope is application-level)."""
+        _ = tenant_id, user_id
+
+        @asynccontextmanager
+        async def _ctx() -> AsyncGenerator[sqlite3.Connection]:
+            conn = self._get_connection()
+            try:
+                yield conn
+            finally:
+                conn.close()
+
+        return _ctx()
 
 
 __all__ = ["SqliteConnectionMixin"]
