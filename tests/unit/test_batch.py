@@ -19,8 +19,8 @@ from contextunity.brain.ingestion.rag.core.batch import _parse_validation_respon
 
 @pytest.fixture()
 def core_cfg() -> BrainConfig:
-    # Minimal config accepted by VertexLLM (used by ingestion llm utilities).
-    return BrainConfig.model_validate({"vertex": {"project_id": "test", "location": "us-central1"}})
+    # Default BrainConfig; batch tests mock llm_generate and only need model selectors.
+    return BrainConfig()
 
 
 class TestBatchResult:

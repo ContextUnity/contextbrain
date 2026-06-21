@@ -10,15 +10,31 @@ import hashlib
 import importlib
 import json
 import logging
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, ClassVar, Protocol, final, runtime_checkable
+from collections.abc import Callable, Coroutine, Sequence
+from typing import TYPE_CHECKING, ClassVar, Protocol, TypeVar, final, runtime_checkable
 
 from contextunity.core import get_contextunit_logger
 from contextunity.core.narrowing import as_json_dict, object_attr
 from contextunity.core.parsing import json_loads
 from contextunity.core.types import is_object_iterable, is_object_list
 
+from contextunity.brain.core.exceptions import EmbeddingError
+
 logger = get_contextunit_logger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _run_coroutine_sync(factory: Callable[[], Coroutine[object, object, _T]]) -> _T:
+    """Run a coroutine factory from sync code; refuse inside a running event loop."""
+    import asyncio
+
+    try:
+        _ = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(factory())
+    raise RuntimeError("embed() cannot be called from an async context; use embed_async() instead")
+
 
 if TYPE_CHECKING:
     from contextunity.brain.core.config.main import BrainConfig
@@ -294,9 +310,7 @@ class ApiEmbedder:
         return cls._instance
 
     def embed(self, text: str) -> list[float]:
-        import asyncio
-
-        return asyncio.get_event_loop().run_until_complete(self.embed_async(text))
+        return _run_coroutine_sync(lambda: self.embed_async(text))
 
     async def embed_async(self, text: str) -> list[float]:
         cached = await self._cache.get(self._model_name, text)
@@ -333,7 +347,7 @@ class ApiEmbedder:
                 return embedding
         except Exception as e:
             logger.error("API embedding error: %s", e)
-            return [0.0] * self._dim
+            raise EmbeddingError(f"API embedding request failed: {type(e).__name__}") from e
 
 
 class LocalEmbedder:
@@ -374,20 +388,21 @@ class LocalEmbedder:
     def embed(self, text: str) -> list[float]:
         model = self._ensure_model()
         if model is None:
-            return [0.1] * self._dim
-        import asyncio
-
-        loop = asyncio.get_event_loop()
-        vec = loop.run_until_complete(loop.run_in_executor(None, lambda: model.encode([text])[0]))
+            raise EmbeddingError(
+                "Local embedding model unavailable (sentence-transformers not installed)"
+            )
+        vec = model.encode([text])[0]
         return _vector_to_floats(vec)
 
     async def embed_async(self, text: str) -> list[float]:
         model = self._ensure_model()
         if model is None:
-            return [0.1] * self._dim
+            raise EmbeddingError(
+                "Local embedding model unavailable (sentence-transformers not installed)"
+            )
         import asyncio
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         vec = await loop.run_in_executor(None, lambda: model.encode([text])[0])
         return _vector_to_floats(vec)
 

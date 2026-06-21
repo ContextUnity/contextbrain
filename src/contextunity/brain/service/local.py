@@ -31,7 +31,9 @@ async def create_local_brain() -> grpc.aio.Server:
     shield_url = brain_config.shield_url
     logger.info("Local Brain: shield_url=%s", shield_url or "(disabled)")
 
-    server = grpc.aio.server(interceptors=[BrainPermissionInterceptor(shield_url=shield_url)])
+    server = grpc.aio.server(
+        interceptors=[BrainPermissionInterceptor(shield_url=shield_url, config=brain_config)]
+    )
     brain_pb2_grpc.add_BrainServiceServicer_to_server(brain, server)
     _ = server.add_insecure_port(f"[::]:{brain_config.port}")
 

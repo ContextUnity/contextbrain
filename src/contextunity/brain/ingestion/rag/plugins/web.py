@@ -7,12 +7,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Protocol
 from urllib.parse import urldefrag, urljoin, urlparse
-from urllib.request import Request
 
 from contextunity.core import get_contextunit_logger
 from contextunity.core.exceptions import ConfigurationError
 from contextunity.core.narrowing import as_json_dict_list, as_str, as_str_list, str_list_as_json
 from contextunity.core.parsing import json_loads
+from contextunity.core.security import fetch_safe_url_sync
 from contextunity.core.types import JsonDict, is_json_dict
 from typing_extensions import override
 
@@ -42,7 +42,6 @@ from ..protocols import (
     soup_plain_text,
     soup_title_text,
     trafilatura_extract,
-    urlopen_response,
 )
 from ..settings import RagIngestionConfig
 from ..utils.llm import llm_generate
@@ -499,24 +498,14 @@ class WebPlugin(IngestionPlugin):
                 f"Unsupported URL scheme '{parsed_url.scheme}'. Only HTTP and HTTPS are allowed."
             )
 
-        req = Request(
-            url,
-            headers={
-                "User-Agent": user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
-        )
-        final_url = url
-        with urlopen_response(req, timeout=timeout_s) as resp:
-            final_url = resp.geturl()
-            raw = resp.read()
-            try:
-                charset = resp.headers.get_content_charset() or "utf-8"
-            except Exception:
-                charset = "utf-8"
+        headers = {
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        raw = fetch_safe_url_sync(url, timeout_s=timeout_s, headers=headers)
+        charset = "utf-8"
         html = raw.decode(charset, errors="ignore")
-        # Normalize final URL for deduplication
-        normalized_final_url = WebPlugin._normalize_url(final_url)
+        normalized_final_url = WebPlugin._normalize_url(url)
         return html, normalized_final_url
 
     @staticmethod

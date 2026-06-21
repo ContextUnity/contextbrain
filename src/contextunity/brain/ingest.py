@@ -129,11 +129,9 @@ class IngestionService:
         for chunk in chunks:
             # Generate real embeddings if embedder is available
             if embedder is not None:
-                try:
-                    embedding = await embedder.embed_async(chunk)
-                except Exception as e:
-                    logger.warning("Embedding failed, using placeholder: %s", e)
-                    embedding = [0.1] * 1536
+                # Fail closed: a failed embedding must not be silently replaced
+                # with a sentinel vector that would poison the vector store.
+                embedding = await embedder.embed_async(chunk)
             else:
                 embedding = [0.1] * 1536
 

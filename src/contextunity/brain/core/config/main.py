@@ -1,7 +1,9 @@
 """Main configuration class that combines all config modules."""
 
+from typing import ClassVar
+
 from contextunity.core.config import ServiceConfig
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from .models import ModelsConfig
 from .providers import (
@@ -13,6 +15,8 @@ from .providers import (
 
 class BrainConfig(ServiceConfig):
     """Main configuration class for contextunity.brain."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(use_enum_values=True, extra="forbid")
 
     # Core settings
     debug: bool = False
