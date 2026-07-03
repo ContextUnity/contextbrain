@@ -195,7 +195,7 @@ class GetTaxonomyPayload(StrictPayloadModel):
 class WriteBlackboardPayload(StrictPayloadModel):
     """Payload for WriteBlackboard RPC."""
 
-    tenant_id: str
+    tenant_id: str = Field(min_length=1)
     scope_path: str  # LTREE path: 'tenant.project.session.step'
     content: JsonDict
     metadata: JsonDict = Field(default_factory=dict)

@@ -65,8 +65,11 @@ class TestResolveTenantId:
     def test_no_token_uses_payload(self):
         assert resolve_tenant_id(None, "legacy") == "legacy"
 
-    def test_no_token_no_payload_defaults(self):
-        assert resolve_tenant_id(None) == "default"
+    def test_no_token_no_payload_fails_closed(self):
+        from contextunity.core.exceptions import SecurityError
+
+        with pytest.raises(SecurityError):
+            resolve_tenant_id(None)
 
     def test_token_without_tenants_uses_payload(self):
         token = _token(tenants=None)

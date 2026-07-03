@@ -361,7 +361,7 @@ def _rls_policies() -> list[str]:
 
     Architecture:
         - ``brain_app`` role: used by gRPC handlers, RLS enforced
-        - ``brain_admin`` role: used by contextunity.view dashboard, bypasses RLS
+        - ``brain_admin`` role: used by Brain Admin / ContextForge dashboard access, bypasses RLS
         - Every query sets ``SET LOCAL app.current_tenant = '<tenant_id>'``
           before executing — this is done in the Brain gRPC interceptor.
 
@@ -394,7 +394,7 @@ def _rls_policies() -> list[str]:
         $$;
     """)
 
-    # 2. Create admin role (bypasses RLS for contextunity.view dashboard)
+    # 2. Create admin role (bypasses RLS for Brain Admin / ContextForge dashboard access)
     stmts.append("""
         DO $$
         BEGIN
@@ -402,6 +402,22 @@ def _rls_policies() -> list[str]:
                 CREATE ROLE brain_admin NOLOGIN BYPASSRLS;
                 RAISE NOTICE 'Created role brain_admin';
             END IF;
+        END
+        $$;
+    """)
+
+    # 2b. Let the service DSN user assume brain_app (SET LOCAL ROLE in
+    # set_tenant_context) and let brain_app resolve objects in the schema.
+    # current_user/current_schema are evaluated at ensure_schema time,
+    # i.e. the provisioning DSN user and the active search_path schema.
+    stmts.append("""
+        DO $$
+        BEGIN
+            IF current_user <> 'brain_app' THEN
+                EXECUTE format('GRANT brain_app TO %I', current_user);
+            END IF;
+            EXECUTE format('GRANT USAGE ON SCHEMA %I TO brain_app', current_schema());
+            EXECUTE format('GRANT USAGE ON SCHEMA public TO brain_app');
         END
         $$;
     """)

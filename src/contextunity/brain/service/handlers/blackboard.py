@@ -19,6 +19,7 @@ from ..helpers import (
     extract_token_from_context,
     make_response,
     parse_unit,
+    resolve_tenant_id,
     validate_tenant_access,
     validate_token_for_read,
     validate_token_for_write,
@@ -46,7 +47,9 @@ class BlackboardHandlersMixin(BrainHandlerBase):
         """
         unit = parse_unit(request)
         token = extract_token_from_context(context)
-        validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
+        # Must match BrainPermissionInterceptor's RPC_PERMISSION_MAP entry —
+        # Blackboard is a memory surface, so the memory:* family is canonical.
+        validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
         params = WriteBlackboardPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
 
@@ -89,11 +92,12 @@ class BlackboardHandlersMixin(BrainHandlerBase):
         """
         unit = parse_unit(request)
         token = extract_token_from_context(context)
-        validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
+        validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
         params = ReadBlackboardPayload.model_validate(unit.payload or {})
 
-        # Resolve tenant from token
-        tenant_id = token.allowed_tenants[0] if token and token.allowed_tenants else "default"
+        # Resolve tenant from token — fail closed if the token carries no
+        # tenant scope (never fall back to a shared "default" tenant).
+        tenant_id = resolve_tenant_id(token)
 
         records = await self.storage.read_blackboard(
             ids=params.ids,

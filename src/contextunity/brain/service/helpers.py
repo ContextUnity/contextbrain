@@ -156,19 +156,30 @@ def resolve_tenant_id(
 ) -> str:
     """Derive the canonical tenant_id for this RPC.
 
+    Fail-closed: when neither the token's ``allowed_tenants`` nor the
+    payload provides a tenant, the request is rejected — there is no
+    shared fallback tenant.
+
     Args:
         token (ContextToken | None): The security token for authentication.
         payload_tenant_id (str | None): The payload tenant id parameter.
 
     Returns:
         str: The resulting string value.
+
+    Raises:
+        SecurityError: If no tenant can be derived from token or payload.
     """
     if token is not None and getattr(token, "allowed_tenants", None):
         allowed = token.allowed_tenants
         if payload_tenant_id and payload_tenant_id in allowed:
             return payload_tenant_id
         return allowed[0]
-    return payload_tenant_id or "default"
+    if payload_tenant_id:
+        return payload_tenant_id
+    raise SecurityError(
+        message="Cannot resolve tenant: token has no allowed_tenants and payload has no tenant_id.",
+    )
 
 
 def validate_user_access(

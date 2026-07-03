@@ -111,27 +111,13 @@ class PostgresStoreBase(KnowledgeStoreInterface, ABC):
             """ctx."""
             pool = await self._get_pool()
             async with pool.connection() as conn:
-                try:
-                    from .helpers import set_tenant_context
+                # Fail closed: if the RLS role/tenant context cannot be
+                # established, the operation must not proceed with only
+                # application-level filtering (a missing 'brain_app' role
+                # is tolerated inside set_tenant_context with a warning).
+                from .helpers import set_tenant_context
 
-                    await set_tenant_context(conn, tenant_id, user_id)
-                except Exception as e:
-                    import psycopg
-
-                    if getattr(conn, "closed", False) or isinstance(e, psycopg.OperationalError):
-                        raise  # Connection is dead, do not swallow
-
-                    # RLS is defence-in-depth — don't block operations
-                    # if set_tenant_context fails.  Application-level
-                    # WHERE tenant_id = %s still provides isolation.
-                    logger.warning(
-                        (
-                            "Failed to set RLS tenant context for '%s': %s. "
-                            "Application-level tenant filtering still active."
-                        ),
-                        tenant_id,
-                        e,
-                    )
+                await set_tenant_context(conn, tenant_id, user_id)
 
                 try:
                     yield conn

@@ -83,7 +83,7 @@ ContextBrain enforces multi-layer tenant isolation via PostgreSQL Row-Level Secu
 ```sql
 SET LOCAL app.current_tenant = '{tenant_id}';
 ```
-Only the `brain_admin` role can bypass RLS (used by ContextView dashboard).
+Only the `brain_admin` role can bypass RLS (used by Brain Admin / ContextForge dashboard access).
 
 ---
 
