@@ -46,7 +46,7 @@ class BlackboardMixin(SqliteConnectionMixin):
         with self._get_connection() as db:
             _ = db.execute(
                 """
-                INSERT INTO blackboard_records
+                INSERT INTO blackboard
                     (id, tenant_id, scope_path, content, metadata,
                      ttl_until, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -91,19 +91,25 @@ class BlackboardMixin(SqliteConnectionMixin):
         placeholders = ", ".join("?" for _ in ids)
         now = datetime.now(timezone.utc).isoformat()
 
+        # Single query: fetch every matching id (expired or not) and filter
+        # in Python, so we can log an expired-ref count separately from
+        # "never existed" without a second round trip.
         with self._get_connection() as db:
             cursor = db.execute(
                 f"""
-                SELECT id, content, metadata, scope_path, created_at, created_by
-                FROM blackboard_records
+                SELECT id, content, metadata, scope_path, created_at, created_by,
+                       (ttl_until IS NOT NULL AND ttl_until <= ?) AS is_expired
+                FROM blackboard
                 WHERE id IN ({placeholders})
                   AND tenant_id = ?
-                  AND (ttl_until IS NULL OR ttl_until > ?)
-                ORDER BY created_at
                 """,
-                (*ids, tenant_id, now),
+                (now, *ids, tenant_id),
             )
-            rows: list[sqlite3.Row] = list(cursor.fetchall())
+            all_rows: list[sqlite3.Row] = list(cursor.fetchall())
+
+        rows = [row for row in all_rows if not sqlite_cell(row, "is_expired")]
+        expired_count = len(all_rows) - len(rows)
+        rows.sort(key=lambda row: as_str(sqlite_cell(row, "created_at")))
 
         records: list[JsonDict] = []
         for row in rows:
@@ -124,9 +130,10 @@ class BlackboardMixin(SqliteConnectionMixin):
             records.append(record)
 
         logger.debug(
-            "Blackboard read: requested=%d found=%d tenant=%s",
+            "Blackboard read: requested=%d found=%d expired=%d tenant=%s",
             len(ids),
             len(records),
+            expired_count,
             tenant_id,
         )
         return records
@@ -138,12 +145,12 @@ class BlackboardMixin(SqliteConnectionMixin):
         with self._get_connection() as db:
             if tenant_id:
                 cursor = db.execute(
-                    "DELETE FROM blackboard_records WHERE ttl_until < ? AND tenant_id = ?",
+                    "DELETE FROM blackboard WHERE ttl_until < ? AND tenant_id = ?",
                     (now, tenant_id),
                 )
             else:
                 cursor = db.execute(
-                    "DELETE FROM blackboard_records WHERE ttl_until < ? AND ttl_until IS NOT NULL",
+                    "DELETE FROM blackboard WHERE ttl_until < ? AND ttl_until IS NOT NULL",
                     (now,),
                 )
             db.commit()

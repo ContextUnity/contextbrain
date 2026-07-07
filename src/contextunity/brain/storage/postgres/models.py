@@ -9,8 +9,8 @@ from contextunity.core.types import JsonDict
 from pydantic import BaseModel, Field
 
 
-class TaxonomyPath(BaseModel):
-    """Hierarchical taxonomy scope using ltree-compatible path."""
+class ScopePath(BaseModel):
+    """Hierarchical memory scope using ltree-compatible path."""
 
     path: str = Field(..., description="ltree path, e.g. 'book.chapter_03'")
 
@@ -24,10 +24,11 @@ class GraphNode(BaseModel):
     node_kind: str = "concept"
     source_type: str | None = None
     source_id: str | None = None
-    taxonomy_path: str | None = None
+    scope_path: str | None = None
     metadata: JsonDict = Field(default_factory=dict)
     title: str | None = None
     keywords_text: str | None = None
+    content_hash: str | None = None
     tenant_id: str | None = None
     user_id: str | None = None
 
@@ -61,7 +62,7 @@ class GraphTraversalNode(TypedDict):
     source_type: str
     title: str
     content: str
-    taxonomy_path: str
+    scope_path: str
     metadata: JsonDict
 
 
@@ -82,7 +83,7 @@ class GraphTraversalResult(TypedDict):
     edges: list[GraphTraversalEdge]
 
 
-class KnowledgeStoreInterface(ABC):
+class BrainStorageInterface(ABC):
     """Abstract interface for knowledge storage."""
 
     @abstractmethod
@@ -110,7 +111,7 @@ class KnowledgeStoreInterface(ABC):
         tenant_id: str,
         candidate_k: int = 50,
         limit: int = 8,
-        scope: TaxonomyPath | None = None,
+        scope: ScopePath | None = None,
         source_types: list[str] | None = None,
         user_id: str | None = None,
         fusion: str = "weighted",
@@ -126,12 +127,12 @@ class KnowledgeStoreInterface(ABC):
 
 
 __all__ = [
-    "TaxonomyPath",
+    "ScopePath",
     "GraphNode",
     "GraphEdge",
     "GraphTraversalEdge",
     "GraphTraversalNode",
     "GraphTraversalResult",
     "SearchResult",
-    "KnowledgeStoreInterface",
+    "BrainStorageInterface",
 ]

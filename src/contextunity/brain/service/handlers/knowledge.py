@@ -82,7 +82,7 @@ class KnowledgeHandlersMixin(BrainHandlerBase):
     ) -> contextunit_pb2.ContextUnit:
         """Graph traversal search.
 
-        Walks knowledge_edges from entrypoint_ids up to max_hops.
+        Walks cell_edges from entrypoint_ids up to max_hops.
         Returns discovered nodes with attributes and edges with weights.
         """
         unit = parse_unit(request)

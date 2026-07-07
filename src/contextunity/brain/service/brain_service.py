@@ -7,9 +7,9 @@ from __future__ import annotations
 from contextunity.core import brain_pb2_grpc, get_contextunit_logger
 from contextunity.core.exceptions import ConfigurationError
 
-from ..storage.contracts import KnowledgeStoreProtocol
+from ..storage.contracts import BrainStorageProtocol
 from ..storage.duckdb_store import DuckDBStore
-from ..storage.postgres import PostgresKnowledgeStore
+from ..storage.postgres import PostgresBrainStore
 from .embedders import ApiEmbedder, LocalEmbedder, get_embedder
 from .handler_base import BrainHandlerBase
 from .handlers import (
@@ -18,6 +18,7 @@ from .handlers import (
     CommerceHandlersMixin,
     KnowledgeHandlersMixin,
     MemoryHandlersMixin,
+    SynapseHandlersMixin,
     TaxonomyHandlersMixin,
     TraceHandlersMixin,
 )
@@ -32,6 +33,7 @@ class BrainService(
     TaxonomyHandlersMixin,
     CommerceHandlersMixin,
     BlackboardHandlersMixin,
+    SynapseHandlersMixin,
     AdminHandlersMixin,
     BrainHandlerBase,
     brain_pb2_grpc.BrainServiceServicer,
@@ -45,12 +47,13 @@ class BrainService(
     - TaxonomyHandlersMixin: taxonomy CRUD
     - CommerceHandlersMixin: verifications
     - BlackboardHandlersMixin: blackboard read/write (Flat Memory)
+    - SynapseHandlersMixin: BrainSynapse record/query/update-Q (Flat Memory Phase B)
     - AdminHandlersMixin: cross-tenant admin observability (WS-8)
     """
 
     def __init__(
         self,
-        storage: KnowledgeStoreProtocol | None = None,
+        storage: BrainStorageProtocol | None = None,
         duckdb: DuckDBStore | None = None,
         embedder: ApiEmbedder | LocalEmbedder | None = None,
     ) -> None:
@@ -75,7 +78,7 @@ class BrainService(
                 )
             )
         super().__init__(
-            storage=PostgresKnowledgeStore(
+            storage=PostgresBrainStore(
                 dsn=dsn,
                 schema=config.schema_name,
             ),

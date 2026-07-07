@@ -181,7 +181,7 @@ class PostgresUploadProvider(UploadProvider):
                 for payload, embedding in zip(payloads, embeddings):
                     _ = await conn.execute(
                         """
-                        INSERT INTO knowledge_nodes (
+                        INSERT INTO cells (
                             id, tenant_id, user_id, node_kind, source_type, source_id, title,
                             content, struct_data, keywords_text, content_hash, embedding
                         )

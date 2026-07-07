@@ -17,7 +17,7 @@ from contextunity.brain.core.types import coerce_struct_data
 # NOTE: Router-specific logic (model_registry, get_rag_retrieval_settings) removed.
 # Brain should use a simpler embedding interface when implemented.
 from .models import GraphNode
-from .store import PostgresKnowledgeStore
+from .store import PostgresBrainStore
 
 
 def _flatten_keywords(metadata: JsonDict) -> str | None:
@@ -54,9 +54,9 @@ def _flatten_keywords(metadata: JsonDict) -> str | None:
 class PostgresProvider(BaseProvider, IRead, IWrite):
     """Represent and manage Postgres Provider logic within the system."""
 
-    _store: PostgresKnowledgeStore
+    _store: PostgresBrainStore
 
-    def __init__(self, *, store: PostgresKnowledgeStore | None = None) -> None:
+    def __init__(self, *, store: PostgresBrainStore | None = None) -> None:
         """Initialize a new instance of PostgresProvider.
 
         Raises:
@@ -68,7 +68,7 @@ class PostgresProvider(BaseProvider, IRead, IWrite):
         else:
             if not getattr(cfg, "postgres", None):
                 raise ConfigurationError("Postgres config is missing from core config")
-            self._store = PostgresKnowledgeStore(
+            self._store = PostgresBrainStore(
                 dsn=cfg.postgres.dsn,
                 pool_min_size=cfg.postgres.pool_min_size,
                 pool_max_size=cfg.postgres.pool_max_size,

@@ -16,6 +16,7 @@ from contextunity.core.parsing import json_dumps
 from contextunity.core.parsing import json_loads as parse_wire_json
 from contextunity.core.types import JsonDict, is_json_dict
 from psycopg import sql
+from psycopg.rows import tuple_row
 
 from .base import PostgresStoreBase
 
@@ -63,7 +64,7 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
         async with await self.tenant_connection(tenant_id) as conn:
             _ = await conn.execute(
                 """
-                INSERT INTO blackboard_records
+                INSERT INTO blackboard
                     (id, tenant_id, scope_path, content, metadata, ttl_until, created_by, created_at)
                 VALUES
                     (%s, %s, %s::ltree, %s::jsonb, %s::jsonb, %s, %s, %s)
@@ -117,20 +118,31 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
         # Build parameterized IN clause
         placeholders = sql.SQL(", ").join([sql.Placeholder()] * len(ids))
 
+        # Single query: fetch every matching id (expired or not) plus an
+        # `is_expired` flag, then filter in Python. This keeps the read
+        # strictly batched (one storage call) while still letting us log
+        # an expired-ref count separately from "never existed".
         async with await self.tenant_connection(tenant_id) as conn:
-            cursor = await conn.execute(
+            # Explicit `tuple_row` so the declared type matches what this
+            # function actually consumes (positional `row[N]` indexing below)
+            # instead of relying on the connection's own default row shape.
+            cur = conn.cursor(row_factory=tuple_row)
+            cursor = await cur.execute(
                 sql.SQL(
                     (
-                        "SELECT id, content, metadata, scope_path::text, created_at, created_by"
-                        " FROM blackboard_records"
+                        "SELECT id, content, metadata, scope_path::text, created_at, created_by,"
+                        " (ttl_until IS NOT NULL AND ttl_until <= now()) AS is_expired"
+                        " FROM blackboard"
                         " WHERE id IN ({}) AND tenant_id = %s"
-                        " AND (ttl_until IS NULL OR ttl_until > now())"
                         " ORDER BY created_at"
                     )
                 ).format(placeholders),
                 (*ids, tenant_id),
             )
-            rows: list[tuple[object, ...]] = await cursor.fetchall()
+            all_rows: list[tuple[object, ...]] = await cursor.fetchall()
+
+        rows = [row for row in all_rows if not row[6]]
+        expired_count = len(all_rows) - len(rows)
 
         records: list[JsonDict] = []
         for row in rows:
@@ -151,13 +163,22 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
             else:
                 meta_val = {}
             created_by_cell: object = row[5]
+            id_cell: object = row[0]
+            created_at_cell: object = row[4]
             records.append(
                 {
-                    "id": as_str(row[0]),
+                    # id/created_at come back from psycopg3 as native UUID/datetime
+                    # objects (not str) — as_str() would silently coerce them to ""
+                    # since it only accepts already-string values.
+                    "id": str(id_cell) if isinstance(id_cell, (uuid.UUID, str)) else "",
                     "content": content_val,
                     "metadata": meta_val,
                     "scope_path": as_str(row[3]),
-                    "created_at": as_str(row[4]),
+                    "created_at": (
+                        created_at_cell.isoformat()
+                        if isinstance(created_at_cell, datetime)
+                        else as_str(created_at_cell)
+                    ),
                     "created_by": (
                         created_by_cell
                         if isinstance(created_by_cell, (str, type(None)))
@@ -167,9 +188,10 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
             )
 
         logger.debug(
-            "Blackboard read: requested=%d found=%d tenant=%s",
+            "Blackboard read: requested=%d found=%d expired=%d tenant=%s",
             len(ids),
             len(records),
+            expired_count,
             tenant_id,
         )
 
@@ -177,10 +199,6 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
 
     async def prune_expired_blackboard(self, *, tenant_id: str | None = None) -> int:
         """Delete blackboard records whose TTL has expired.
-
-        This is the application-layer counterpart to the pg_cron job.
-        Defence-in-depth: pg_cron handles autonomous cleanup;
-        this method provides metrics/logging for Worker synthesis workflow.
 
         Args:
             tenant_id: Optional tenant filter. None = prune all tenants.
@@ -193,15 +211,13 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
             if tenant_id:
                 cursor = await conn.execute(
                     """
-                    DELETE FROM blackboard_records
+                    DELETE FROM blackboard
                     WHERE ttl_until < now() AND tenant_id = %s
                     """,
                     (tenant_id,),
                 )
             else:
-                cursor = await conn.execute(
-                    "DELETE FROM blackboard_records WHERE ttl_until < now()"
-                )
+                cursor = await conn.execute("DELETE FROM blackboard WHERE ttl_until < now()")
             deleted = cursor.rowcount or 0
 
         if deleted > 0:

@@ -3,7 +3,7 @@
 from typing import ClassVar
 
 from contextunity.core.config import ServiceConfig
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .models import ModelsConfig
 from .providers import (
@@ -11,6 +11,19 @@ from .providers import (
     OpenAIConfig,
     PostgresConfig,
 )
+
+
+class SynapsesConfig(BaseModel):
+    """BrainSynapse rollout flags.
+
+    Both default ``False`` until their respective test chains pass; rollback
+    is flag-off — existing ``synapses`` rows stay readable either way.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    decay_enabled: bool = False
 
 
 class BrainConfig(ServiceConfig):
@@ -36,6 +49,9 @@ class BrainConfig(ServiceConfig):
     postgres: PostgresConfig = Field(default_factory=PostgresConfig)
     openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
     local: LocalOpenAIConfig = Field(default_factory=LocalOpenAIConfig)
+
+    # Phase 2 BrainSynapse rollout flags
+    synapses: SynapsesConfig = Field(default_factory=SynapsesConfig)
 
 
 # ---- Global config management ----
@@ -65,6 +81,9 @@ def load_config(config_path: str | None = None) -> BrainConfig:
         "BRAIN_SCHEMA": "schema_name",
         "EMBEDDER_TYPE": "embedder_type",
         "CU_BRAIN_PROJECT_PATH": "project_path",
+        # Phase 2 BrainSynapse rollout flags
+        "CU_BRAIN_SYNAPSES_ENABLED": "synapses.enabled",
+        "CU_BRAIN_SYNAPSES_DECAY_ENABLED": "synapses.decay_enabled",
     }
 
     return load_service_config(

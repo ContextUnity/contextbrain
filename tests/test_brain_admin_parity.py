@@ -12,15 +12,14 @@ import uuid
 from pathlib import Path
 
 import pytest
+from admin_parity_helpers import assert_admin_ops_over_seeded_trace
 
 from contextunity.brain.storage.admin_factory import create_admin_ops
 from contextunity.brain.storage.contracts import AdminQueryProtocol
-from contextunity.brain.storage.postgres import PostgresKnowledgeStore
+from contextunity.brain.storage.postgres import PostgresBrainStore
 from contextunity.brain.storage.postgres.store.admin import PostgresAdminOps
-from contextunity.brain.storage.sqlite import SqliteVecStorageBackend
+from contextunity.brain.storage.sqlite import SqliteBrainStore
 from contextunity.brain.storage.sqlite.admin_ops import AsyncSqliteAdminOps
-
-from .admin_parity_helpers import assert_admin_ops_over_seeded_trace
 
 BRAIN_TEST_DSN = (os.environ.get("BRAIN_TEST_DSN") or os.environ.get("POSTGRES_DSN") or "").strip()
 
@@ -31,8 +30,8 @@ USER = "user-1"
 
 
 @pytest.fixture
-def sqlite_store(tmp_path: Path) -> SqliteVecStorageBackend:
-    return SqliteVecStorageBackend(db_path=tmp_path / "brain.sqlite3", vector_dim=8)
+def sqlite_store(tmp_path: Path) -> SqliteBrainStore:
+    return SqliteBrainStore(db_path=tmp_path / "brain.sqlite3", vector_dim=8)
 
 
 @pytest.fixture
@@ -43,9 +42,7 @@ def run():
     return _run
 
 
-async def _seed_trace(
-    store: SqliteVecStorageBackend | PostgresKnowledgeStore, *, tenant: str
-) -> str:
+async def _seed_trace(store: SqliteBrainStore | PostgresBrainStore, *, tenant: str) -> str:
     trace_id = await store.log_trace(
         tenant_id=tenant,
         agent_id=AGENT,
@@ -60,7 +57,7 @@ async def _seed_trace(
 
 
 @pytest.mark.asyncio
-async def test_sqlite_admin_ops_parity_via_factory(sqlite_store: SqliteVecStorageBackend) -> None:
+async def test_sqlite_admin_ops_parity_via_factory(sqlite_store: SqliteBrainStore) -> None:
     trace_id = await _seed_trace(sqlite_store, tenant=TENANT)
     ops = create_admin_ops(sqlite_store)
     assert isinstance(ops, AsyncSqliteAdminOps)
@@ -75,7 +72,7 @@ async def test_create_admin_ops_rejects_unknown_storage() -> None:
         pass
 
     with pytest.raises(BrainStorageError, match="not supported"):
-        create_admin_ops(_UnknownStore())  # type: ignore[arg-type]
+        create_admin_ops(_UnknownStore())
 
 
 @pytest.mark.integration_live
@@ -85,7 +82,7 @@ async def test_postgres_admin_ops_parity() -> None:
         pytest.skip("Set BRAIN_TEST_DSN or POSTGRES_DSN for Postgres admin parity")
 
     tenant = f"parity-{uuid.uuid4().hex[:8]}"
-    store = PostgresKnowledgeStore(dsn=BRAIN_TEST_DSN)
+    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN)
     await store.ensure_schema()
     trace_id = await _seed_trace(store, tenant=tenant)
 

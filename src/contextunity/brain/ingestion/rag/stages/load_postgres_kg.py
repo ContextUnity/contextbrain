@@ -1,4 +1,4 @@
-"""Stage: Load KG nodes/edges/aliases into Postgres."""
+"""Stage: Load cells/cell_edges/cell_aliases into Postgres."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from contextunity.core.types import JsonDict, is_json_dict
 from psycopg_pool import AsyncConnectionPool
 
 from contextunity.brain.core import get_core_config
-from contextunity.brain.storage.postgres import GraphEdge, GraphNode, PostgresKnowledgeStore
+from contextunity.brain.storage.postgres import GraphEdge, GraphNode, PostgresBrainStore
 
 from ..config import get_assets_paths
 from ..settings import RagIngestionConfig
@@ -47,14 +47,14 @@ async def _load_async(*, config: RagIngestionConfig) -> dict[str, str]:
     user_id = config.upload.postgres.user_id
 
     paths = get_assets_paths(config)
-    nodes_path = paths["assets"] / "knowledge_nodes.jsonl"
-    edges_path = paths["assets"] / "knowledge_edges.jsonl"
-    aliases_path = paths["assets"] / "knowledge_aliases.jsonl"
+    nodes_path = paths["assets"] / "cells.jsonl"
+    edges_path = paths["assets"] / "cell_edges.jsonl"
+    aliases_path = paths["assets"] / "cell_aliases.jsonl"
 
     nodes = _load_nodes(nodes_path)
     edges = _load_edges(edges_path)
 
-    store = PostgresKnowledgeStore(
+    store = PostgresBrainStore(
         dsn=dsn,
         pool_min_size=config.upload.postgres.pool_min_size,
         pool_max_size=config.upload.postgres.pool_max_size,
@@ -95,7 +95,7 @@ def _load_nodes(path: Path) -> list[GraphNode]:
                 source_type=as_str(row.get("source_type")) or None,
                 source_id=as_str(row.get("source_id")) or None,
                 title=as_str(row.get("title")) or None,
-                taxonomy_path=as_str(row.get("taxonomy_path")) or None,
+                scope_path=as_str(row.get("scope_path")) or None,
                 metadata=as_json_dict(row.get("struct_data")),
             )
         )
@@ -139,7 +139,7 @@ async def _load_aliases(*, dsn: str, tenant_id: str, aliases: list[JsonDict]) ->
                         continue
                     _ = await conn.execute(
                         """
-                        INSERT INTO knowledge_aliases (tenant_id, alias, node_id, source)
+                        INSERT INTO cell_aliases (tenant_id, alias, node_id, source)
                         VALUES (%s, %s, %s, %s)
                         ON CONFLICT (tenant_id, alias) DO UPDATE
                         SET node_id = EXCLUDED.node_id,

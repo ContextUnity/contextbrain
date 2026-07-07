@@ -70,7 +70,7 @@ class AdminOpsLike(Protocol):
         limit: int,
         offset: int,
     ) -> tuple[list[JsonDict], int]: ...
-    async def get_knowledge_nodes(
+    async def get_cells(
         self, *, tenant_id: str | None, kind: str | None, limit: int
     ) -> list[JsonDict]: ...
     async def get_memory_layer_stats(self, *, tenant_id: str | None) -> JsonDict: ...
@@ -120,7 +120,7 @@ async def assert_admin_ops_over_seeded_trace(
 
     layers = await ops.get_memory_layer_stats(tenant_id=None)
     assert "episodes" in layers
-    assert "knowledge_nodes" in layers
+    assert "cells" in layers
 
     filters = await ops.get_filter_options(tenant_id=None)
     assert agent_id in filters.get("agent_ids", [])
@@ -142,7 +142,7 @@ async def assert_admin_ops_over_seeded_trace(
     assert episode_total >= 0
     assert isinstance(episodes, list)
 
-    nodes = await ops.get_knowledge_nodes(tenant_id=None, kind=None, limit=10)
+    nodes = await ops.get_cells(tenant_id=None, kind=None, limit=10)
     assert isinstance(nodes, list)
 
     related = await ops.get_related_episodes(trace_id)

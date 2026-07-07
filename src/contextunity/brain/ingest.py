@@ -10,7 +10,7 @@ from contextunity.core.sdk.models import UnitMetrics
 from contextunity.core.types import JsonDict
 
 from contextunity.brain.modules.intelligence.hub import IntelligenceHub
-from contextunity.brain.storage.contracts import KnowledgeStoreProtocol
+from contextunity.brain.storage.contracts import BrainStorageProtocol
 from contextunity.brain.storage.graph.cognee import KnowledgeGraphOrchestrator
 
 logger = get_contextunit_logger(__name__)
@@ -28,18 +28,18 @@ class IngestionService:
     1. Parse raw content (text, markdown).
     2. Chunk content into semantic segments.
     3. Generate embeddings (delegated to models).
-    4. Store in PostgresKnowledgeStore (pgvector).
+    4. Store in PostgresBrainStore (pgvector).
     """
 
-    storage: KnowledgeStoreProtocol
+    storage: BrainStorageProtocol
     intel: IntelligenceHub
     graph: KnowledgeGraphOrchestrator
 
-    def __init__(self, storage: KnowledgeStoreProtocol, project_path: str | None = None):
+    def __init__(self, storage: BrainStorageProtocol, project_path: str | None = None):
         """Initialize the modular ingestion pipeline.
 
         Args:
-            storage (KnowledgeStoreProtocol): The storage parameter.
+            storage (BrainStorageProtocol): The storage parameter.
             project_path (str | None): The project path parameter.
         """
         self.storage = storage

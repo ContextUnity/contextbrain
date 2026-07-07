@@ -34,18 +34,20 @@ class GraphMixin(PostgresStoreBase, ABC):
                     _ = await execute(
                         conn,
                         """
-                        INSERT INTO knowledge_nodes (
+                        INSERT INTO cells (
                             id, tenant_id, user_id, node_kind, source_type, source_id,
-                            title, content, struct_data, keywords_text, taxonomy_path, embedding
+                            title, content, struct_data, keywords_text, scope_path, embedding,
+                            content_hash
                         ) VALUES (
                             %(id)s, %(tenant_id)s, %(user_id)s, %(node_kind)s, %(source_type)s,
                             %(source_id)s, %(title)s, %(content)s, %(struct_data)s,
-                            %(keywords_text)s, %(taxonomy_path)s, %(embedding)s
+                            %(keywords_text)s, %(scope_path)s, %(embedding)s, %(content_hash)s
                         )
                         ON CONFLICT (id) DO UPDATE SET
                             title = EXCLUDED.title, content = EXCLUDED.content,
                             struct_data = EXCLUDED.struct_data, keywords_text = EXCLUDED.keywords_text,
-                            taxonomy_path = EXCLUDED.taxonomy_path, embedding = EXCLUDED.embedding
+                            scope_path = EXCLUDED.scope_path, embedding = EXCLUDED.embedding,
+                            content_hash = EXCLUDED.content_hash
                     """,
                         {
                             "id": node.id,
@@ -58,8 +60,9 @@ class GraphMixin(PostgresStoreBase, ABC):
                             "content": node.content,
                             "struct_data": Json(node.metadata),
                             "keywords_text": node.keywords_text,
-                            "taxonomy_path": node.taxonomy_path,
+                            "scope_path": node.scope_path,
                             "embedding": vec(node.embedding) if node.embedding else None,
+                            "content_hash": node.content_hash,
                         },
                     )
 
@@ -67,7 +70,7 @@ class GraphMixin(PostgresStoreBase, ABC):
                     _ = await execute(
                         conn,
                         """
-                        INSERT INTO knowledge_edges (tenant_id, source_id, target_id, relation, weight, metadata)
+                        INSERT INTO cell_edges (tenant_id, source_id, target_id, relation, weight, metadata)
                         VALUES (%(tenant_id)s, %(source_id)s, %(target_id)s, %(relation)s, %(weight)s, %(metadata)s)
                         ON CONFLICT (tenant_id, source_id, target_id, relation) DO UPDATE SET
                             weight = EXCLUDED.weight, metadata = EXCLUDED.metadata
@@ -94,7 +97,7 @@ class GraphMixin(PostgresStoreBase, ABC):
     ) -> GraphTraversalResult:
         """Structural graph traversal.
 
-        Walks knowledge_edges from entrypoint_ids up to max_hops.
+        Walks cell_edges from entrypoint_ids up to max_hops.
         Returns dict with 'nodes' and 'edges'.
         """
         from ..kg_queries import graph_search as _graph_search

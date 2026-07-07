@@ -37,6 +37,13 @@ RPC_PERMISSION_MAP: dict[str, str] = {
     "GetEpisodeStats": Permissions.MEMORY_READ,
     "WriteBlackboard": Permissions.MEMORY_WRITE,
     "ReadBlackboard": Permissions.MEMORY_READ,
+    # BrainSynapse — memory:* family, same as Blackboard/episodes above.
+    # UpdateSynapseQ may later warrant a dedicated review permission for
+    # admin-verdict updates, but memory:write is correct for the general
+    # case today.
+    "RecordSynapse": Permissions.MEMORY_WRITE,
+    "QuerySynapses": Permissions.MEMORY_READ,
+    "UpdateSynapseQ": Permissions.MEMORY_WRITE,
     # Traces
     "LogTrace": Permissions.TRACE_WRITE,
     "GetTraces": Permissions.TRACE_READ,
@@ -56,7 +63,7 @@ RPC_PERMISSION_MAP: dict[str, str] = {
     "AdminGetSessionTraces": Permissions.ADMIN_READ,
     "AdminGetRelatedEpisodes": Permissions.ADMIN_READ,
     "AdminSearchEpisodes": Permissions.ADMIN_READ,
-    "AdminGetKnowledgeNodes": Permissions.ADMIN_READ,
+    "AdminGetCells": Permissions.ADMIN_READ,
     "AdminGetAnalyticsSummary": Permissions.ADMIN_READ,
 }
 

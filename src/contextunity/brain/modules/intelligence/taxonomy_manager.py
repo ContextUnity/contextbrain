@@ -9,7 +9,7 @@ from contextunity.core.narrowing import as_json_dict, as_str, as_str_list
 from contextunity.core.parsing import yaml_load
 from contextunity.core.types import JsonDict, is_json_dict
 
-from contextunity.brain.storage.contracts import KnowledgeStoreProtocol
+from contextunity.brain.storage.contracts import BrainStorageProtocol
 
 logger = get_contextunit_logger(__name__)
 
@@ -18,14 +18,14 @@ class TaxonomyManager:
     """Manages project-specific taxonomies and provides matching logic."""
 
     project_path: Path
-    storage: KnowledgeStoreProtocol | None
+    storage: BrainStorageProtocol | None
     metadata_path: Path
     categories: JsonDict
     sizes: JsonDict
     colors: JsonDict
     pending_verifications: list[JsonDict]
 
-    def __init__(self, project_path: str, storage: KnowledgeStoreProtocol | None = None) -> None:
+    def __init__(self, project_path: str, storage: BrainStorageProtocol | None = None) -> None:
         self.project_path = Path(project_path)
         self.storage = storage
         self.metadata_path = self.project_path / "metadata"

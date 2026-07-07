@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import uuid
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from contextunity.core.exceptions import StorageError
 
 from contextunity.brain.core.exceptions import BrainValidationError
@@ -18,15 +21,18 @@ from contextunity.brain.storage.portable import (
     BrainPortableArchiveWriter,
     FactRecord,
     PortableManifest,
+    SynapseRecord,
     import_portable_archive,
     parse_record,
 )
-from contextunity.brain.storage.sqlite import SqliteVecStorageBackend
+from contextunity.brain.storage.sqlite import SqliteBrainStore
+
+BRAIN_TEST_DSN = os.environ.get("BRAIN_TEST_DSN")
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> SqliteVecStorageBackend:
-    return SqliteVecStorageBackend(
+def store(tmp_path: Path) -> SqliteBrainStore:
+    return SqliteBrainStore(
         db_path=str(tmp_path / "export_test.sqlite3"),
         vector_dim=8,
     )
@@ -56,6 +62,23 @@ class TestParseRecord:
         )
         rec = parse_record(line)
         assert isinstance(rec, FactRecord)
+
+    def test_parse_synapse_record(self):
+        line = json.dumps(
+            {
+                "type": "synapse",
+                "tenant_id": "t",
+                "id": "syn-1",
+                "agent_id": "agent-1",
+                "action_type": "tool_call",
+                "q_composite": 0.72,
+                "created_at": "2026-07-06T00:00:00+00:00",
+                "updated_at": "2026-07-06T00:00:00+00:00",
+            }
+        )
+        rec = parse_record(line)
+        assert isinstance(rec, SynapseRecord)
+        assert rec.q_composite == 0.72
 
     def test_parse_unknown_type(self):
         with pytest.raises(BrainValidationError, match="Unknown record type"):
@@ -114,6 +137,20 @@ class TestExport:
                 value="blue",
             )
         )
+        run(
+            store.record_synapse(
+                tenant_id=TENANT,
+                agent_id="agent-1",
+                action_type="tool_call",
+                action_data={"tool": "search"},
+                node_role="worker",
+                scope_path="tenant.project",
+                q_action=0.8,
+                q_hypothesis=0.6,
+                q_relevance=0.7,
+                metadata={"latency_ms": 123, "selected_model": "test-model"},
+            )
+        )
 
         archive_dir = tmp_path / "full-export"
         writer = BrainPortableArchiveWriter(archive_dir, vector_dim=8)
@@ -123,6 +160,7 @@ class TestExport:
         assert manifest.record_counts.get("taxonomy", 0) >= 1
         assert manifest.record_counts.get("trace", 0) >= 1
         assert manifest.record_counts.get("fact", 0) >= 1
+        assert manifest.record_counts.get("synapse", 0) == 1
 
         errors = BrainPortableArchiveReader(archive_dir).validate()
         assert errors == []
@@ -208,7 +246,7 @@ class TestImport:
         archive_dir = tmp_path / "real"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
 
-        target = SqliteVecStorageBackend(
+        target = SqliteBrainStore(
             db_path=str(tmp_path / "target.sqlite3"),
             vector_dim=8,
         )
@@ -233,7 +271,7 @@ class TestImport:
         archive_dir = tmp_path / "remap"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
 
-        target = SqliteVecStorageBackend(
+        target = SqliteBrainStore(
             db_path=str(tmp_path / "remap.sqlite3"),
             vector_dim=8,
         )
@@ -251,7 +289,7 @@ class TestImport:
         assert run(target.get_user_facts(user_id="u1", tenant_id=TENANT)) == []
 
     def test_invalid_archive_raises(self, run, tmp_path):
-        target = SqliteVecStorageBackend(
+        target = SqliteBrainStore(
             db_path=str(tmp_path / "fail.sqlite3"),
             vector_dim=8,
         )
@@ -280,7 +318,7 @@ class TestImport:
         archive_dir = tmp_path / "idem"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
 
-        target = SqliteVecStorageBackend(
+        target = SqliteBrainStore(
             db_path=str(tmp_path / "idem_target.sqlite3"),
             vector_dim=8,
         )
@@ -305,7 +343,7 @@ class TestImport:
         archive_dir = tmp_path / "trace-idem"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
 
-        target = SqliteVecStorageBackend(
+        target = SqliteBrainStore(
             db_path=str(tmp_path / "trace_target.sqlite3"),
             vector_dim=8,
         )
@@ -329,7 +367,7 @@ class TestImport:
         archive_dir = tmp_path / "ep-idem"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
 
-        target = SqliteVecStorageBackend(
+        target = SqliteBrainStore(
             db_path=str(tmp_path / "ep_target.sqlite3"),
             vector_dim=8,
         )
@@ -344,6 +382,39 @@ class TestImport:
             )
         )
         assert len(episodes) == 1  # not 2
+
+    def test_synapse_idempotent(self, store, run, tmp_path):
+        """Re-import must NOT duplicate Synapse records."""
+        original = run(
+            store.record_synapse(
+                tenant_id=TENANT,
+                agent_id="agent-1",
+                action_type="tool_call",
+                action_data={"tool": "search"},
+                node_role="worker",
+                scope_path="tenant.project",
+                q_action=0.8,
+                q_hypothesis=0.6,
+                q_relevance=0.7,
+                metadata={"latency_ms": 123, "selected_model": "test-model"},
+            )
+        )
+        original_id = str(original["id"])
+
+        archive_dir = tmp_path / "synapse-idem"
+        run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
+
+        target = SqliteBrainStore(
+            db_path=str(tmp_path / "synapse_target.sqlite3"),
+            vector_dim=8,
+        )
+        run(import_portable_archive(target, archive_dir, dry_run=False))
+        run(import_portable_archive(target, archive_dir, dry_run=False))
+
+        rows = run(target.query_synapses(tenant_id=TENANT, min_q=0.0, limit=10))
+        assert len(rows) == 1
+        assert rows[0]["id"] == original_id
+        assert rows[0]["metadata"] == {"latency_ms": 123, "selected_model": "test-model"}
 
 
 # ── Embedding validation ─────────────────────────────────────────
@@ -362,3 +433,63 @@ class TestEmbeddingValidation:
         archive_dir = tmp_path / "emb"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
         assert BrainPortableArchiveReader(archive_dir).validate() == []
+
+
+# ── SQLite-vec -> Postgres export path ──────────────────────────────
+#
+# Export path test shape for SQLite-vec -> Postgres, even before full
+# export lands. Everything above proves SQLite -> SQLite; this is
+# the one migration direction phase-01 explicitly calls out and that had
+# zero coverage before this milestone. import_portable_archive() takes any
+# BrainStorageProtocol target, so no new import code was needed — only
+# the test proving Postgres actually works as that target.
+
+
+@pytest_asyncio.fixture
+async def postgres_target():
+    if not BRAIN_TEST_DSN:
+        pytest.skip("BRAIN_TEST_DSN not set — skipping SQLite-vec -> Postgres export test")
+    from contextunity.brain.storage.postgres import PostgresBrainStore
+
+    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN)
+    await store.ensure_schema()
+    yield store
+    await store.close()
+
+
+class TestSqliteToPostgresExportShape:
+    @pytest.mark.asyncio
+    async def test_export_from_sqlite_imports_into_postgres(
+        self, store: SqliteBrainStore, tmp_path: Path, postgres_target
+    ):
+        tenant = f"export-shape-{uuid.uuid4().hex}"
+        await store.write_blackboard(
+            tenant_id=tenant,
+            scope_path="export.shape.step1",
+            content={"migrated": "from-sqlite"},
+        )
+
+        archive_dir = tmp_path / "sqlite-to-postgres"
+        manifest = await BrainPortableArchiveWriter(archive_dir, vector_dim=8).export(
+            store, tenant_ids=[tenant]
+        )
+        assert manifest.record_counts.get("blackboard", 0) == 1
+
+        result = await import_portable_archive(postgres_target, archive_dir, dry_run=False)
+        assert result["ok"] is True
+        assert result["counts"].get("blackboard", 0) == 1
+
+        # _import_blackboard() calls write_blackboard() (not a raw INSERT) for
+        # any non-SQLite target, which mints a *new* UUID rather than
+        # preserving the archived one — so the imported row must be found by
+        # tenant/content, not by re-using the id from the SQLite-side export.
+        pool = await postgres_target._get_pool()
+        async with pool.connection() as conn:
+            await conn.set_autocommit(True)
+            cursor = await conn.execute(
+                "SELECT content FROM blackboard WHERE tenant_id = %s",
+                (tenant,),
+            )
+            rows = await cursor.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == {"migrated": "from-sqlite"}

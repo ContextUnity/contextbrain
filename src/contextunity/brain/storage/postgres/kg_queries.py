@@ -32,14 +32,14 @@ async def fetch_kg_facts(
     sql = """
     WITH RECURSIVE walk AS (
         SELECT source_id, target_id, relation, 1 AS depth
-        FROM knowledge_edges
+        FROM cell_edges
         WHERE tenant_id = %s
           AND source_id = ANY(%s::text[])
           AND (%s::text[] IS NULL OR relation = ANY(%s::text[]))
         UNION ALL
         SELECT e.source_id, e.target_id, e.relation, w.depth + 1
         FROM walk w
-        JOIN knowledge_edges e ON e.source_id = w.target_id
+        JOIN cell_edges e ON e.source_id = w.target_id
         WHERE w.depth < %s
           AND e.tenant_id = %s
           AND (%s::text[] IS NULL OR e.relation = ANY(%s::text[]))
@@ -85,7 +85,7 @@ async def graph_search(
 ) -> GraphTraversalResult:
     """Structural graph traversal returning nodes and edges.
 
-    Uses recursive CTE to walk the knowledge_edges table starting from
+    Uses recursive CTE to walk the cell_edges table starting from
     entrypoint_ids. Returns discovered nodes with their attributes and
     the edges traversed.
 
@@ -101,14 +101,14 @@ async def graph_search(
     edge_sql = """
     WITH RECURSIVE walk AS (
         SELECT source_id, target_id, relation, weight, metadata, 1 AS depth
-        FROM knowledge_edges
+        FROM cell_edges
         WHERE tenant_id = %s
           AND source_id = ANY(%s::text[])
           AND (%s::text[] IS NULL OR relation = ANY(%s::text[]))
         UNION ALL
         SELECT e.source_id, e.target_id, e.relation, e.weight, e.metadata, w.depth + 1
         FROM walk w
-        JOIN knowledge_edges e ON e.source_id = w.target_id
+        JOIN cell_edges e ON e.source_id = w.target_id
         WHERE w.depth < %s
           AND e.tenant_id = %s
           AND (%s::text[] IS NULL OR e.relation = ANY(%s::text[]))
@@ -158,8 +158,8 @@ async def graph_search(
     # Step 2: Fetch node attributes for all referenced nodes
     node_sql = """
     SELECT id, node_kind, source_type, source_id, title, content,
-           struct_data, taxonomy_path, tenant_id
-    FROM knowledge_nodes
+           struct_data, scope_path, tenant_id
+    FROM cells
     WHERE tenant_id = %s AND id = ANY(%s::text[])
     """
     node_rows = await cur.execute(node_sql, [tenant_id, list(node_ids)])
@@ -178,7 +178,7 @@ async def graph_search(
                 "source_type": as_str(raw_row.get("source_type")),
                 "title": as_str(raw_row.get("title")),
                 "content": content[:500],
-                "taxonomy_path": as_str(raw_row.get("taxonomy_path")),
+                "scope_path": as_str(raw_row.get("scope_path")),
                 "metadata": metadata,
             }
         )

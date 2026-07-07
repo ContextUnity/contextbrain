@@ -32,18 +32,18 @@ class TestBlackboardSchema:
 
         all_stmts = build_schema_sql(vector_dim=1536)
         all_sql = " ".join(all_stmts)
-        assert "blackboard_records" in all_sql
+        assert "blackboard" in all_sql
 
 
 class TestBlackboardRLS:
-    """Test that blackboard_records is included in RLS policies."""
+    """Test that blackboard is included in RLS policies."""
 
     def test_blackboard_in_rls_tenant_tables(self):
         from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         rls_stmts = build_rls_sql()
         rls_sql = " ".join(rls_stmts)
-        assert "blackboard_records" in rls_sql
+        assert "blackboard" in rls_sql
 
 
 class TestBlackboardPayloads:

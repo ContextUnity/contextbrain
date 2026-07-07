@@ -51,7 +51,7 @@ class TestAdminRpcsInPermissionMap:
         "AdminGetSessionTraces",
         "AdminGetRelatedEpisodes",
         "AdminSearchEpisodes",
-        "AdminGetKnowledgeNodes",
+        "AdminGetCells",
         "AdminGetAnalyticsSummary",
     )
 
@@ -186,7 +186,7 @@ class TestAdminHandlersMixinOnServicer:
         "AdminGetSessionTraces",
         "AdminGetRelatedEpisodes",
         "AdminSearchEpisodes",
-        "AdminGetKnowledgeNodes",
+        "AdminGetCells",
         "AdminGetAnalyticsSummary",
     )
 
@@ -284,7 +284,7 @@ class TestHoursIntervalIsParameterSafe:
         from psycopg.adapt import Transformer
 
         sql = (
-            b"SELECT 1 FROM agent_traces "
+            b"SELECT 1 FROM event_journal "
             b"WHERE created_at > NOW() - make_interval(hours => %(hours)s)"
         )
         q = PostgresQuery(Transformer())

@@ -118,11 +118,8 @@ class ComponentFactory:
 
         # Fallback to built-in providers
         providers = {
-            "postgres": (
-                "contextunity.brain.modules.providers.storage.postgres.provider",
-                "PostgresProvider",
-            ),
-            "gcs": ("contextunity.brain.modules.providers.storage.gcs", "GCSProvider"),
+            "postgres": ("contextunity.brain.storage.postgres.provider", "PostgresProvider"),
+            "gcs": ("contextunity.brain.storage.gcs", "GCSProvider"),
         }
 
         if name not in providers:
@@ -134,53 +131,30 @@ class ComponentFactory:
 
     @staticmethod
     def create_connector(name: str, **kwargs: object) -> object:
-        """Create a data connector instance."""
+        """Create a data connector instance.
+
+        There are no built-in connectors — ``services/brain/src/contextunity/
+        brain/ingestion/rag/`` is the active ingestion architecture
+        (``@register_plugin("web")`` etc. in ``ingestion/rag/core/registry.py``),
+        entirely separate from this factory. Only dynamically registered
+        connectors (via ``register_connector_factory``/``register_connector``)
+        are available here.
+        """
         if name in ComponentFactory._connector_factories:
             return ComponentFactory._connector_factories[name](**kwargs)
-
-        # Fallback to built-in connectors
-        connectors = {
-            "web": ("contextunity.brain.modules.connectors.web", "WebSearchConnector"),
-            "web_scraper": (
-                "contextunity.brain.modules.connectors.web",
-                "WebScraperConnector",
-            ),
-            "file": ("contextunity.brain.modules.connectors.file", "FileConnector"),
-            "rss": ("contextunity.brain.modules.connectors.rss", "RSSConnector"),
-            "api": ("contextunity.brain.modules.connectors.api", "APIConnector"),
-        }
-
-        if name not in connectors:
-            raise BrainRegistryError(f"Unknown connector: {name}")
-
-        module_name, class_name = connectors[name]
-        constructor = _load_constructor(module_name, class_name)
-        return constructor(**kwargs)
+        raise BrainRegistryError(f"Unknown connector: {name}")
 
     @staticmethod
     def create_transformer(name: str, **kwargs: object) -> object:
-        """Create a transformer instance."""
+        """Create a transformer instance.
+
+        There are no built-in transformers — only dynamically registered ones
+        (via ``register_transformer_factory``/``register_transformer``) are
+        available here.
+        """
         if name in ComponentFactory._transformer_factories:
             return ComponentFactory._transformer_factories[name](**kwargs)
-
-        # Fallback to built-in transformers
-        transformers = {
-            "metadata_mapper": (
-                "contextunity.brain.modules.transformers.metadata",
-                "MetadataMapper",
-            ),
-            "summarizer": (
-                "contextunity.brain.modules.transformers.summarization",
-                "Summarizer",
-            ),
-        }
-
-        if name not in transformers:
-            raise BrainRegistryError(f"Unknown transformer: {name}")
-
-        module_name, class_name = transformers[name]
-        constructor = _load_constructor(module_name, class_name)
-        return constructor(**kwargs)
+        raise BrainRegistryError(f"Unknown transformer: {name}")
 
 
 def _lazy_import_object(path: str) -> object:

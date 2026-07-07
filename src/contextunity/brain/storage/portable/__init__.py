@@ -1,4 +1,4 @@
-"""Portable Archive v1 — public API.
+"""Portable Archive v2 — public API.
 
 Usage::
 
@@ -14,12 +14,13 @@ from .models import (
     ARCHIVE_FORMAT,
     RECORD_TYPES,
     BlackboardRecord,
+    CellEdgeRecord,
+    CellRecord,
     EmbeddingRecord,
     EpisodeRecord,
     FactRecord,
-    KnowledgeEdgeRecord,
-    KnowledgeNodeRecord,
     PortableManifest,
+    SynapseRecord,
     TaxonomyRecord,
     TraceRecord,
     parse_record,
@@ -32,14 +33,15 @@ __all__ = [
     "BlackboardRecord",
     "BrainPortableArchiveReader",
     "BrainPortableArchiveWriter",
+    "CellEdgeRecord",
+    "CellRecord",
     "EmbeddingRecord",
     "EpisodeRecord",
     "FactRecord",
     "ImportResult",
-    "KnowledgeEdgeRecord",
-    "KnowledgeNodeRecord",
     "PortableManifest",
     "RECORD_TYPES",
+    "SynapseRecord",
     "TaxonomyRecord",
     "TraceRecord",
     "import_portable_archive",

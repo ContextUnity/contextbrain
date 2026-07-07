@@ -20,7 +20,7 @@ def _row_float(row: JsonDict, key: str) -> float:
 
 
 if TYPE_CHECKING:
-    from contextunity.brain.storage.postgres.store import PostgresKnowledgeStore
+    from contextunity.brain.storage.postgres.store import PostgresBrainStore
 
 
 def _trace_payload(row: JsonDict) -> JsonDict:
@@ -79,7 +79,7 @@ def _empty_analytics_summary() -> JsonDict:
 class PostgresAdminOps:
     """Admin observability queries against the PostgreSQL Brain backend."""
 
-    def __init__(self, storage: PostgresKnowledgeStore) -> None:
+    def __init__(self, storage: PostgresBrainStore) -> None:
         self._storage = storage
 
     async def list_tenants(self) -> list[JsonDict]:
@@ -88,7 +88,7 @@ class PostgresAdminOps:
                 conn,
                 """
                 SELECT tenant_id, COUNT(*) AS trace_count
-                FROM agent_traces
+                FROM event_journal
                 GROUP BY tenant_id
                 ORDER BY tenant_id
                 """,
@@ -131,12 +131,12 @@ class PostgresAdminOps:
             SELECT id::text, tenant_id, agent_id, session_id, user_id,
                    graph_name, tool_calls, token_usage, timing_ms,
                    security_flags, metadata, provenance, created_at::text
-            FROM agent_traces
+            FROM event_journal
             {where}
             ORDER BY created_at DESC
             LIMIT %(limit)s OFFSET %(offset)s
         """
-        count_query = f"SELECT COUNT(*) AS total FROM agent_traces {where}"
+        count_query = f"SELECT COUNT(*) AS total FROM event_journal {where}"
 
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
             rows = await fetch_all(conn, query, qparams)
@@ -158,7 +158,7 @@ class PostgresAdminOps:
                 SELECT id::text, tenant_id, agent_id, session_id, user_id,
                        graph_name, tool_calls, token_usage, timing_ms,
                        security_flags, metadata, provenance, created_at::text
-                FROM agent_traces
+                FROM event_journal
                 WHERE id::text = %(trace_id)s
                 LIMIT 1
                 """,
@@ -184,7 +184,7 @@ class PostgresAdminOps:
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
             for col, key in cols:
                 query = (
-                    f"SELECT DISTINCT {col} FROM agent_traces "
+                    f"SELECT DISTINCT {col} FROM event_journal "
                     f"WHERE {col} IS NOT NULL AND {col} != '' {tenant_clause} "
                     f"ORDER BY {col} LIMIT 100"
                 )
@@ -206,7 +206,7 @@ class PostgresAdminOps:
             SELECT id::text, tenant_id, agent_id, session_id, user_id,
                    graph_name, tool_calls, token_usage, timing_ms,
                    security_flags, metadata, provenance, created_at::text
-            FROM agent_traces
+            FROM event_journal
             {where}
             ORDER BY created_at DESC
             LIMIT 200
@@ -219,7 +219,7 @@ class PostgresAdminOps:
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
             rows = await fetch_all(
                 conn,
-                "SELECT tenant_id FROM agent_traces WHERE id::text = %(trace_id)s LIMIT 1",
+                "SELECT tenant_id FROM event_journal WHERE id::text = %(trace_id)s LIMIT 1",
                 {"trace_id": trace_id},
             )
         if not rows:
@@ -235,7 +235,7 @@ class PostgresAdminOps:
                 SELECT e.id::text, e.tenant_id, e.user_id, e.session_id,
                        e.content, e.metadata, e.created_at::text
                 FROM episodic_events e
-                JOIN agent_traces t ON t.tenant_id = e.tenant_id
+                JOIN event_journal t ON t.tenant_id = e.tenant_id
                 WHERE t.id::text = %(trace_id)s
                   AND (
                       e.metadata->>'trace_id' = %(trace_id)s
@@ -297,7 +297,7 @@ class PostgresAdminOps:
         events = [_episode_payload(row) for row in rows]
         return events, total
 
-    async def get_knowledge_nodes(
+    async def get_cells(
         self, *, tenant_id: str | None, kind: str | None, limit: int
     ) -> list[JsonDict]:
         conditions: list[str] = []
@@ -314,7 +314,7 @@ class PostgresAdminOps:
         query = f"""
             SELECT id::text, node_kind, source_type, title,
                    LEFT(content, 200) AS content_preview, tenant_id, created_at::text
-            FROM knowledge_nodes
+            FROM cells
             {where}
             ORDER BY created_at DESC
             LIMIT %(limit)s
@@ -344,17 +344,17 @@ class PostgresAdminOps:
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         ep_query = f"SELECT COUNT(*) AS total FROM episodic_events {where}"
-        kn_query = f"SELECT COUNT(*) AS total FROM knowledge_nodes {where}"
+        cells_query = f"SELECT COUNT(*) AS total FROM cells {where}"
 
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
             ep_rows = await fetch_all(conn, ep_query, qparams)
-            kn_rows = await fetch_all(conn, kn_query, qparams)
+            cells_rows = await fetch_all(conn, cells_query, qparams)
 
         episode_count = _row_int(ep_rows[0], "total") if ep_rows else 0
-        knowledge_count = _row_int(kn_rows[0], "total") if kn_rows else 0
+        cells_count = _row_int(cells_rows[0], "total") if cells_rows else 0
         return {
             "episodes": {"count": episode_count},
-            "knowledge_nodes": {"count": knowledge_count},
+            "cells": {"count": cells_count},
         }
 
     async def get_system_analytics(self, *, tenant_id: str | None, hours: int | None) -> JsonDict:
@@ -379,7 +379,7 @@ class PostgresAdminOps:
                     AS total_input_tokens,
                 COALESCE(SUM((token_usage->>'output_tokens')::numeric::bigint), 0)
                     AS total_output_tokens
-            FROM agent_traces
+            FROM event_journal
             {where}
         """
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
@@ -422,7 +422,7 @@ class PostgresAdminOps:
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
             rows = await fetch_all(
                 conn,
-                f"SELECT COUNT(*) AS n FROM agent_traces {_where()}",
+                f"SELECT COUNT(*) AS n FROM event_journal {_where()}",
                 base_qparams,
             )
             total_traces = _row_int(rows[0], "n") if rows else 0
@@ -434,21 +434,21 @@ class PostgresAdminOps:
 
             rows = await fetch_all(
                 conn,
-                f"SELECT COUNT(*) AS n FROM agent_traces {_and(cond_24h)}",
+                f"SELECT COUNT(*) AS n FROM event_journal {_and(cond_24h)}",
                 base_qparams,
             )
             traces_24h = _row_int(rows[0], "n") if rows else 0
 
             rows = await fetch_all(
                 conn,
-                f"SELECT COUNT(*) AS n FROM agent_traces {_and(cond_1h)}",
+                f"SELECT COUNT(*) AS n FROM event_journal {_and(cond_1h)}",
                 base_qparams,
             )
             traces_1h = _row_int(rows[0], "n") if rows else 0
 
             rows = await fetch_all(
                 conn,
-                f"SELECT AVG(timing_ms)::int AS n FROM agent_traces {_where()}",
+                f"SELECT AVG(timing_ms)::int AS n FROM event_journal {_where()}",
                 base_qparams,
             )
             avg_timing_ms = _row_int(rows[0], "n") if rows else 0
@@ -456,7 +456,7 @@ class PostgresAdminOps:
             rows = await fetch_all(
                 conn,
                 "SELECT PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY timing_ms)::int AS n "
-                "FROM agent_traces WHERE timing_ms IS NOT NULL"
+                "FROM event_journal WHERE timing_ms IS NOT NULL"
                 + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
             )
@@ -466,7 +466,7 @@ class PostgresAdminOps:
                 conn,
                 f"SELECT COALESCE(SUM((token_usage->>'input_tokens')::numeric::bigint),0) AS i, "
                 f"COALESCE(SUM((token_usage->>'output_tokens')::numeric::bigint),0) AS o "
-                f"FROM agent_traces {_where()}",
+                f"FROM event_journal {_where()}",
                 base_qparams,
             )
             total_input_tokens = _row_int(rows[0], "i") if rows else 0
@@ -476,7 +476,7 @@ class PostgresAdminOps:
                 conn,
                 f"SELECT COALESCE(SUM((token_usage->>'input_tokens')::numeric::bigint),0) AS i, "
                 f"COALESCE(SUM((token_usage->>'output_tokens')::numeric::bigint),0) AS o "
-                f"FROM agent_traces {_and(cond_24h)}",
+                f"FROM event_journal {_and(cond_24h)}",
                 base_qparams,
             )
             tokens_24h_in = _row_int(rows[0], "i") if rows else 0
@@ -484,7 +484,7 @@ class PostgresAdminOps:
 
             rows = await fetch_all(
                 conn,
-                "SELECT COUNT(DISTINCT session_id) AS n FROM agent_traces "
+                "SELECT COUNT(DISTINCT session_id) AS n FROM event_journal "
                 "WHERE session_id IS NOT NULL AND session_id != ''"
                 + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
@@ -493,7 +493,7 @@ class PostgresAdminOps:
 
             rows = await fetch_all(
                 conn,
-                "SELECT COUNT(DISTINCT user_id) AS n FROM agent_traces "
+                "SELECT COUNT(DISTINCT user_id) AS n FROM event_journal "
                 "WHERE user_id IS NOT NULL AND user_id != ''" + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
             )
@@ -505,7 +505,7 @@ class PostgresAdminOps:
             rows = await fetch_all(
                 conn,
                 f"SELECT tool->>'tool' AS tool_name, COUNT(*) AS n "
-                f"FROM agent_traces, jsonb_array_elements(tool_calls) AS tool "
+                f"FROM event_journal, jsonb_array_elements(tool_calls) AS tool "
                 f"{tool_where} "
                 f"GROUP BY tool_name ORDER BY n DESC LIMIT 10",
                 base_qparams,
@@ -519,7 +519,7 @@ class PostgresAdminOps:
             rows = await fetch_all(
                 conn,
                 f"SELECT date_trunc('hour', created_at) AS hour, COUNT(*) AS n "
-                f"FROM agent_traces {_and(cond_24h)} "
+                f"FROM event_journal {_and(cond_24h)} "
                 f"GROUP BY hour ORDER BY hour",
                 base_qparams,
             )
@@ -534,7 +534,7 @@ class PostgresAdminOps:
 
             rows = await fetch_all(
                 conn,
-                "SELECT COUNT(*) AS n FROM agent_traces "
+                "SELECT COUNT(*) AS n FROM event_journal "
                 "WHERE jsonb_array_length(COALESCE(security_flags->'events','[]'::jsonb)) > 0"
                 + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
@@ -544,7 +544,7 @@ class PostgresAdminOps:
             rows = await fetch_all(
                 conn,
                 f"SELECT COALESCE(SUM((token_usage->>'total_cost')::numeric),0) AS n "
-                f"FROM agent_traces {_where()}",
+                f"FROM event_journal {_where()}",
                 base_qparams,
             )
             total_cost = _row_float(rows[0], "n") if rows else 0.0
@@ -552,7 +552,7 @@ class PostgresAdminOps:
             rows = await fetch_all(
                 conn,
                 f"SELECT COALESCE(SUM((token_usage->>'total_cost')::numeric),0) AS n "
-                f"FROM agent_traces {_and(cond_24h)}",
+                f"FROM event_journal {_and(cond_24h)}",
                 base_qparams,
             )
             cost_24h_total = _row_float(rows[0], "n") if rows else 0.0

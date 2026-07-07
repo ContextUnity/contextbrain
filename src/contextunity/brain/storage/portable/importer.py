@@ -1,6 +1,6 @@
-"""Portable Archive v1 — Importer.
+"""Portable Archive v2 — Importer.
 
-Imports archive into a target ``KnowledgeStoreProtocol``-compatible store.
+Imports archive into a target ``BrainStorageProtocol``-compatible store.
 Guarantees: no silent degradation, idempotent blackboard, embedding restore.
 """
 
@@ -13,14 +13,15 @@ from contextunity.core import get_contextunit_logger
 from contextunity.core.exceptions import StorageError
 from pydantic import BaseModel
 
-from contextunity.brain.storage.contracts import KnowledgeStoreProtocol
+from contextunity.brain.storage.contracts import BrainStorageProtocol
 
 from .models import (
     BlackboardRecord,
+    CellEdgeRecord,
+    CellRecord,
     EpisodeRecord,
     FactRecord,
-    KnowledgeEdgeRecord,
-    KnowledgeNodeRecord,
+    SynapseRecord,
     TaxonomyRecord,
     TraceRecord,
 )
@@ -35,8 +36,9 @@ PortableRecord = (
     | TaxonomyRecord
     | EpisodeRecord
     | FactRecord
-    | KnowledgeNodeRecord
-    | KnowledgeEdgeRecord
+    | CellRecord
+    | CellEdgeRecord
+    | SynapseRecord
 )
 
 
@@ -65,7 +67,7 @@ class ImportResult:
 
 
 async def import_portable_archive(
-    store: KnowledgeStoreProtocol,
+    store: BrainStorageProtocol,
     archive_path: Path,
     *,
     tenant_map: dict[str, str] | None = None,
@@ -121,7 +123,7 @@ def _get_record_id(rec: BaseModel) -> str:
 
 
 async def _import_record(
-    store: KnowledgeStoreProtocol,
+    store: BrainStorageProtocol,
     rec: BaseModel,
     tid: str,
     emb_map: dict[str, list[float]],
@@ -151,7 +153,7 @@ async def _import_record(
             confidence=rec.confidence,
             source_id=rec.source_id,
         )
-    elif isinstance(rec, KnowledgeNodeRecord):
+    elif isinstance(rec, CellRecord):
         from contextunity.brain.storage.postgres.models import GraphNode
 
         emb = emb_map.get(rec.embedding_ref) if rec.embedding_ref else None
@@ -165,7 +167,7 @@ async def _import_record(
                     source_id=rec.source_id,
                     title=rec.title,
                     keywords_text=rec.keywords_text,
-                    taxonomy_path=rec.taxonomy_path,
+                    scope_path=rec.scope_path,
                     metadata=rec.metadata,
                     user_id=rec.user_id,
                     embedding=emb,
@@ -174,7 +176,7 @@ async def _import_record(
             [],
             tenant_id=tid,
         )
-    elif isinstance(rec, KnowledgeEdgeRecord):
+    elif isinstance(rec, CellEdgeRecord):
         from contextunity.brain.storage.postgres.models import GraphEdge
 
         await store.upsert_graph(
@@ -190,10 +192,12 @@ async def _import_record(
             ],
             tenant_id=tid,
         )
+    elif isinstance(rec, SynapseRecord):
+        await _import_synapse(store, rec, tid)
 
 
 async def _import_blackboard(
-    store: KnowledgeStoreProtocol,
+    store: BrainStorageProtocol,
     rec: BlackboardRecord,
     tid: str,
 ) -> None:
@@ -203,7 +207,7 @@ async def _import_blackboard(
         with store.get_sqlite_connection() as db:
             _ = db.execute(
                 """
-                INSERT OR REPLACE INTO blackboard_records
+                INSERT OR REPLACE INTO blackboard
                     (id, tenant_id, scope_path, content, metadata,
                      ttl_until, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -230,14 +234,14 @@ async def _import_blackboard(
         )
 
 
-async def _import_trace(store: KnowledgeStoreProtocol, rec: TraceRecord, tid: str) -> None:
+async def _import_trace(store: BrainStorageProtocol, rec: TraceRecord, tid: str) -> None:
     from ..sqlite.codecs import json_dumps
 
     if is_sqlite_export_store(store):
         with store.get_sqlite_connection() as db:
             _ = db.execute(
                 """
-                INSERT OR REPLACE INTO agent_traces
+                INSERT OR REPLACE INTO event_journal
                     (id, tenant_id, agent_id, session_id, user_id,
                      graph_name, tool_calls, token_usage, timing_ms,
                      security_flags, metadata, provenance, created_at)
@@ -276,7 +280,7 @@ async def _import_trace(store: KnowledgeStoreProtocol, rec: TraceRecord, tid: st
 
 
 async def _import_episode(
-    store: KnowledgeStoreProtocol,
+    store: BrainStorageProtocol,
     rec: EpisodeRecord,
     tid: str,
     embedding: list[float] | None,
@@ -322,6 +326,78 @@ async def _import_episode(
             session_id=rec.session_id,
             embedding=embedding,
         )
+
+
+async def _import_synapse(store: BrainStorageProtocol, rec: SynapseRecord, tid: str) -> None:
+    from ..sqlite.codecs import json_dumps
+
+    if is_sqlite_export_store(store):
+        with store.get_sqlite_connection() as db:
+            _ = db.execute(
+                """
+                INSERT OR REPLACE INTO synapses (
+                    id, tenant_id, agent_id, graph_name, graph_run_id, node_id,
+                    node_name, action_type, action_data, action_data_ref,
+                    context_summary, thought_trace_ref, content_hash, client_id,
+                    node_role, fault_class, status, q_action, q_hypothesis,
+                    q_relevance, q_composite, scope_path, metadata, created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    rec.id,
+                    tid,
+                    rec.agent_id,
+                    rec.graph_name,
+                    rec.graph_run_id,
+                    rec.node_id,
+                    rec.node_name,
+                    rec.action_type,
+                    json_dumps(rec.action_data),
+                    rec.action_data_ref,
+                    rec.context_summary,
+                    rec.thought_trace_ref,
+                    rec.content_hash,
+                    rec.client_id,
+                    rec.node_role,
+                    rec.fault_class,
+                    rec.status,
+                    rec.q_action,
+                    rec.q_hypothesis,
+                    rec.q_relevance,
+                    rec.q_composite,
+                    rec.scope_path,
+                    json_dumps(rec.metadata),
+                    rec.created_at,
+                    rec.updated_at,
+                ),
+            )
+            db.commit()
+        return
+
+    _ = await store.record_synapse(
+        tenant_id=tid,
+        agent_id=rec.agent_id,
+        action_type=rec.action_type,
+        action_data=rec.action_data,
+        action_data_ref=rec.action_data_ref,
+        thought_trace_ref=rec.thought_trace_ref,
+        content_hash=rec.content_hash,
+        graph_name=rec.graph_name,
+        graph_run_id=rec.graph_run_id,
+        node_id=rec.node_id,
+        node_name=rec.node_name,
+        node_role=rec.node_role,
+        scope_path=rec.scope_path,
+        context_summary=rec.context_summary,
+        client_id=rec.client_id,
+        fault_class=rec.fault_class,
+        status=rec.status,
+        q_action=rec.q_action,
+        q_hypothesis=rec.q_hypothesis,
+        q_relevance=rec.q_relevance,
+        metadata=rec.metadata,
+    )
 
 
 __all__ = ["ImportReport", "ImportResult", "import_portable_archive"]

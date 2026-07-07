@@ -13,7 +13,7 @@ from contextunity.core import get_contextunit_logger
 from contextunity.core.narrowing import as_str
 from contextunity.core.types import is_json_dict
 
-from contextunity.brain.storage.postgres.models import GraphNode, SearchResult, TaxonomyPath
+from contextunity.brain.storage.postgres.models import GraphNode, ScopePath, SearchResult
 
 from .codecs import json_loads, sqlite_cell, vec_to_bytes
 from .connection import SqliteConnectionMixin
@@ -32,7 +32,7 @@ class SearchMixin(SqliteConnectionMixin):
         tenant_id: str,
         candidate_k: int = 50,
         limit: int = 8,
-        scope: TaxonomyPath | None = None,
+        scope: ScopePath | None = None,
         source_types: list[str] | None = None,
         user_id: str | None = None,
         fusion: str = "weighted",
@@ -61,7 +61,7 @@ class SearchMixin(SqliteConnectionMixin):
                 cursor = db.execute(
                     """
                     SELECT node_id, distance
-                    FROM vec_knowledge_nodes
+                    FROM vec_cells
                     WHERE embedding MATCH ?
                     ORDER BY distance
                     LIMIT ?
@@ -79,7 +79,7 @@ class SearchMixin(SqliteConnectionMixin):
                 if vec_hits:
                     node_placeholders = ", ".join("?" for _ in vec_hits)
                     filter_q = f"""
-                        SELECT id FROM knowledge_nodes
+                        SELECT id FROM cells
                         WHERE tenant_id = ? AND id IN ({node_placeholders})
                     """
                     filter_params: list[object] = [tenant_id, *vec_hits.keys()]
@@ -92,8 +92,8 @@ class SearchMixin(SqliteConnectionMixin):
                         filter_q += f" AND source_type IN ({st_ph})"
                         filter_params.extend(source_types)
                     if scope:
-                        filter_q += " AND taxonomy_path LIKE ?"
-                        filter_params.append(f"{scope.path}%")
+                        filter_q += " AND (scope_path = ? OR substr(scope_path, 1, length(?) + 1) = ? || '.')"
+                        filter_params.extend([scope.path, scope.path, scope.path])
 
                     cursor = db.execute(filter_q, filter_params)
                     filter_rows: list[sqlite3.Row] = list(cursor.fetchall())
@@ -103,7 +103,7 @@ class SearchMixin(SqliteConnectionMixin):
             # Text search (LIKE fallback)
             if query_text and query_text.strip():
                 text_q = """
-                    SELECT id FROM knowledge_nodes
+                    SELECT id FROM cells
                     WHERE tenant_id = ? AND node_kind = 'chunk'
                       AND (content LIKE ? OR keywords_text LIKE ? OR title LIKE ?)
                 """
@@ -113,6 +113,11 @@ class SearchMixin(SqliteConnectionMixin):
                 if user_id:
                     text_q += " AND (user_id = ? OR user_id IS NULL)"
                     text_params.append(user_id)
+                if scope:
+                    text_q += (
+                        " AND (scope_path = ? OR substr(scope_path, 1, length(?) + 1) = ? || '.')"
+                    )
+                    text_params.extend([scope.path, scope.path, scope.path])
 
                 text_q += " LIMIT ?"
                 text_params.append(candidate_k)
@@ -152,8 +157,8 @@ class SearchMixin(SqliteConnectionMixin):
             cursor = db.execute(
                 f"""
                 SELECT id, node_kind, source_type, source_id, title,
-                       content, struct_data, taxonomy_path, tenant_id, user_id
-                FROM knowledge_nodes
+                       content, struct_data, scope_path, tenant_id, user_id
+                FROM cells
                 WHERE tenant_id = ? AND id IN ({node_placeholders})
                 """,
                 [tenant_id, *ranked_ids],
@@ -173,7 +178,7 @@ class SearchMixin(SqliteConnectionMixin):
                     source_id=as_str(sqlite_cell(row, "source_id")) or None,
                     title=as_str(sqlite_cell(row, "title")) or None,
                     metadata=meta if is_json_dict(meta) else {},
-                    taxonomy_path=as_str(sqlite_cell(row, "taxonomy_path")) or None,
+                    scope_path=as_str(sqlite_cell(row, "scope_path")) or None,
                     tenant_id=as_str(sqlite_cell(row, "tenant_id")) or None,
                     user_id=as_str(sqlite_cell(row, "user_id")) or None,
                 )

@@ -1,4 +1,4 @@
-"""Portable Archive v1 — Writer.
+"""Portable Archive v2 — Writer.
 
 Exports store data into a validated JSONL archive.
 """
@@ -21,17 +21,18 @@ from contextunity.core.narrowing import (
 )
 from pydantic import BaseModel
 
-from contextunity.brain.storage.contracts import KnowledgeStoreProtocol
+from contextunity.brain.storage.contracts import BrainStorageProtocol
 
 from ..sqlite.codecs import fetchone_row, sqlite_cell
 from .models import (
     BlackboardRecord,
+    CellEdgeRecord,
+    CellRecord,
     EmbeddingRecord,
     EpisodeRecord,
     FactRecord,
-    KnowledgeEdgeRecord,
-    KnowledgeNodeRecord,
     PortableManifest,
+    SynapseRecord,
     TaxonomyRecord,
     TraceRecord,
 )
@@ -59,7 +60,7 @@ class BrainPortableArchiveWriter:
 
     async def export(
         self,
-        store: KnowledgeStoreProtocol,
+        store: BrainStorageProtocol,
         tenant_ids: list[str],
     ) -> PortableManifest:
         """Export selected tenants from store to archive directory."""
@@ -79,6 +80,7 @@ class BrainPortableArchiveWriter:
                 await self._export_episodes(store, tenant_id, rf, ef)
                 await self._export_facts(store, tenant_id, rf)
                 await self._export_graph(store, tenant_id, rf, ef)
+                await self._export_synapses(store, tenant_id, rf)
 
         manifest = PortableManifest(
             vector_dim=self.vector_dim,
@@ -111,7 +113,7 @@ class BrainPortableArchiveWriter:
 
     async def _export_blackboard(
         self,
-        store: KnowledgeStoreProtocol,
+        store: BrainStorageProtocol,
         tenant_id: str,
         handle: TextIO,
     ) -> None:
@@ -121,7 +123,7 @@ class BrainPortableArchiveWriter:
 
         with store.get_sqlite_connection() as db:
             cursor = db.execute(
-                "SELECT * FROM blackboard_records WHERE tenant_id = ?",
+                "SELECT * FROM blackboard WHERE tenant_id = ?",
                 (tenant_id,),
             )
             bb_rows: list[sqlite3.Row] = list(cursor.fetchall())
@@ -143,7 +145,7 @@ class BrainPortableArchiveWriter:
 
     async def _export_taxonomy(
         self,
-        store: KnowledgeStoreProtocol,
+        store: BrainStorageProtocol,
         tenant_id: str,
         handle: TextIO,
     ) -> None:
@@ -163,7 +165,7 @@ class BrainPortableArchiveWriter:
 
     async def _export_traces(
         self,
-        store: KnowledgeStoreProtocol,
+        store: BrainStorageProtocol,
         tenant_id: str,
         handle: TextIO,
     ) -> None:
@@ -190,7 +192,7 @@ class BrainPortableArchiveWriter:
 
     async def _export_episodes(
         self,
-        store: KnowledgeStoreProtocol,
+        store: BrainStorageProtocol,
         tenant_id: str,
         handle: TextIO,
         emb_handle: TextIO,
@@ -241,7 +243,7 @@ class BrainPortableArchiveWriter:
 
     async def _export_facts(
         self,
-        store: KnowledgeStoreProtocol,
+        store: BrainStorageProtocol,
         tenant_id: str,
         handle: TextIO,
     ) -> None:
@@ -272,7 +274,7 @@ class BrainPortableArchiveWriter:
 
     async def _export_graph(
         self,
-        store: KnowledgeStoreProtocol,
+        store: BrainStorageProtocol,
         tenant_id: str,
         records_handle: TextIO,
         emb_handle: TextIO,
@@ -283,18 +285,18 @@ class BrainPortableArchiveWriter:
 
         with store.get_sqlite_connection() as db:
             cursor = db.execute(
-                "SELECT * FROM knowledge_nodes WHERE tenant_id = ?",
+                "SELECT * FROM cells WHERE tenant_id = ?",
                 (tenant_id,),
             )
-            kn_rows: list[sqlite3.Row] = list(cursor.fetchall())
-            for row in kn_rows:
+            cell_rows: list[sqlite3.Row] = list(cursor.fetchall())
+            for row in cell_rows:
                 d = _row_dict(row)
                 node_id = as_str(d.get("id"))
                 emb_ref = f"emb:node:{node_id}"
                 has_emb = False
                 if store.has_sqlite_vec():
                     emb_cur = db.execute(
-                        "SELECT embedding FROM vec_knowledge_nodes WHERE node_id = ?",
+                        "SELECT embedding FROM vec_cells WHERE node_id = ?",
                         (node_id,),
                     )
                     emb_row = fetchone_row(emb_cur)
@@ -305,7 +307,7 @@ class BrainPortableArchiveWriter:
                             has_emb = True
                 self._write(
                     records_handle,
-                    KnowledgeNodeRecord(
+                    CellRecord(
                         tenant_id=tenant_id,
                         id=node_id,
                         content=as_str(d.get("content")),
@@ -314,7 +316,7 @@ class BrainPortableArchiveWriter:
                         source_id=as_str(d.get("source_id")) or None,
                         title=as_str(d.get("title")) or None,
                         keywords_text=as_str(d.get("keywords_text")) or None,
-                        taxonomy_path=as_str(d.get("taxonomy_path")) or None,
+                        scope_path=as_str(d.get("scope_path")) or None,
                         metadata=json_dict_field(d.get("struct_data")),
                         user_id=as_str(d.get("user_id")) or None,
                         embedding_ref=emb_ref if has_emb else None,
@@ -322,21 +324,70 @@ class BrainPortableArchiveWriter:
                 )
 
             cursor = db.execute(
-                "SELECT * FROM knowledge_edges WHERE tenant_id = ?",
+                "SELECT * FROM cell_edges WHERE tenant_id = ?",
                 (tenant_id,),
             )
-            ke_rows: list[sqlite3.Row] = list(cursor.fetchall())
-            for row in ke_rows:
+            cell_edge_rows: list[sqlite3.Row] = list(cursor.fetchall())
+            for row in cell_edge_rows:
                 d = _row_dict(row)
                 self._write(
                     records_handle,
-                    KnowledgeEdgeRecord(
+                    CellEdgeRecord(
                         tenant_id=tenant_id,
                         source_id=as_str(d.get("source_id")),
                         target_id=as_str(d.get("target_id")),
                         relation=as_str(d.get("relation")),
                         weight=as_float(d.get("weight"), default=1.0),
                         metadata=json_dict_field(d.get("metadata")),
+                    ),
+                )
+
+    async def _export_synapses(
+        self,
+        store: BrainStorageProtocol,
+        tenant_id: str,
+        handle: TextIO,
+    ) -> None:
+        if not is_sqlite_export_store(store):
+            return
+        from ..sqlite.codecs import json_dict_field
+
+        with store.get_sqlite_connection() as db:
+            cursor = db.execute(
+                "SELECT * FROM synapses WHERE tenant_id = ? ORDER BY created_at, id",
+                (tenant_id,),
+            )
+            rows: list[sqlite3.Row] = list(cursor.fetchall())
+            for row in rows:
+                d = _row_dict(row)
+                self._write(
+                    handle,
+                    SynapseRecord(
+                        tenant_id=tenant_id,
+                        id=as_str(d.get("id")),
+                        agent_id=as_str(d.get("agent_id")),
+                        action_type=as_str(d.get("action_type")),
+                        action_data=json_dict_field(d.get("action_data")),
+                        action_data_ref=as_str(d.get("action_data_ref")) or None,
+                        thought_trace_ref=as_str(d.get("thought_trace_ref")) or None,
+                        content_hash=as_str(d.get("content_hash")) or None,
+                        graph_name=as_str(d.get("graph_name")) or None,
+                        graph_run_id=as_str(d.get("graph_run_id")) or None,
+                        node_id=as_str(d.get("node_id")) or None,
+                        node_name=as_str(d.get("node_name")) or None,
+                        node_role=as_str(d.get("node_role"), default="worker"),
+                        scope_path=as_str(d.get("scope_path")) or None,
+                        context_summary=as_str(d.get("context_summary")) or None,
+                        client_id=as_str(d.get("client_id")) or None,
+                        fault_class=as_str(d.get("fault_class")) or None,
+                        status=as_str(d.get("status"), default="active"),
+                        q_action=as_float(d.get("q_action"), default=0.5),
+                        q_hypothesis=as_float(d.get("q_hypothesis"), default=0.5),
+                        q_relevance=as_float(d.get("q_relevance"), default=0.5),
+                        q_composite=as_float(d.get("q_composite"), default=0.5),
+                        metadata=json_dict_field(d.get("metadata")),
+                        created_at=as_str(d.get("created_at")),
+                        updated_at=as_str(d.get("updated_at")),
                     ),
                 )
 

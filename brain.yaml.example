@@ -43,6 +43,12 @@ log_level: INFO
 #       model: vertex/gemini-2.5-flash
 
 # -- Observability ------------------------------------------------------------
+# BrainSynapse rollout gates. Defaults are false in code; enable only after
+# Phase 2 validation gates pass for the target environment.
+# synapses:
+#   enabled: false
+#   decay_enabled: false
+
 # otel_enabled: false
 # otel_endpoint: http://localhost:4317
 # langfuse_enabled: false

@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from contextunity.brain.core.exceptions import BrainValidationError
 
-ARCHIVE_FORMAT = "contextunity.brain.portable.v1"
+ARCHIVE_FORMAT = "contextunity.brain.portable.v2"
 
 # ── Manifest ──────────────────────────────────────────────────────
 
@@ -24,9 +24,9 @@ class PortableManifest(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    format: Literal["contextunity.brain.portable.v1"] = ARCHIVE_FORMAT
+    format: Literal["contextunity.brain.portable.v2"] = ARCHIVE_FORMAT
     source_backend: str = "sqlite-vec"
-    schema_version: int = 1
+    schema_version: int = 2
     vector_dim: int = 1536
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     record_counts: dict[str, int] = Field(default_factory=dict)
@@ -83,11 +83,11 @@ class TaxonomyRecord(BaseModel):
     metadata: JsonDict = Field(default_factory=dict)
 
 
-class KnowledgeNodeRecord(BaseModel):
-    """Represent and manage Knowledge Node Record logic within the system."""
+class CellRecord(BaseModel):
+    """Represent and manage BrainCell Record logic within the system."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-    type: Literal["knowledge_node"] = "knowledge_node"
+    type: Literal["cell"] = "cell"
     tenant_id: str
     id: str
     content: str
@@ -96,17 +96,17 @@ class KnowledgeNodeRecord(BaseModel):
     source_id: str | None = None
     title: str | None = None
     keywords_text: str | None = None
-    taxonomy_path: str | None = None
+    scope_path: str | None = None
     metadata: JsonDict = Field(default_factory=dict)
     user_id: str | None = None
     embedding_ref: str | None = None
 
 
-class KnowledgeEdgeRecord(BaseModel):
-    """Represent and manage Knowledge Edge Record logic within the system."""
+class CellEdgeRecord(BaseModel):
+    """Represent and manage CellEdge Record logic within the system."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-    type: Literal["knowledge_edge"] = "knowledge_edge"
+    type: Literal["cell_edge"] = "cell_edge"
     tenant_id: str
     source_id: str
     target_id: str
@@ -143,6 +143,38 @@ class FactRecord(BaseModel):
     source_id: str | None = None
 
 
+class SynapseRecord(BaseModel):
+    """Represent and manage BrainSynapse archive records."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    type: Literal["synapse"] = "synapse"
+    tenant_id: str
+    id: str
+    agent_id: str
+    action_type: str
+    action_data: JsonDict = Field(default_factory=dict)
+    action_data_ref: str | None = None
+    thought_trace_ref: str | None = None
+    content_hash: str | None = None
+    graph_name: str | None = None
+    graph_run_id: str | None = None
+    node_id: str | None = None
+    node_name: str | None = None
+    node_role: str = "worker"
+    scope_path: str | None = None
+    context_summary: str | None = None
+    client_id: str | None = None
+    fault_class: str | None = None
+    status: str = "active"
+    q_action: float = 0.5
+    q_hypothesis: float = 0.5
+    q_relevance: float = 0.5
+    q_composite: float = 0.5
+    metadata: JsonDict = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
 class EmbeddingRecord(BaseModel):
     """Represent and manage Embedding Record logic within the system."""
 
@@ -156,10 +188,11 @@ RECORD_TYPES: dict[str, type[BaseModel]] = {
     "blackboard": BlackboardRecord,
     "trace": TraceRecord,
     "taxonomy": TaxonomyRecord,
-    "knowledge_node": KnowledgeNodeRecord,
-    "knowledge_edge": KnowledgeEdgeRecord,
+    "cell": CellRecord,
+    "cell_edge": CellEdgeRecord,
     "episode": EpisodeRecord,
     "fact": FactRecord,
+    "synapse": SynapseRecord,
 }
 
 
@@ -190,10 +223,11 @@ __all__ = [
     "BlackboardRecord",
     "TraceRecord",
     "TaxonomyRecord",
-    "KnowledgeNodeRecord",
-    "KnowledgeEdgeRecord",
+    "CellRecord",
+    "CellEdgeRecord",
     "EpisodeRecord",
     "FactRecord",
+    "SynapseRecord",
     "EmbeddingRecord",
     "RECORD_TYPES",
     "parse_record",

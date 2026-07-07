@@ -32,7 +32,7 @@ async def test_local_brain_passes_config_to_permission_interceptor(monkeypatch):
     monkeypatch.setattr(
         local.grpc.aio, "server", lambda *, interceptors: FakeServer(interceptors=interceptors)
     )
-    monkeypatch.setattr(local, "SqliteVecStorageBackend", lambda: object())
+    monkeypatch.setattr(local, "SqliteBrainStore", lambda: object())
     monkeypatch.setattr(local, "DuckDBStore", lambda: object())
     monkeypatch.setattr(local, "get_embedder", lambda _cfg: object())
     monkeypatch.setattr(local, "BrainService", lambda **kwargs: object())
@@ -42,7 +42,7 @@ async def test_local_brain_passes_config_to_permission_interceptor(monkeypatch):
 
     server = await local.create_local_brain()
 
-    assert isinstance(server, FakeServer)
+    assert isinstance(server.grpc_server, FakeServer)
     assert seen["shield_url"] == "shield.local:50054"
     assert seen["config"] is cfg
     assert seen["endpoint"] == "[::]:55051"

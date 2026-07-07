@@ -1,4 +1,4 @@
-"""Tests for agent_experiences schema presence and reward constants.
+"""Tests for synapses schema presence and reward constants.
 
 Schema DDL column/index name assertions are deleted — the DDL is the source
 of truth; tests that echo it provide no behavioral coverage.
@@ -15,7 +15,7 @@ class TestExperiencesSchema:
 
         stmts = _experiences_schema(1536)
         all_sql = " ".join(stmts)
-        assert "agent_experiences" in all_sql
+        assert "synapses" in all_sql
 
     def test_table_has_embedding_column(self):
         from contextunity.brain.storage.postgres.schema import _experiences_schema
@@ -24,23 +24,68 @@ class TestExperiencesSchema:
         create_stmt = stmts[0]
         assert "VECTOR(768)" in create_stmt
 
+    def test_fresh_schema_fault_class_constraint_matches_core_taxonomy(self):
+        from contextunity.brain.storage.postgres.schema import _experiences_schema
+
+        create_stmt = _experiences_schema(1536)[0]
+        for fault_class in (
+            "agent_fault",
+            "infra_fault",
+            "upstream_fault",
+            "policy_fault",
+            "reference_fault",
+        ):
+            assert fault_class in create_stmt
+
     def test_included_in_build_schema_sql(self):
         from contextunity.brain.storage.postgres.schema import build_schema_sql
 
         all_stmts = build_schema_sql(vector_dim=1536)
         all_sql = " ".join(all_stmts)
-        assert "agent_experiences" in all_sql
+        assert "synapses" in all_sql
 
 
 class TestExperiencesRLS:
-    """Test that agent_experiences is included in RLS policies."""
+    """Test that synapses is included in RLS policies."""
 
     def test_experiences_in_rls_tenant_tables(self):
         from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         rls_stmts = build_rls_sql()
         rls_sql = " ".join(rls_stmts)
-        assert "agent_experiences" in rls_sql
+        assert "synapses" in rls_sql
+
+
+class TestSynapsePhase2ColumnBackfill:
+    """Phase 2 additive `synapses` columns and fault_class constraint upgrade."""
+
+    def test_backfill_adds_phase2_columns(self):
+        from contextunity.brain.storage.postgres.schema import build_column_backfill_sql
+
+        backfill_sql = " ".join(build_column_backfill_sql())
+        for column in (
+            "metadata",
+            "action_data_ref",
+            "thought_trace_ref",
+            "content_hash",
+            "node_id",
+            "node_name",
+        ):
+            assert f"synapses ADD COLUMN IF NOT EXISTS {column}" in backfill_sql
+
+    def test_fault_class_constraint_upgraded_with_new_classes(self):
+        from contextunity.brain.storage.postgres.schema import build_column_backfill_sql
+
+        backfill_sql = " ".join(build_column_backfill_sql())
+        assert "synapses_fault_class_check" in backfill_sql
+        for fault_class in (
+            "agent_fault",
+            "infra_fault",
+            "upstream_fault",
+            "policy_fault",
+            "reference_fault",
+        ):
+            assert fault_class in backfill_sql
 
 
 class TestRewardConstants:

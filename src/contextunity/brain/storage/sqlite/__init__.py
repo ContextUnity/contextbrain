@@ -2,9 +2,9 @@
 
 Usage::
 
-    from contextunity.brain.storage.sqlite.store import SqliteVecStorageBackend
+    from contextunity.brain.storage.sqlite.store import SqliteBrainStore
 """
 
-from .store import SqliteVecStorageBackend
+from .store import SqliteBrainStore
 
-__all__ = ["SqliteVecStorageBackend"]
+__all__ = ["SqliteBrainStore"]

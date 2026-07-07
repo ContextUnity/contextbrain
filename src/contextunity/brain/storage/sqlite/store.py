@@ -1,6 +1,6 @@
 """Composed SQLite-Vec storage backend for local Brain.
 Assembles domain mixins into a single class implementing
-``KnowledgeStoreProtocol``.
+``BrainStorageProtocol``.
 """
 
 from __future__ import annotations
@@ -15,15 +15,16 @@ from .connection import SqliteConnectionMixin
 from .episodes import EpisodesMixin
 from .facts import FactsMixin
 from .graph import GraphMixin
-from .schema import SCHEMA_VERSION, build_core_ddl, build_vector_ddl
+from .schema import SCHEMA_VERSION, apply_preflight_renames, build_core_ddl, build_vector_ddl
 from .search import SearchMixin
+from .synapses import SynapsesMixin
 from .taxonomy import TaxonomyMixin
 from .traces import TracesMixin
 
 logger = get_contextunit_logger(__name__)
 
 
-class SqliteVecStorageBackend(
+class SqliteBrainStore(
     GraphMixin,
     EpisodesMixin,
     FactsMixin,
@@ -31,11 +32,12 @@ class SqliteVecStorageBackend(
     TaxonomyMixin,
     SearchMixin,
     BlackboardMixin,
+    SynapsesMixin,
     SqliteConnectionMixin,
 ):
     """Local SQLite backend for Brain Service.
 
-    Mirrors ``PostgresKnowledgeStore`` mixin composition.
+    Mirrors ``PostgresBrainStore`` mixin composition.
     Uses sqlite-vec for vector similarity when available.
     """
 
@@ -47,7 +49,7 @@ class SqliteVecStorageBackend(
         db_path: str = "~/.contextunity/brain_local.sqlite3",
         vector_dim: int = 1536,
     ):
-        """Initialize a new instance of SqliteVecStorageBackend.
+        """Initialize a new instance of SqliteBrainStore.
 
         Args:
             db_path (str): The db path parameter.
@@ -69,6 +71,8 @@ class SqliteVecStorageBackend(
             )
 
         with self._get_connection() as db:
+            apply_preflight_renames(db)
+
             for stmt in build_core_ddl():
                 _ = db.execute(stmt)
 
@@ -105,4 +109,4 @@ class SqliteVecStorageBackend(
         pass
 
 
-__all__ = ["SqliteVecStorageBackend"]
+__all__ = ["SqliteBrainStore"]

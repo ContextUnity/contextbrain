@@ -5,6 +5,7 @@ from .blackboard import BlackboardHandlersMixin
 from .commerce import CommerceHandlersMixin
 from .knowledge import KnowledgeHandlersMixin
 from .memory import MemoryHandlersMixin
+from .synapses import SynapseHandlersMixin
 from .taxonomy import TaxonomyHandlersMixin
 from .traces import TraceHandlersMixin
 
@@ -13,6 +14,7 @@ __all__ = [
     "BlackboardHandlersMixin",
     "KnowledgeHandlersMixin",
     "MemoryHandlersMixin",
+    "SynapseHandlersMixin",
     "TraceHandlersMixin",
     "TaxonomyHandlersMixin",
     "CommerceHandlersMixin",

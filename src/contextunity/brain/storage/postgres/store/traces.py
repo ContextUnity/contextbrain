@@ -43,7 +43,7 @@ class TracesMixin(PostgresStoreBase, ABC):
             _ = await execute(
                 conn,
                 """
-                INSERT INTO agent_traces
+                INSERT INTO event_journal
                     (id, tenant_id, agent_id, session_id, user_id, graph_name,
                      tool_calls, token_usage, timing_ms, security_flags, metadata,
                      provenance)
@@ -119,7 +119,7 @@ class TracesMixin(PostgresStoreBase, ABC):
                 "SELECT id, tenant_id, agent_id, session_id, user_id, graph_name,",
                 "       tool_calls, token_usage, timing_ms, security_flags,",
                 "       metadata, provenance, created_at",
-                "FROM agent_traces",
+                "FROM event_journal",
                 "WHERE " + where,
                 "ORDER BY created_at DESC",
                 "LIMIT %(limit)s",

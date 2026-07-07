@@ -1,4 +1,4 @@
-"""SQLite implementations for Brain Admin RPCs (local ``SqliteVecStorageBackend``)."""
+"""SQLite implementations for Brain Admin RPCs (local ``SqliteBrainStore``)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from contextunity.core.narrowing import as_int, as_json_dict_list, as_str, as_st
 from contextunity.core.types import JsonDict, JsonValue, is_json_dict, is_object_list
 
 from .codecs import json_loads
-from .store import SqliteVecStorageBackend
+from .store import SqliteBrainStore
 from .traces import sqlite_row_to_json_dict
 
 
@@ -53,7 +53,7 @@ def _trace_payload(row: JsonDict) -> JsonDict:
 class SqliteAdminOps:
     """Admin observability queries against the local SQLite Brain backend."""
 
-    def __init__(self, storage: SqliteVecStorageBackend) -> None:
+    def __init__(self, storage: SqliteBrainStore) -> None:
         self._storage = storage
 
     def list_tenants(self) -> list[JsonDict]:
@@ -61,7 +61,7 @@ class SqliteAdminOps:
             cursor = db.execute(
                 """
                 SELECT tenant_id, COUNT(*) AS trace_count
-                FROM agent_traces
+                FROM event_journal
                 GROUP BY tenant_id
                 ORDER BY tenant_id
                 """
@@ -100,7 +100,7 @@ class SqliteAdminOps:
 
         with self._storage.get_sqlite_connection() as db:
             count_row = db.execute(
-                f"SELECT COUNT(*) AS total FROM agent_traces {where}",
+                f"SELECT COUNT(*) AS total FROM event_journal {where}",
                 params,
             ).fetchone()
             total = as_int(sqlite_row_to_json_dict(count_row).get("total")) if count_row else 0
@@ -111,7 +111,7 @@ class SqliteAdminOps:
                 SELECT id, tenant_id, agent_id, session_id, user_id,
                        graph_name, tool_calls, token_usage, timing_ms,
                        security_flags, metadata, provenance, created_at
-                FROM agent_traces
+                FROM event_journal
                 {where}
                 ORDER BY created_at DESC
                 LIMIT ? OFFSET ?
@@ -130,7 +130,7 @@ class SqliteAdminOps:
                 SELECT id, tenant_id, agent_id, session_id, user_id,
                        graph_name, tool_calls, token_usage, timing_ms,
                        security_flags, metadata, provenance, created_at
-                FROM agent_traces
+                FROM event_journal
                 WHERE id = ?
                 LIMIT 1
                 """,
@@ -159,7 +159,7 @@ class SqliteAdminOps:
                 cursor = db.execute(
                     f"""
                     SELECT DISTINCT {col} AS value
-                    FROM agent_traces
+                    FROM event_journal
                     WHERE {col} IS NOT NULL AND {col} != '' {tenant_clause}
                     ORDER BY {col}
                     LIMIT 100
@@ -193,7 +193,7 @@ class SqliteAdminOps:
                 SELECT id, tenant_id, agent_id, session_id, user_id,
                        graph_name, tool_calls, token_usage, timing_ms,
                        security_flags, metadata, provenance, created_at
-                FROM agent_traces
+                FROM event_journal
                 {where}
                 ORDER BY created_at DESC
                 LIMIT 200
@@ -210,7 +210,7 @@ class SqliteAdminOps:
                 SELECT e.id, e.tenant_id, e.user_id, e.session_id,
                        e.content, e.metadata, e.created_at
                 FROM episodic_events e
-                JOIN agent_traces t ON t.tenant_id = e.tenant_id
+                JOIN event_journal t ON t.tenant_id = e.tenant_id
                 WHERE t.id = ?
                   AND (
                       json_extract(e.metadata, '$.trace_id') = ?
@@ -228,7 +228,7 @@ class SqliteAdminOps:
     def get_trace_tenant(self, trace_id: str) -> str | None:
         with self._storage.get_sqlite_connection() as db:
             row = db.execute(
-                "SELECT tenant_id FROM agent_traces WHERE id = ? LIMIT 1",
+                "SELECT tenant_id FROM event_journal WHERE id = ? LIMIT 1",
                 (trace_id,),
             ).fetchone()
         if row is None:
@@ -281,7 +281,7 @@ class SqliteAdminOps:
         events = [_episode_payload(sqlite_row_to_json_dict(row)) for row in rows]
         return events, total
 
-    def get_knowledge_nodes(
+    def get_cells(
         self,
         *,
         tenant_id: str | None,
@@ -304,7 +304,7 @@ class SqliteAdminOps:
                 SELECT id, node_kind, source_type, title,
                        SUBSTR(content, 1, 200) AS content_preview,
                        tenant_id, created_at
-                FROM knowledge_nodes
+                FROM cells
                 {where}
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -328,11 +328,11 @@ class SqliteAdminOps:
 
     def get_memory_layer_stats(self, *, tenant_id: str | None) -> JsonDict:
         ep_where = ""
-        kn_where = ""
+        cells_where = ""
         params: list[object] = []
         if tenant_id:
             ep_where = "WHERE tenant_id = ?"
-            kn_where = "WHERE tenant_id = ?"
+            cells_where = "WHERE tenant_id = ?"
             params = [tenant_id]
 
         with self._storage.get_sqlite_connection() as db:
@@ -340,16 +340,16 @@ class SqliteAdminOps:
                 f"SELECT COUNT(*) AS total FROM episodic_events {ep_where}",
                 params,
             ).fetchone()
-            kn_row = db.execute(
-                f"SELECT COUNT(*) AS total FROM knowledge_nodes {kn_where}",
+            cells_row = db.execute(
+                f"SELECT COUNT(*) AS total FROM cells {cells_where}",
                 params,
             ).fetchone()
 
         episode_count = as_int(sqlite_row_to_json_dict(ep_row).get("total")) if ep_row else 0
-        knowledge_count = as_int(sqlite_row_to_json_dict(kn_row).get("total")) if kn_row else 0
+        cells_count = as_int(sqlite_row_to_json_dict(cells_row).get("total")) if cells_row else 0
         return {
             "episodes": {"count": episode_count},
-            "knowledge_nodes": {"count": knowledge_count},
+            "cells": {"count": cells_count},
         }
 
     def get_analytics_summary(self, *, tenant_id: str | None, hours: int | None) -> JsonDict:
@@ -368,7 +368,7 @@ class SqliteAdminOps:
                 f"""
                 SELECT timing_ms, token_usage, tool_calls, security_flags, session_id,
                        user_id, created_at, metadata
-                FROM agent_traces
+                FROM event_journal
                 {where}
                 """,
                 params,
@@ -531,7 +531,7 @@ class SqliteAdminOps:
                         SUM(CAST(json_extract(token_usage, '$.output_tokens') AS INTEGER)),
                         0
                     ) AS total_output_tokens
-                FROM agent_traces
+                FROM event_journal
                 {where}
                 """,
                 params,
@@ -563,7 +563,7 @@ class SqliteAdminOps:
 class AsyncSqliteAdminOps:
     """Async ``AdminQueryProtocol`` wrapper over sync ``SqliteAdminOps``."""
 
-    def __init__(self, storage: SqliteVecStorageBackend) -> None:
+    def __init__(self, storage: SqliteBrainStore) -> None:
         self._ops = SqliteAdminOps(storage)
 
     async def list_tenants(self) -> list[JsonDict]:
@@ -620,10 +620,10 @@ class AsyncSqliteAdminOps:
             offset=offset,
         )
 
-    async def get_knowledge_nodes(
+    async def get_cells(
         self, *, tenant_id: str | None, kind: str | None, limit: int
     ) -> list[JsonDict]:
-        return self._ops.get_knowledge_nodes(tenant_id=tenant_id, kind=kind, limit=limit)
+        return self._ops.get_cells(tenant_id=tenant_id, kind=kind, limit=limit)
 
     async def get_memory_layer_stats(self, *, tenant_id: str | None) -> JsonDict:
         return self._ops.get_memory_layer_stats(tenant_id=tenant_id)

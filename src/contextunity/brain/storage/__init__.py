@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from .duckdb_store import DuckDBStore
-from .postgres.store import PostgresKnowledgeStore
+from .postgres.store import PostgresBrainStore
 
 __all__ = [
-    "PostgresKnowledgeStore",
+    "PostgresBrainStore",
     "DuckDBStore",
 ]

@@ -5,11 +5,11 @@ from __future__ import annotations
 import sqlite3
 from typing import Protocol, TypeGuard, runtime_checkable
 
-from contextunity.brain.storage.contracts import KnowledgeStoreProtocol
+from contextunity.brain.storage.contracts import BrainStorageProtocol
 
 
 @runtime_checkable
-class SqlitePortableExport(KnowledgeStoreProtocol, Protocol):
+class SqlitePortableExport(BrainStorageProtocol, Protocol):
     """SQLite store surface used for direct table export/import."""
 
     def get_sqlite_connection(self) -> sqlite3.Connection: ...
@@ -17,7 +17,7 @@ class SqlitePortableExport(KnowledgeStoreProtocol, Protocol):
     def has_sqlite_vec(self) -> bool: ...
 
 
-def is_sqlite_export_store(store: KnowledgeStoreProtocol) -> TypeGuard[SqlitePortableExport]:
+def is_sqlite_export_store(store: BrainStorageProtocol) -> TypeGuard[SqlitePortableExport]:
     return hasattr(store, "get_sqlite_connection") and hasattr(store, "has_sqlite_vec")
 
 

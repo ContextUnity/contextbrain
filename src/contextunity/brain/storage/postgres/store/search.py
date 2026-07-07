@@ -14,7 +14,7 @@ from psycopg import errors as pg_errors
 from psycopg import sql
 from psycopg.rows import dict_row
 
-from ..models import GraphNode, SearchResult, TaxonomyPath
+from ..models import GraphNode, ScopePath, SearchResult
 from .base import PostgresStoreBase
 from .helpers import PgConnection, vec
 
@@ -33,7 +33,7 @@ class SearchMixin(PostgresStoreBase, ABC):
         tenant_id: str,
         candidate_k: int = 50,
         limit: int = 8,
-        scope: TaxonomyPath | None = None,
+        scope: ScopePath | None = None,
         source_types: list[str] | None = None,
         user_id: str | None = None,
         fusion: str = "weighted",
@@ -57,7 +57,7 @@ class SearchMixin(PostgresStoreBase, ABC):
             vec_query = (
                 sql.SQL(
                     (
-                        "SELECT id, 1 - (embedding <=> %s::vector) AS score FROM knowledge_nodes"
+                        "SELECT id, 1 - (embedding <=> %s::vector) AS score FROM cells"
                         " WHERE node_kind = 'chunk' AND embedding IS NOT NULL AND "
                     )
                 )
@@ -78,7 +78,7 @@ class SearchMixin(PostgresStoreBase, ABC):
                             "SELECT id, ts_rank_cd("
                             "search_vector || COALESCE(keywords_vector, ''::tsvector),"
                             "websearch_to_tsquery('simple', %s)"
-                            ") AS score FROM knowledge_nodes"
+                            ") AS score FROM cells"
                             " WHERE node_kind = 'chunk' AND ("
                             "search_vector || COALESCE(keywords_vector, ''::tsvector)"
                             ") @@ websearch_to_tsquery('simple', %s) AND "
@@ -119,7 +119,7 @@ class SearchMixin(PostgresStoreBase, ABC):
         *,
         tenant_id: str,
         user_id: str | None,
-        scope: TaxonomyPath | None,
+        scope: ScopePath | None,
         source_types: list[str] | None,
     ) -> tuple[list[sql.SQL], list[object]]:
         """Build WHERE clause filters."""
@@ -129,7 +129,7 @@ class SearchMixin(PostgresStoreBase, ABC):
             where.append(sql.SQL("(user_id = %s OR user_id IS NULL)"))
             params.append(user_id)
         if scope:
-            where.append(sql.SQL("taxonomy_path <@ %s::ltree"))
+            where.append(sql.SQL("scope_path <@ %s::ltree"))
             params.append(scope.path)
         if source_types:
             where.append(sql.SQL("source_type = ANY(%s::text[])"))
@@ -166,8 +166,8 @@ class SearchMixin(PostgresStoreBase, ABC):
         rows = await cur.execute(
             """
             SELECT id, node_kind, source_type, source_id, title, content,
-                   struct_data, taxonomy_path, tenant_id, user_id
-            FROM knowledge_nodes WHERE tenant_id = %s AND id = ANY(%s::text[])
+                   struct_data, scope_path, tenant_id, user_id
+            FROM cells WHERE tenant_id = %s AND id = ANY(%s::text[])
         """,
             [tenant_id, list(ids)],
         )
@@ -187,7 +187,7 @@ class SearchMixin(PostgresStoreBase, ABC):
                     source_id=as_str(raw_row.get("source_id")) or None,
                     title=as_str(raw_row.get("title")) or None,
                     metadata=metadata,
-                    taxonomy_path=as_str(raw_row.get("taxonomy_path")) or None,
+                    scope_path=as_str(raw_row.get("scope_path")) or None,
                     tenant_id=as_str(raw_row.get("tenant_id")) or None,
                     user_id=as_str(raw_row.get("user_id")) or None,
                 )

@@ -31,9 +31,9 @@ async def init_brain(
     include_commerce: bool = False,
 ) -> None:
     """Create Brain schema and all tables."""
-    from contextunity.brain.storage.postgres import PostgresKnowledgeStore
+    from contextunity.brain.storage.postgres import PostgresBrainStore
 
-    store = PostgresKnowledgeStore(dsn=dsn)
+    store = PostgresBrainStore(dsn=dsn)
 
     print("🧠 Initializing Brain schema...")
     print(f"   DSN: {dsn.split('@')[-1] if '@' in dsn else '***'}")

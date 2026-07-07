@@ -46,17 +46,18 @@ class GraphMixin(SqliteConnectionMixin):
             for node in nodes:
                 _ = db.execute(
                     """
-                    INSERT INTO knowledge_nodes (
+                    INSERT INTO cells (
                         id, tenant_id, user_id, node_kind, source_type, source_id,
-                        title, content, struct_data, keywords_text, taxonomy_path,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                        title, content, struct_data, keywords_text, scope_path,
+                        content_hash, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                     ON CONFLICT (id) DO UPDATE SET
                         title = excluded.title,
                         content = excluded.content,
                         struct_data = excluded.struct_data,
                         keywords_text = excluded.keywords_text,
-                        taxonomy_path = excluded.taxonomy_path,
+                        scope_path = excluded.scope_path,
+                        content_hash = excluded.content_hash,
                         updated_at = datetime('now')
                     """,
                     (
@@ -70,7 +71,8 @@ class GraphMixin(SqliteConnectionMixin):
                         node.content,
                         json_dumps(node.metadata),
                         node.keywords_text,
-                        node.taxonomy_path,
+                        node.scope_path,
+                        node.content_hash,
                     ),
                 )
 
@@ -78,7 +80,7 @@ class GraphMixin(SqliteConnectionMixin):
                 if node.embedding and self.has_sqlite_vec():
                     _ = db.execute(
                         """
-                        INSERT INTO vec_knowledge_nodes (node_id, embedding)
+                        INSERT INTO vec_cells (node_id, embedding)
                         VALUES (?, ?)
                         ON CONFLICT (node_id) DO UPDATE SET
                             embedding = excluded.embedding
@@ -89,7 +91,7 @@ class GraphMixin(SqliteConnectionMixin):
             for edge in edges:
                 _ = db.execute(
                     """
-                    INSERT INTO knowledge_edges
+                    INSERT INTO cell_edges
                         (tenant_id, source_id, target_id, relation, weight, metadata)
                     VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT (tenant_id, source_id, target_id, relation) DO UPDATE SET
@@ -152,7 +154,7 @@ class GraphMixin(SqliteConnectionMixin):
                 cursor = db.execute(
                     f"""
                     SELECT source_id, target_id, relation, weight
-                    FROM knowledge_edges
+                    FROM cell_edges
                     WHERE tenant_id = ?
                       AND source_id IN ({placeholders})
                       {rel_filter}
@@ -198,8 +200,8 @@ class GraphMixin(SqliteConnectionMixin):
                 f"""
                 SELECT id, node_kind, source_type, source_id, title,
                        substr(content, 1, 500) as content,
-                       struct_data, taxonomy_path, tenant_id
-                FROM knowledge_nodes
+                       struct_data, scope_path, tenant_id
+                FROM cells
                 WHERE tenant_id = ? AND id IN ({node_placeholders})
                 """,
                 [tenant_id, *all_node_ids],
@@ -218,7 +220,7 @@ class GraphMixin(SqliteConnectionMixin):
                         "source_type": as_str(sqlite_cell(row, "source_type")),
                         "title": as_str(sqlite_cell(row, "title")),
                         "content": as_str(sqlite_cell(row, "content")),
-                        "taxonomy_path": as_str(sqlite_cell(row, "taxonomy_path")),
+                        "scope_path": as_str(sqlite_cell(row, "scope_path")),
                         "metadata": metadata,
                     }
                 )

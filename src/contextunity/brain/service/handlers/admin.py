@@ -26,8 +26,8 @@ from contextunity.core.tokens import ContextToken
 
 from ...payloads import (
     AdminGetAnalyticsSummaryPayload,
+    AdminGetCellsPayload,
     AdminGetFilterOptionsPayload,
-    AdminGetKnowledgeNodesPayload,
     AdminGetMemoryLayerStatsPayload,
     AdminGetRelatedEpisodesPayload,
     AdminGetSessionTracesPayload,
@@ -209,7 +209,7 @@ class AdminHandlersMixin(BrainHandlerBase):
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> contextunit_pb2.ContextUnit:
-        """Distinct filter values from agent_traces for admin UI dropdowns."""
+        """Distinct filter values from event_journal for admin UI dropdowns."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.ADMIN_READ)
@@ -287,21 +287,19 @@ class AdminHandlersMixin(BrainHandlerBase):
         return make_response(payload={"events": events, "total": total}, parent_unit=unit)
 
     @grpc_error_handler
-    async def AdminGetKnowledgeNodes(
+    async def AdminGetCells(
         self,
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> contextunit_pb2.ContextUnit:
-        """List knowledge_nodes with optional tenant/kind filter (cross-tenant)."""
+        """List cells with optional tenant/kind filter (cross-tenant)."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.ADMIN_READ)
-        params = AdminGetKnowledgeNodesPayload.model_validate(unit.payload or {})
-        resolved_tenant = _require_admin_tenant_scope(
-            token, params.tenant_id, "AdminGetKnowledgeNodes"
-        )
+        params = AdminGetCellsPayload.model_validate(unit.payload or {})
+        resolved_tenant = _require_admin_tenant_scope(token, params.tenant_id, "AdminGetCells")
 
-        nodes = await self._admin_ops.get_knowledge_nodes(
+        nodes = await self._admin_ops.get_cells(
             tenant_id=resolved_tenant,
             kind=params.kind,
             limit=params.limit,

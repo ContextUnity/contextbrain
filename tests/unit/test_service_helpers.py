@@ -107,6 +107,21 @@ class TestValidateTenantAccess:
         with pytest.raises(SecurityError, match="Tenant access denied"):
             validate_tenant_access(_token(tenants=[]), "acme", _context())
 
+    def test_doc_write_without_authority_classifies_as_policy_fault(self):
+        """`_doc` gets no special-case bypass — a token without `_doc` in
+        allowed_tenants is rejected the same way as any other tenant, and
+        that rejection classifies as policy_fault (not agent_fault), so
+        it never degrades a Synapse Q-value if fed through the fault
+        pipeline. The real end-to-end RPC-level rejection is proven in
+        tests/integration_inproc/test_docs_as_memory_authorization_inproc.py;
+        this ties that same SecurityError to its fault classification."""
+        from contextunity.core.faults import classify_exception
+
+        with pytest.raises(SecurityError, match="Tenant access denied") as exc_info:
+            validate_tenant_access(_token(tenants=["project-a"]), "_doc", _context())
+
+        assert classify_exception(exc_info.value) == "policy_fault"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # validate_user_access

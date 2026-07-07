@@ -43,8 +43,8 @@ PENALTY_OUTCOME_NEGATIVE: float = -0.1  # external signal indicates failure
 
 LEARNING_RATE: float = 0.1  # applied to all deltas
 
-# ── Lifecycle weights (applied during QueryExperiences scoring) ─────
-# Multiplied with q_composite to weight experiences by lifecycle state.
+# ── Lifecycle weights (applied during QuerySynapses scoring) ─────
+# Multiplied with q_composite to weight BrainSynapses by lifecycle state.
 
 LIFECYCLE_WEIGHTS: dict[str, float] = {
     "confirmed": 1.2,
@@ -68,6 +68,19 @@ def apply_delta(q_old: float, delta: float) -> float:
     return clamp_q(q_old + delta * LEARNING_RATE)
 
 
+def q_composite(q_action: float, q_hypothesis: float, q_relevance: float) -> float:
+    """Canonical BrainSynapse composite-Q formula.
+
+    Postgres computes this as a ``GENERATED ALWAYS AS`` column
+    (``storage/postgres/schema.py`` ``_experiences_schema``) with no rounding;
+    the SQLite backend has no generated-column support in this codepath, so
+    its storage mixin calls this function explicitly. Deliberately unrounded
+    — same operators, same operand order, same IEEE 754 double precision —
+    so both backends produce bit-identical values from the identical formula.
+    """
+    return q_action * 0.5 + q_hypothesis * 0.3 + q_relevance * 0.2
+
+
 __all__ = [
     "REWARD_NODE_SUCCESS",
     "PENALTY_AGENT_FAULT",
@@ -84,4 +97,5 @@ __all__ = [
     "LIFECYCLE_WEIGHTS",
     "clamp_q",
     "apply_delta",
+    "q_composite",
 ]

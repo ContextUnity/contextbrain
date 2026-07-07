@@ -21,6 +21,7 @@ Usage::
 from __future__ import annotations
 
 from contextunity.core.exceptions import ContextUnityError, register_error
+from contextunity.core.faults import POLICY_FAULT
 
 
 @register_error("BRAIN_ERROR")
@@ -89,3 +90,40 @@ class BrainValidationError(ContextbrainError):
 
     code: str = "BRAIN_VALIDATION_ERROR"
     message: str = "Input or data validation failed"
+
+
+@register_error("BRAIN_SYNAPSES_DISABLED")
+class SynapseFeatureDisabledError(ContextbrainError):
+    """BrainSynapse RPCs were called while ``brain.yml: synapses.enabled`` is off."""
+
+    code: str = "BRAIN_SYNAPSES_DISABLED"
+    message: str = "BrainSynapse RPCs are disabled (brain.yml: synapses.enabled=false)"
+    retryable: bool = False
+
+
+@register_error("BRAIN_SYNAPSE_TENANT_MISMATCH")
+class SynapseTenantMismatchError(ContextbrainError):
+    """A Synapse payload's ``tenant_id`` contradicts the caller's token scope.
+
+    Tenant spoofing is a ``policy_fault`` — it never touches Q-values and is
+    never retryable.
+    """
+
+    code: str = "BRAIN_SYNAPSE_TENANT_MISMATCH"
+    message: str = "Synapse payload tenant_id does not match token scope"
+    fault_class: str = POLICY_FAULT
+    event_type: str = "synapse.tenant_mismatch"
+    retryable: bool = False
+
+
+@register_error("BRAIN_SYNAPSE_DECAY_DISABLED")
+class SynapseDecayDisabledError(ContextbrainError):
+    """``decay_synapses`` was called while ``brain.yml: synapses.decay_enabled`` is off.
+
+    The method exists as a stable future call site for Q-decay, but it must
+    fail loudly rather than silently no-op while disabled or unimplemented.
+    """
+
+    code: str = "BRAIN_SYNAPSE_DECAY_DISABLED"
+    message: str = "Synapse decay is disabled (brain.yml: synapses.decay_enabled=false)"
+    retryable: bool = False

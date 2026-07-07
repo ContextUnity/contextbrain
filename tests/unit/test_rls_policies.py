@@ -22,13 +22,15 @@ class TestRLSPolicies:
     """Verify RLS policy SQL generation."""
 
     EXPECTED_TENANT_TABLES = [
-        "knowledge_nodes",
-        "knowledge_edges",
-        "knowledge_aliases",
+        "cells",
+        "cell_edges",
+        "cell_aliases",
         "episodic_events",
         "user_facts",
-        "agent_traces",
+        "event_journal",
         "catalog_taxonomy",
+        "blackboard",
+        "synapses",
     ]
 
     def test_rls_policies_cover_all_tenant_tables(self):
@@ -112,6 +114,15 @@ class TestRLSPolicies:
 
         assert "current_setting('app.current_tenant'" in sql_text
 
+    def test_rls_policy_allows_admin_user_wildcard(self):
+        """Admin reads set app.current_user='*' and must bypass user-level RLS."""
+        from contextunity.brain.storage.postgres.schema import build_rls_sql
+
+        stmts = build_rls_sql()
+        sql_text = "\n".join(stmts)
+
+        assert "current_setting('app.current_user', true) = '*'" in sql_text
+
     def test_rls_policy_with_check_clause(self):
         """RLS WITH CHECK clause prevents cross-tenant INSERT/UPDATE."""
         from contextunity.brain.storage.postgres.schema import build_rls_sql
@@ -130,8 +141,8 @@ class TestRLSPolicies:
         assert stmts1 == stmts2
 
     def test_expected_table_count(self):
-        """Exactly 7 tenant-scoped tables are configured."""
-        assert len(self.EXPECTED_TENANT_TABLES) == 7
+        """Exactly 9 tenant-scoped tables are configured."""
+        assert len(self.EXPECTED_TENANT_TABLES) == 9
 
 
 # ── set_tenant_context Tests ─────────────────────────────────────

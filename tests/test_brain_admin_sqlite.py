@@ -6,18 +6,18 @@ from pathlib import Path
 
 import pytest
 
-from contextunity.brain.storage.sqlite import SqliteVecStorageBackend
+from contextunity.brain.storage.sqlite import SqliteBrainStore
 from contextunity.brain.storage.sqlite.admin_ops import SqliteAdminOps
 
 
 @pytest.fixture
-def sqlite_store(tmp_path: Path) -> SqliteVecStorageBackend:
-    return SqliteVecStorageBackend(db_path=tmp_path / "brain.sqlite3", vector_dim=8)
+def sqlite_store(tmp_path: Path) -> SqliteBrainStore:
+    return SqliteBrainStore(db_path=tmp_path / "brain.sqlite3", vector_dim=8)
 
 
 @pytest.mark.asyncio
 async def test_sqlite_admin_search_traces_and_analytics(
-    sqlite_store: SqliteVecStorageBackend,
+    sqlite_store: SqliteBrainStore,
 ) -> None:
     trace_id = await sqlite_store.log_trace(
         tenant_id="default",
@@ -50,7 +50,7 @@ async def test_sqlite_admin_search_traces_and_analytics(
 
     layers = ops.get_memory_layer_stats(tenant_id=None)
     assert "episodes" in layers
-    assert "knowledge_nodes" in layers
+    assert "cells" in layers
 
     analytics = ops.get_analytics_summary(tenant_id=None, hours=None)
     assert analytics["total_traces"] == 1

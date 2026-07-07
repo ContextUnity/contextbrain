@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date, datetime
+from decimal import Decimal
+from uuid import UUID
 
 from contextunity.core import get_contextunit_logger
-from contextunity.core.types import JsonDict, is_json_dict
+from contextunity.core.types import (
+    JsonDict,
+    JsonValue,
+    WireValue,
+    is_json_dict,
+    is_object_dict,
+    is_object_list,
+)
 from psycopg import AsyncConnection, errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -32,10 +42,31 @@ async def fetch_all(conn: PgConnection, query: str, params: Mapping[str, object]
     cur = conn.cursor(row_factory=dict_row)
     result = await cur.execute(query.encode(), params)
     rows = await result.fetchall()
-    return [row for row in rows if is_json_dict(row)]
+    normalized = [_json_safe_row(row) for row in rows if is_object_dict(row)]
+    return [row for row in normalized if is_json_dict(row)]
 
 
-_ROLE_MISSING_WARNED = False
+def _json_safe_value(value: WireValue) -> JsonValue:
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    if isinstance(value, UUID):
+        return str(value)
+    if is_object_list(value):
+        return [_json_safe_value(item) for item in value]
+    if is_object_dict(value):
+        return {key: _json_safe_value(item) for key, item in value.items()}
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    return str(value)
+
+
+def _json_safe_row(row: dict[str, object]) -> JsonDict:
+    return {key: _json_safe_value(value) for key, value in row.items()}
+
+
+_role_missing_warned = False
 
 
 async def set_tenant_context(
@@ -62,7 +93,7 @@ async def set_tenant_context(
         BrainValidationError: If tenant_id is empty (fail-closed — prevents
             accidentally querying without tenant context).
     """
-    global _ROLE_MISSING_WARNED
+    global _role_missing_warned
     if not tenant_id:
         raise BrainValidationError(
             "tenant_id is required for RLS context. Pass a valid tenant_id or '*' for admin access."
@@ -73,13 +104,13 @@ async def set_tenant_context(
     try:
         _ = await conn.execute("SET LOCAL ROLE brain_app")
     except errors.UndefinedObject:
-        if not _ROLE_MISSING_WARNED:
+        if not _role_missing_warned:
             logger.warning(
                 "Role 'brain_app' does not exist — RLS enforcement degraded to "
                 "application-level tenant filters. Run ensure_schema with a "
                 "privileged DSN to provision RLS roles/policies."
             )
-            _ROLE_MISSING_WARNED = True
+            _role_missing_warned = True
     # SET LOCAL is transaction-scoped — reverts after COMMIT/ROLLBACK.
     # We use format() here because SET doesn't support $1 parameters,
     # but tenant_id is validated (not empty, no SQL injection risk because

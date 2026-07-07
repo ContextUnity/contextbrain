@@ -1,13 +1,13 @@
 """PostgreSQL storage subpackage."""
 
-from .models import GraphEdge, GraphNode, KnowledgeStoreInterface, SearchResult, TaxonomyPath
-from .store import PostgresKnowledgeStore
+from .models import BrainStorageInterface, GraphEdge, GraphNode, ScopePath, SearchResult
+from .store import PostgresBrainStore
 
 __all__ = [
-    "PostgresKnowledgeStore",
+    "PostgresBrainStore",
     "GraphNode",
     "GraphEdge",
     "SearchResult",
-    "TaxonomyPath",
-    "KnowledgeStoreInterface",
+    "ScopePath",
+    "BrainStorageInterface",
 ]

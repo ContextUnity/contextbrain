@@ -33,8 +33,8 @@ def extract_cognee_kg(
         dict[str, str]: A dictionary containing the results.
     """
     paths = get_assets_paths(config)
-    nodes_path = paths["assets"] / "knowledge_nodes.jsonl"
-    edges_path = paths["assets"] / "knowledge_edges.jsonl"
+    nodes_path = paths["assets"] / "cells.jsonl"
+    edges_path = paths["assets"] / "cell_edges.jsonl"
 
     if overwrite:
         for p in (nodes_path, edges_path):
