@@ -63,14 +63,10 @@ ALLOWED_DOC_RELATIVE_PATHS = (
     "docs/naming/rejected_terms.md",
     "docs/phase1_storage_reset_handoff.md",
 )
-# Derived/frozen doc bundles: compiled from other docs (contextunity-llm-context)
-# or a static manual export snapshot (chatgpt-project-upload) — not a source of
-# truth to lint directly. If the *source* docs are clean, regenerating these
-# bundles (scripts/collect-llm-context.sh) makes them clean too.
-ALLOWED_DOC_PATH_PREFIXES = (
-    "docs/contextunity-llm-context/",
-    "docs/chatgpt-project-upload/",
-)
+# Derived doc bundle: compiled by scripts/collect-llm-context.sh into
+# docs/contextunity-llm-context/ (gitignored). Not a source of truth to lint.
+# If source docs are clean, regenerating the bundle makes it clean too.
+ALLOWED_DOC_PATH_PREFIXES = ("docs/contextunity-llm-context/",)
 
 
 def _repo_root() -> Path:

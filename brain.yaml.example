@@ -28,9 +28,36 @@ log_level: INFO
 #   rls_enabled: false
 #   pgvector_dim: 768
 
-# embedder:
-#   type: openai
+# BrainCells use exactly one deployment-wide vector space. The default runs
+# EmbeddingGemma in-process with ONNX Runtime (native 768 dimensions); no
+# Ollama process is required. Local Python installs cache the pinned model on
+# first use; the production Brain image bundles it and runs offline. Changing
+# space_id/model requires re-embedding all affected cells before vector
+# retrieval is enabled again.
+# embeddings:
+#   provider: onnx
+#   space_id: embeddinggemma-300m-onnx-768-v1
+#   model: onnx-community/embeddinggemma-300m-ONNX
+#   dimension: 768
+#   device: auto  # auto | cpu | cuda | coreml | dml
+#   model_cache_dir: /var/cache/contextunity/huggingface
+#
+# External providers are opt-in. endpoint is the complete embeddings endpoint;
+# Brain does not guess provider-specific URL paths. Set api_key only from an
+# environment/credential source, never in this file.
+# embeddings:
+#   provider: openai  # openai | ollama | vllm | sentence_transformers
+#   space_id: text-embedding-3-small-1536-v1
 #   model: text-embedding-3-small
+#   dimension: 1536
+#   endpoint: https://api.openai.com/v1/embeddings
+
+# Durable asynchronous cell embedding enrichment is opt-in.
+# embedding_enrichment:
+#   enabled: false
+#   max_input_chars: 12000
+#   max_pending_per_tenant: 10000
+#   lease_seconds: 300
 
 # models:
 #   default_llm: openai/gpt-5-mini

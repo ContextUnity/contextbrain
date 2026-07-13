@@ -1,7 +1,7 @@
 """Postgres schema DDL for knowledge store (pgvector + ltree).
 
 Modules:
-- core: BrainCells, CellEdges, cell aliases, episodes, user_facts (always included)
+- core: BrainCells, CellEdges, cell aliases, episodes (always included)
 - commerce: Dealer products, taxonomy (for e-commerce)
 - news_engine: Raw news, facts, posts (for news pipeline)
 
@@ -35,13 +35,35 @@ def _extension_statements() -> list[str]:
 
 
 def _rename_table(old: str, new: str) -> str:
-    """Idempotent table rename: no-op on a fresh DB or an already-migrated one."""
-    return f"ALTER TABLE IF EXISTS {old} RENAME TO {new};"
+    """Idempotent table rename: only when old exists and new does not.
+
+    ``ALTER TABLE IF EXISTS old RENAME TO new`` still fails if both tables
+    already exist (partial migration). Guard both names in the current schema.
+    """
+    return f"""
+        DO $$
+        BEGIN
+            IF to_regclass(format('%I.%I', current_schema(), '{old}')) IS NOT NULL
+               AND to_regclass(format('%I.%I', current_schema(), '{new}')) IS NULL THEN
+                ALTER TABLE {old} RENAME TO {new};
+            END IF;
+        END
+        $$;
+    """
 
 
 def _rename_index(old: str, new: str) -> str:
-    """Idempotent index/PK-backing-index rename (Postgres supports IF EXISTS here)."""
-    return f"ALTER INDEX IF EXISTS {old} RENAME TO {new};"
+    """Idempotent index rename: only when old exists and new does not."""
+    return f"""
+        DO $$
+        BEGIN
+            IF to_regclass(format('%I.%I', current_schema(), '{old}')) IS NOT NULL
+               AND to_regclass(format('%I.%I', current_schema(), '{new}')) IS NULL THEN
+                ALTER INDEX {old} RENAME TO {new};
+            END IF;
+        END
+        $$;
+    """
 
 
 def _rename_constraint(table: str, old: str, new: str) -> str:
@@ -137,6 +159,7 @@ def _preflight_rename_sql() -> list[str]:
 
     # 2. Columns (table must already be renamed by step 1).
     stmts.append(_rename_column("cells", "taxonomy_path", "scope_path"))
+    stmts.append(_rename_column("cells", "node_kind", "cell_kind"))
 
     # 3. PK-backing and secondary indexes.
     stmts.append(_rename_index("knowledge_nodes_pkey", "cells_pkey"))
@@ -146,7 +169,8 @@ def _preflight_rename_sql() -> list[str]:
     stmts.append(_rename_index("knowledge_nodes_keywords_vector_gin", "cells_keywords_vector_gin"))
     stmts.append(_rename_index("knowledge_nodes_source_type_idx", "cells_source_type_idx"))
     stmts.append(_rename_index("knowledge_nodes_source_id_idx", "cells_source_id_idx"))
-    stmts.append(_rename_index("knowledge_nodes_node_kind_idx", "cells_node_kind_idx"))
+    stmts.append(_rename_index("knowledge_nodes_node_kind_idx", "cells_cell_kind_idx"))
+    stmts.append(_rename_index("cells_node_kind_idx", "cells_cell_kind_idx"))
     stmts.append(_rename_index("knowledge_nodes_tenant_idx", "cells_tenant_idx"))
     stmts.append(_rename_index("knowledge_nodes_struct_data_gin", "cells_struct_data_gin"))
     stmts.append(
@@ -184,8 +208,9 @@ def _preflight_rename_sql() -> list[str]:
 
     # 4. CHECK/FK constraints (verified against a live legacy-upgraded database, 2026-07-04).
     stmts.append(
-        _rename_constraint("cells", "knowledge_nodes_node_kind_check", "cells_node_kind_check")
+        _rename_constraint("cells", "knowledge_nodes_node_kind_check", "cells_cell_kind_check")
     )
+    stmts.append(_rename_constraint("cells", "cells_node_kind_check", "cells_cell_kind_check"))
     stmts.append(
         _rename_constraint("cells", "knowledge_nodes_source_type_check", "cells_source_type_check")
     )
@@ -240,9 +265,16 @@ def _core_schema(vector_dim: int) -> list[str]:
             id              TEXT PRIMARY KEY,
             tenant_id       TEXT NOT NULL,
             user_id         TEXT NULL,
-            node_kind       TEXT NOT NULL CHECK (node_kind IN ('chunk', 'concept')),
+            cell_kind       TEXT NOT NULL CHECK (cell_kind IN (
+                'chunk','concept','fact','preference','config','document',
+                'documentation','entity','summary'
+            )),
 
-            source_type     TEXT NULL CHECK (source_type IN ('video','book','qa','web','knowledge','documentation','product','dealer_product')),
+            source_type     TEXT NULL CHECK (source_type IN (
+                'video','book','qa','web','knowledge','documentation','product','dealer_product',
+                'auto_extract','manual','synthesis','test','config','runbook',
+                'memory','tool','retention'
+            )),
             source_id       TEXT NULL,
             title           TEXT NULL,
             content         TEXT NOT NULL,
@@ -279,7 +311,7 @@ def _core_schema(vector_dim: int) -> list[str]:
         """,
         "CREATE INDEX IF NOT EXISTS cells_source_type_idx ON cells (source_type);",
         "CREATE INDEX IF NOT EXISTS cells_source_id_idx ON cells (source_id);",
-        "CREATE INDEX IF NOT EXISTS cells_node_kind_idx ON cells (node_kind);",
+        "CREATE INDEX IF NOT EXISTS cells_cell_kind_idx ON cells (cell_kind);",
         "CREATE INDEX IF NOT EXISTS cells_tenant_idx ON cells (tenant_id);",
         """
         CREATE INDEX IF NOT EXISTS cells_struct_data_gin
@@ -287,9 +319,28 @@ def _core_schema(vector_dim: int) -> list[str]:
         """,
         """
         CREATE UNIQUE INDEX IF NOT EXISTS cells_chunk_content_hash_uq
-          ON cells (node_kind, content_hash)
-          WHERE node_kind = 'chunk' AND content_hash IS NOT NULL;
+          ON cells (cell_kind, content_hash)
+          WHERE cell_kind = 'chunk' AND content_hash IS NOT NULL;
         """,
+        # Durable asynchronous embedding ledger. It stores references only.
+        """
+        CREATE TABLE IF NOT EXISTS cell_embedding_jobs (
+            job_id          TEXT PRIMARY KEY,
+            tenant_id       TEXT NOT NULL,
+            cell_id         TEXT NOT NULL REFERENCES cells(id) ON DELETE CASCADE,
+            content_hash    TEXT NOT NULL,
+            profile         TEXT NOT NULL,
+            status          TEXT NOT NULL CHECK (status IN ('pending','processing','ready','failed','skipped')),
+            attempt         INTEGER NOT NULL DEFAULT 0,
+            lease_id        TEXT,
+            lease_until     TIMESTAMPTZ,
+            error_code      TEXT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS embedding_jobs_claim_idx ON cell_embedding_jobs (tenant_id, status, lease_until);",
         # CellEdges table
         """
         CREATE TABLE IF NOT EXISTS cell_edges (
@@ -340,21 +391,6 @@ def _core_schema(vector_dim: int) -> list[str]:
         CREATE INDEX IF NOT EXISTS episodic_events_embedding_hnsw
           ON episodic_events USING hnsw (embedding vector_cosine_ops);
         """,
-        # Entity Memory (User Facts / Profile)
-        """
-        CREATE TABLE IF NOT EXISTS user_facts (
-            tenant_id   TEXT NOT NULL DEFAULT 'default',
-            user_id     TEXT NOT NULL,
-            fact_key    TEXT NOT NULL,
-            fact_value  JSONB NOT NULL,
-            confidence  DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-            source_id   UUID NULL REFERENCES episodic_events(id) ON DELETE SET NULL,
-            updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            PRIMARY KEY (tenant_id, user_id, fact_key)
-        );
-        """,
-        "CREATE INDEX IF NOT EXISTS user_facts_user_idx ON user_facts (user_id);",
-        "CREATE INDEX IF NOT EXISTS user_facts_tenant_idx ON user_facts (tenant_id);",
         # Event Journal (Observability) — v0: trace-compatible append-only event storage.
         """
         CREATE TABLE IF NOT EXISTS event_journal (
@@ -444,9 +480,11 @@ def _column_backfill() -> list[str]:
         "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'recorded';",
         "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb;",
         "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS source_refs JSONB NOT NULL DEFAULT '[]'::jsonb;",
-        # user_facts — tenant isolation (changed PK from (user_id, fact_key)
-        # to (tenant_id, user_id, fact_key); the column default handles existing rows)
-        "ALTER TABLE user_facts ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';",
+        # cells — Phase 3 BrainCell metadata columns
+        "ALTER TABLE cells ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();",
+        "ALTER TABLE cells ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5;",
+        "ALTER TABLE cells ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'tenant';",
+        "ALTER TABLE cells ADD COLUMN IF NOT EXISTS source_ref TEXT NULL;",
         # synapses — canonical BrainSynapse contract fields
         "ALTER TABLE synapses ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;",
         "ALTER TABLE synapses ADD COLUMN IF NOT EXISTS action_data_ref TEXT NULL;",
@@ -464,11 +502,20 @@ def _constraint_upgrades() -> list[str]:
     Each statement is wrapped to be safe on re-run.
     """
     return [
-        # cells — added 'documentation' to source_type enum
-        # DROP + re-ADD is idempotent:  IF EXISTS prevents error on first run
+        # cells — Phase 3 source_type and cell_kind values
         "ALTER TABLE cells DROP CONSTRAINT IF EXISTS cells_source_type_check;",
         """ALTER TABLE cells ADD CONSTRAINT cells_source_type_check
-           CHECK (source_type IN ('video','book','qa','web','knowledge','documentation','product','dealer_product'));""",
+           CHECK (source_type IS NULL OR source_type IN (
+               'video','book','qa','web','knowledge','documentation','product','dealer_product',
+               'auto_extract','manual','synthesis','test','config','runbook',
+               'memory','tool','retention'
+           ));""",
+        "ALTER TABLE cells DROP CONSTRAINT IF EXISTS cells_cell_kind_check;",
+        """ALTER TABLE cells ADD CONSTRAINT cells_cell_kind_check
+           CHECK (cell_kind IN (
+               'chunk','concept','fact','preference','config','document',
+               'documentation','entity','summary'
+           ));""",
         # event_journal.event_id must be unique for external references (Event Journal v0)
         "ALTER TABLE event_journal DROP CONSTRAINT IF EXISTS event_journal_event_id_key;",
         "ALTER TABLE event_journal ADD CONSTRAINT event_journal_event_id_key UNIQUE (event_id);",
@@ -515,7 +562,7 @@ def _blackboard_schema(vector_dim: int) -> list[str]:
     ]
 
 
-def _experiences_schema(vector_dim: int) -> list[str]:
+def _synapses_schema(vector_dim: int) -> list[str]:
     """Synapses table — Flat Memory Phase B.
 
     Stores agent action outcomes with Q-values for experience-driven
@@ -618,11 +665,11 @@ def _rls_policies() -> list[str]:
         "cell_edges",
         "cell_aliases",
         "episodic_events",
-        "user_facts",
         "event_journal",
         "catalog_taxonomy",
         "blackboard",
         "synapses",
+        "cell_embedding_jobs",
     ]
 
     stmts: list[str] = []
@@ -674,10 +721,6 @@ def _rls_policies() -> list[str]:
             "OR current_setting('app.current_user', true) = '*'"
         ),
         "episodic_events": (
-            "user_id = current_setting('app.current_user', true) "
-            "OR current_setting('app.current_user', true) = '*'"
-        ),
-        "user_facts": (
             "user_id = current_setting('app.current_user', true) "
             "OR current_setting('app.current_user', true) = '*'"
         ),
@@ -793,7 +836,7 @@ def build_schema_sql(
 
     statements = _core_schema(vector_dim)
     statements.extend(_blackboard_schema(vector_dim))
-    statements.extend(_experiences_schema(vector_dim))
+    statements.extend(_synapses_schema(vector_dim))
 
     if include_commerce:
         statements.extend(_commerce_schema(vector_dim))

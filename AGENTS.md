@@ -27,12 +27,14 @@ Import types from `contextunity.core.types` / `contextunity.core.sdk.types` — 
 
 | Trigger | Skill |
 |---------|-------|
+| New feature / flow (storage RPC, enqueue, admin surface, product path) | **`acdd-feature-development`** → then `tdd` |
 | Typing, JSON/gRPC, ContextUnit payloads, `dict[str, object]`, basedpyright | **`contract-boundaries`** (primary) → **`type-validation`** |
 | Core types / parsing / SDK | **`core-contract-change`** + **`contract-boundaries`** |
 | Bug / regression | `diagnose` |
-| Implementation loop | `tdd` |
+| Implementation loop (Red-Green after ACDD or small fix) | `tdd` |
+| Full suite / pre-push / Postgres lanes | `test-suite` |
 
-Workflow: [/contract-boundaries](../../.agents/workflows/contract-boundaries.md). Monorepo: [AGENTS.md](../../AGENTS.md).
+Workflows: [/acdd](../../.agents/workflows/acdd-feature-development.md), [/contract-boundaries](../../.agents/workflows/contract-boundaries.md). Monorepo: [AGENTS.md](../../AGENTS.md).
 
 ## Platform Invariants
 Follow `packages/core/AGENTS.md` for proto, config, exception, and token rules. In this service:

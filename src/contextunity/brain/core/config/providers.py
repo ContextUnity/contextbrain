@@ -1,8 +1,10 @@
-"""Provider configurations for external services."""
+"""Strict provider configurations used by Brain-owned embedding generation."""
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+
+from contextunity.brain.embedding_space import DEFAULT_EMBEDDING_DIMENSION
 
 
 class PostgresConfig(BaseModel):
@@ -14,23 +16,86 @@ class PostgresConfig(BaseModel):
     pool_min_size: int = 2
     pool_max_size: int = 10
     rls_enabled: bool = True
-    vector_dim: int = 768
+    vector_dim: int = DEFAULT_EMBEDDING_DIMENSION
 
 
-class OpenAIConfig(BaseModel):
-    """Configuration settings for OpenAIConfig."""
+EmbeddingProviderKind = Literal[
+    "onnx",
+    "openai",
+    "ollama",
+    "vllm",
+    "sentence_transformers",
+    "deterministic",
+]
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
+_ONNX_EMBEDDINGGEMMA_MODEL = "onnx-community/embeddinggemma-300m-ONNX"
+_ONNX_EMBEDDINGGEMMA_SPACE = "embeddinggemma-300m-onnx-768-v1"
+_EXTERNAL_PROVIDERS = frozenset({"openai", "ollama", "vllm"})
+_LOCAL_PROVIDERS = frozenset({"onnx", "sentence_transformers"})
 
-    api_key: str = ""
-    organization: str | None = None
-    embedding_model: str | None = None
+
+class EmbeddingProviderConfig(BaseModel):
+    """Operator-owned embedding provider profile.
+
+    ``endpoint`` is the complete embeddings endpoint for HTTP providers.  This
+    prevents provider selection from guessing URL shapes such as ``/v1`` or
+    ``/api/embed``.  Credentials are resolved from L0 configuration only and
+    never supplied by Router, CLI, or Worker requests.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    provider: EmbeddingProviderKind = "onnx"
+    space_id: str = Field(
+        default=_ONNX_EMBEDDINGGEMMA_SPACE,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    )
+    model: str = Field(default=_ONNX_EMBEDDINGGEMMA_MODEL, min_length=1, max_length=256)
+    dimension: int = Field(default=DEFAULT_EMBEDDING_DIMENSION, ge=1, le=16_384)
+    endpoint: str | None = Field(default=None, max_length=2_048)
+    api_key: SecretStr | None = None
+    device: Literal["auto", "cpu", "cuda", "coreml", "dml"] = "auto"
+    model_cache_dir: str | None = Field(default=None, min_length=1, max_length=2_048)
+
+    @model_validator(mode="after")
+    def validate_provider_settings(self) -> "EmbeddingProviderConfig":
+        """Reject ambiguous or unreachable provider profiles at config load."""
+        if self.provider in _EXTERNAL_PROVIDERS:
+            if not self.endpoint:
+                raise ValueError(f"embeddings.endpoint is required for provider={self.provider}")
+            if self.model == _ONNX_EMBEDDINGGEMMA_MODEL:
+                raise ValueError(f"embeddings.model must be explicit for provider={self.provider}")
+            if self.space_id == _ONNX_EMBEDDINGGEMMA_SPACE:
+                raise ValueError(
+                    f"embeddings.space_id must be explicit for provider={self.provider}"
+                )
+            if self.device != "auto" or self.model_cache_dir is not None:
+                raise ValueError(
+                    f"embeddings.device and embeddings.model_cache_dir apply only to local providers; "
+                    f"provider={self.provider}"
+                )
+        elif self.provider in _LOCAL_PROVIDERS:
+            if self.endpoint is not None or self.api_key is not None:
+                raise ValueError(
+                    f"embeddings.endpoint and embeddings.api_key are not valid for provider={self.provider}"
+                )
+            if (
+                self.provider == "sentence_transformers"
+                and self.space_id == _ONNX_EMBEDDINGGEMMA_SPACE
+            ):
+                raise ValueError("embeddings.space_id must be explicit for sentence_transformers")
+        elif self.provider == "deterministic":
+            if self.endpoint is not None or self.api_key is not None:
+                raise ValueError("deterministic embeddings do not accept endpoint or api_key")
+            if self.space_id == _ONNX_EMBEDDINGGEMMA_SPACE:
+                raise ValueError("embeddings.space_id must be explicit for deterministic")
+        return self
 
 
-class LocalOpenAIConfig(BaseModel):
-    """Base URLs for local OpenAI-compatible servers."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
-
-    ollama_base_url: str = "http://localhost:11434/v1"
-    vllm_base_url: str = "http://localhost:8000/v1"
+__all__ = [
+    "EmbeddingProviderConfig",
+    "EmbeddingProviderKind",
+    "PostgresConfig",
+]

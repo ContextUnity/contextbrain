@@ -13,10 +13,9 @@ from contextunity.core.types import is_json_dict
 from ...payloads import (
     AddEpisodePayload,
     GetEpisodeStatsPayload,
+    GetOldEpisodesPayload,
     GetRecentEpisodesPayload,
-    GetUserFactsPayload,
     RetentionCleanupPayload,
-    UpsertFactPayload,
 )
 from ..handler_base import BrainHandlerBase
 from ..helpers import (
@@ -24,25 +23,13 @@ from ..helpers import (
     make_response,
     parse_unit,
     validate_tenant_access,
+    validate_tenant_write_policy,
     validate_token_for_read,
     validate_token_for_write,
     validate_user_access,
 )
 
 logger = get_contextunit_logger(__name__)
-
-
-def _row_float(value: object, *, default: float = 0.0) -> float:
-    if isinstance(value, bool):
-        return default
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return default
-    return default
 
 
 class MemoryHandlersMixin(BrainHandlerBase):
@@ -59,7 +46,14 @@ class MemoryHandlersMixin(BrainHandlerBase):
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
         params = AddEpisodePayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
+        validate_tenant_write_policy(
+            token,
+            params.tenant_id,
+            context,
+            content=params.content,
+            source_type="memory",
+            record_kind="episode",
+        )
         validate_user_access(token, params.user_id, context)
 
         # Ensure trace_id is stored in metadata for traceability
@@ -115,59 +109,39 @@ class MemoryHandlersMixin(BrainHandlerBase):
                 parent_unit=unit,
             )
 
-    @grpc_error_handler
-    async def UpsertFact(
-        self,
-        request: contextunit_pb2.ContextUnit,
-        context: grpc.ServicerContext,
-    ) -> contextunit_pb2.ContextUnit:
-        """Update Entity memory with persistent user facts."""
-        unit = parse_unit(request)
-        token = extract_token_from_context(context)
-        validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
-        params = UpsertFactPayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
-        validate_user_access(token, params.user_id, context)
-
-        await self.storage.upsert_fact(
-            user_id=params.user_id,
-            tenant_id=params.tenant_id,
-            key=params.key,
-            value=params.value,
-            confidence=params.confidence,
-            source_id=params.source_id,
-        )
-        return make_response(
-            payload={"success": True},
-            parent_unit=unit,
-        )
-
     @grpc_stream_error_handler
-    async def GetUserFacts(
+    async def GetOldEpisodes(
         self,
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
-        """Get all known facts about a user."""
+        """Get episodes older than N days for retention and synthesis."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
-        params = GetUserFactsPayload.model_validate(unit.payload or {})
+        params = GetOldEpisodesPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
-        validate_user_access(token, params.user_id, context)
 
-        rows = await self.storage.get_user_facts(
-            user_id=params.user_id,
+        rows = await self.storage.get_old_episodes(
             tenant_id=params.tenant_id,
+            older_than_days=params.older_than_days,
+            limit=params.limit,
         )
 
         for row in rows:
+            raw_metadata = row.get("metadata")
+            metadata = dict(raw_metadata) if is_json_dict(raw_metadata) else {}
             yield make_response(
                 payload={
-                    "fact_key": row.get("fact_key", ""),
-                    "fact_value": row.get("fact_value", ""),
-                    "confidence": _row_float(row.get("confidence"), default=1.0),
-                    "updated_at": str(row.get("updated_at", "")),
+                    "id": str(row.get("id", "")),
+                    "user_id": str(row.get("user_id", "")),
+                    "content": row.get("content", ""),
+                    "metadata": metadata,
+                    "created_at": str(row.get("created_at", "")),
+                    "source_hash": str(row.get("source_hash") or metadata.get("source_hash") or ""),
+                    "graph_run_id": str(
+                        row.get("graph_run_id") or metadata.get("graph_run_id") or ""
+                    ),
                 },
                 parent_unit=unit,
             )

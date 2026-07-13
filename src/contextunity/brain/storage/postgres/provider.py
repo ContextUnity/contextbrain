@@ -148,20 +148,18 @@ class PostgresProvider(BaseProvider, IRead, IWrite):
         doc_metadata = coerce_struct_data(doc.metadata or {})
         if not isinstance(doc_metadata, dict):
             doc_metadata = {}
-        keywords_text = _flatten_keywords(doc_metadata)
-        node = GraphNode(
-            id=node_id,
-            content=str(doc.content or ""),
-            node_kind="chunk",
-            source_type=str(doc.source_type or "unknown"),
-            source_id=str(doc.url or ""),
-            title=doc.title,
-            metadata=doc_metadata,
-            keywords_text=keywords_text,
+        doc_metadata["title"] = doc.title or ""
+        doc_metadata["keywords_text"] = _flatten_keywords(doc_metadata)
+        await self._store.upsert_cell(
             tenant_id=tenant_id,
             user_id=user_id,
+            cell_id=node_id,
+            cell_kind="document",
+            content=str(doc.content or ""),
+            metadata=doc_metadata,
+            source_type=str(doc.source_type or "unknown"),
+            source_ref=str(doc.url or ""),
         )
-        await self._store.upsert_graph([node], [], tenant_id=tenant_id, user_id=user_id)
 
     @override
     async def sink(self, envelope: ContextUnit, *, token: ContextToken) -> None:

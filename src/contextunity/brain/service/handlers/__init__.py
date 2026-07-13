@@ -3,6 +3,7 @@
 from .admin import AdminHandlersMixin
 from .blackboard import BlackboardHandlersMixin
 from .commerce import CommerceHandlersMixin
+from .embedding import EmbeddingHandlersMixin
 from .knowledge import KnowledgeHandlersMixin
 from .memory import MemoryHandlersMixin
 from .synapses import SynapseHandlersMixin
@@ -18,4 +19,5 @@ __all__ = [
     "TraceHandlersMixin",
     "TaxonomyHandlersMixin",
     "CommerceHandlersMixin",
+    "EmbeddingHandlersMixin",
 ]

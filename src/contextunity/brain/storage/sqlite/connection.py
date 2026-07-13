@@ -60,6 +60,10 @@ class SqliteConnectionMixin:
         """
         return _sqlite_vec_module is not None
 
+    def vector_backend_available(self) -> bool:
+        """Report whether this local backend can run sqlite-vec similarity queries."""
+        return self.has_sqlite_vec()
+
     async def tenant_connection(
         self, tenant_id: str, user_id: str | None = None
     ) -> AsyncContextManager[sqlite3.Connection]:

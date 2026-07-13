@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, final
 
 from contextunity.core import get_contextunit_logger
-from contextunity.core.narrowing import object_attr
-from contextunity.core.types import is_object_iterable, is_object_list, is_object_pair
+from contextunity.core.narrowing import object_attr, str_list_as_json
+from contextunity.core.types import JsonDict, is_object_iterable, is_object_list, is_object_pair
 
 logger = get_contextunit_logger(__name__)
 
@@ -284,15 +284,15 @@ class EnrichmentResult:
         """
         return self.categories[0][0] if self.categories else None
 
-    def to_metadata(self) -> dict[str, object]:
+    def to_metadata(self) -> JsonDict:
         """Convert to flat metadata dict for storage.
 
         Returns:
             dict: The dictionary payload containing results.
         """
-        meta: dict[str, object] = {}
+        meta: JsonDict = {}
         if self.topics:
-            meta["topics"] = self.topics
+            meta["topics"] = str_list_as_json(self.topics)
         if self.categories:
             meta["category"] = self.categories[0][0]
             meta["category_scores"] = {k: round(v, 3) for k, v in self.categories}
@@ -300,7 +300,7 @@ class EnrichmentResult:
             meta["language"] = self.language
         for label, values in self.entity_map.items():
             # e.g., "entities_ORG": ["Traverse", "Abris"]
-            meta[f"entities_{label}"] = list(set(values))
+            meta[f"entities_{label}"] = str_list_as_json(list(set(values)))
         return meta
 
 

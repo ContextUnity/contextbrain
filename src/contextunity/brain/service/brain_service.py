@@ -10,12 +10,13 @@ from contextunity.core.exceptions import ConfigurationError
 from ..storage.contracts import BrainStorageProtocol
 from ..storage.duckdb_store import DuckDBStore
 from ..storage.postgres import PostgresBrainStore
-from .embedders import ApiEmbedder, LocalEmbedder, get_embedder
+from .embeddings import Embedder, get_embedder
 from .handler_base import BrainHandlerBase
 from .handlers import (
     AdminHandlersMixin,
     BlackboardHandlersMixin,
     CommerceHandlersMixin,
+    EmbeddingHandlersMixin,
     KnowledgeHandlersMixin,
     MemoryHandlersMixin,
     SynapseHandlersMixin,
@@ -28,6 +29,7 @@ logger = get_contextunit_logger(__name__)
 
 class BrainService(
     KnowledgeHandlersMixin,
+    EmbeddingHandlersMixin,
     MemoryHandlersMixin,
     TraceHandlersMixin,
     TaxonomyHandlersMixin,
@@ -42,6 +44,7 @@ class BrainService(
 
     Composed of modular handler mixins:
     - KnowledgeHandlersMixin: search, upsert, KG operations
+    - EmbeddingHandlersMixin: durable cell embedding jobs and status
     - MemoryHandlersMixin: episodes, facts
     - TraceHandlersMixin: agent execution traces
     - TaxonomyHandlersMixin: taxonomy CRUD
@@ -55,7 +58,7 @@ class BrainService(
         self,
         storage: BrainStorageProtocol | None = None,
         duckdb: DuckDBStore | None = None,
-        embedder: ApiEmbedder | LocalEmbedder | None = None,
+        embedder: Embedder | None = None,
     ) -> None:
         """Initialize BrainService with optional injected backends (tests/local mode)."""
         if storage is not None:

@@ -74,7 +74,7 @@ def extract_cognee_kg(
                 nodes.append(
                     {
                         "id": node_id,
-                        "node_kind": "concept",
+                        "cell_kind": "concept",
                         "content": name,
                         "struct_data": {"source_type": "knowledge"},
                     }

@@ -47,7 +47,7 @@ class GraphMixin(SqliteConnectionMixin):
                 _ = db.execute(
                     """
                     INSERT INTO cells (
-                        id, tenant_id, user_id, node_kind, source_type, source_id,
+                        id, tenant_id, user_id, cell_kind, source_type, source_id,
                         title, content, struct_data, keywords_text, scope_path,
                         content_hash, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -64,7 +64,7 @@ class GraphMixin(SqliteConnectionMixin):
                         node.id,
                         tenant_id,
                         user_id,
-                        node.node_kind,
+                        node.cell_kind,
                         node.source_type,
                         node.source_id,
                         node.title,
@@ -198,7 +198,7 @@ class GraphMixin(SqliteConnectionMixin):
             node_placeholders = ", ".join("?" for _ in all_node_ids)
             cursor = db.execute(
                 f"""
-                SELECT id, node_kind, source_type, source_id, title,
+                SELECT id, cell_kind, source_type, source_id, title,
                        substr(content, 1, 500) as content,
                        struct_data, scope_path, tenant_id
                 FROM cells
@@ -216,7 +216,7 @@ class GraphMixin(SqliteConnectionMixin):
                 nodes.append(
                     {
                         "id": as_str(sqlite_cell(row, "id")),
-                        "node_kind": as_str(sqlite_cell(row, "node_kind")),
+                        "cell_kind": as_str(sqlite_cell(row, "cell_kind")),
                         "source_type": as_str(sqlite_cell(row, "source_type")),
                         "title": as_str(sqlite_cell(row, "title")),
                         "content": as_str(sqlite_cell(row, "content")),

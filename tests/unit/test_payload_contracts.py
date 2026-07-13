@@ -11,10 +11,11 @@ import pytest
 from pydantic import ValidationError
 
 from contextunity.brain.payloads import (
+    AdminGetMemoryLayerStatsPayload,
     GraphSearchPayload,
     MatchDuckDBPayload,
+    PruneExpiredBlackboardPayload,
     SearchPayload,
-    UpsertFactPayload,
 )
 
 # ═══════════════════════════════════════════════════════════════════
@@ -65,13 +66,16 @@ class TestDefaults:
         assert p.min_score == 0.0
         assert p.source_types == []
 
-    def test_upsert_fact_fields(self):
-        p = UpsertFactPayload.model_validate(
-            {"tenant_id": "t", "user_id": "u", "key": "name", "value": "Alice"}
-        )
-        assert p.key == "name"
-        assert p.value == "Alice"
-        assert p.confidence == 1.0
+    def test_prune_expired_blackboard_requires_tenant_scope(self):
+        payload = PruneExpiredBlackboardPayload.model_validate({"tenant_id": "tenant-a"})
+        assert payload.tenant_id == "tenant-a"
+        with pytest.raises(ValidationError, match="tenant_id"):
+            PruneExpiredBlackboardPayload.model_validate({"tenant_id": ""})
+
+    def test_memory_stats_layer_rejects_unknown_names(self) -> None:
+        assert AdminGetMemoryLayerStatsPayload(layer="cells").layer == "cells"
+        with pytest.raises(ValidationError, match="layer"):
+            AdminGetMemoryLayerStatsPayload(layer="knowledge_nodes")
 
 
 class TestMatchDuckDBPayload:

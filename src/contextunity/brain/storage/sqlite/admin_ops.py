@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from contextunity.core.narrowing import as_int, as_json_dict_list, as_str, as_str_list
 from contextunity.core.types import JsonDict, JsonValue, is_json_dict, is_object_list
 
+from ..embedding_jobs import embedding_job_status_counts
 from .codecs import json_loads
 from .store import SqliteBrainStore
 from .traces import sqlite_row_to_json_dict
@@ -294,14 +295,14 @@ class SqliteAdminOps:
             conditions.append("tenant_id = ?")
             params.append(tenant_id)
         if kind:
-            conditions.append("node_kind = ?")
+            conditions.append("cell_kind = ?")
             params.append(kind)
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
         with self._storage.get_sqlite_connection() as db:
             cursor = db.execute(
                 f"""
-                SELECT id, node_kind, source_type, title,
+                SELECT id, cell_kind, source_type, title,
                        SUBSTR(content, 1, 200) AS content_preview,
                        tenant_id, created_at
                 FROM cells
@@ -316,7 +317,7 @@ class SqliteAdminOps:
         return [
             {
                 "id": str(sqlite_row_to_json_dict(row).get("id") or ""),
-                "node_kind": str(sqlite_row_to_json_dict(row).get("node_kind") or ""),
+                "cell_kind": str(sqlite_row_to_json_dict(row).get("cell_kind") or ""),
                 "source_type": str(sqlite_row_to_json_dict(row).get("source_type") or ""),
                 "title": str(sqlite_row_to_json_dict(row).get("title") or ""),
                 "content_preview": str(sqlite_row_to_json_dict(row).get("content_preview") or ""),
@@ -344,12 +345,40 @@ class SqliteAdminOps:
                 f"SELECT COUNT(*) AS total FROM cells {cells_where}",
                 params,
             ).fetchone()
+            source_rows = db.execute(
+                f"""
+                SELECT source_type, COUNT(*) AS total
+                FROM cells
+                {cells_where}
+                GROUP BY source_type
+                ORDER BY source_type
+                """,
+                params,
+            ).fetchall()
+            job_rows = db.execute(
+                f"""
+                SELECT status, COUNT(*) AS count
+                FROM cell_embedding_jobs
+                {cells_where}
+                GROUP BY status
+                ORDER BY status
+                """,
+                params,
+            ).fetchall()
 
         episode_count = as_int(sqlite_row_to_json_dict(ep_row).get("total")) if ep_row else 0
         cells_count = as_int(sqlite_row_to_json_dict(cells_row).get("total")) if cells_row else 0
+        source_types: JsonDict = {
+            str(sqlite_row_to_json_dict(row).get("source_type") or "unknown"): as_int(
+                sqlite_row_to_json_dict(row).get("total")
+            )
+            for row in source_rows
+        }
+        job_counts = embedding_job_status_counts(sqlite_row_to_json_dict(row) for row in job_rows)
         return {
-            "episodes": {"count": episode_count},
-            "cells": {"count": cells_count},
+            "episodic_events": {"count": episode_count},
+            "cells": {"count": cells_count, "by_source_type": source_types},
+            "embedding_jobs": job_counts,
         }
 
     def get_analytics_summary(self, *, tenant_id: str | None, hours: int | None) -> JsonDict:
@@ -564,6 +593,7 @@ class AsyncSqliteAdminOps:
     """Async ``AdminQueryProtocol`` wrapper over sync ``SqliteAdminOps``."""
 
     def __init__(self, storage: SqliteBrainStore) -> None:
+        self._storage = storage
         self._ops = SqliteAdminOps(storage)
 
     async def list_tenants(self) -> list[JsonDict]:
@@ -633,6 +663,73 @@ class AsyncSqliteAdminOps:
 
     async def get_system_analytics(self, *, tenant_id: str | None, hours: int | None) -> JsonDict:
         return self._ops.get_system_analytics(tenant_id=tenant_id, hours=hours)
+
+    # ── BrainCell canonical (Phase 3) ──────────────────────────────
+
+    async def upsert_cell(
+        self,
+        *,
+        tenant_id: str,
+        cell_kind: str,
+        content: str,
+        metadata: JsonDict | None = None,
+        cell_id: str | None = None,
+        user_id: str | None = None,
+        scope_path: str | None = None,
+        content_hash: str | None = None,
+        source_type: str = "manual",
+        source_ref: str | None = None,
+        confidence: float = 0.5,
+        visibility: str = "tenant",
+    ) -> JsonDict:
+        return await self._storage.upsert_cell(
+            tenant_id=tenant_id,
+            cell_kind=cell_kind,
+            content=content,
+            metadata=metadata,
+            cell_id=cell_id,
+            user_id=user_id,
+            scope_path=scope_path,
+            content_hash=content_hash,
+            source_type=source_type,
+            source_ref=source_ref,
+            confidence=confidence,
+            visibility=visibility,
+        )
+
+    async def query_cells(
+        self,
+        *,
+        tenant_id: str,
+        query_text: str | None = None,
+        cell_kind: str | None = None,
+        source_type: str | None = None,
+        scope_path: str | None = None,
+        metadata_filter: JsonDict | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[JsonDict]:
+        return await self._storage.query_cells(
+            tenant_id=tenant_id,
+            query_text=query_text,
+            cell_kind=cell_kind,
+            source_type=source_type,
+            scope_path=scope_path,
+            metadata_filter=metadata_filter,
+            limit=limit,
+            offset=offset,
+            user_id=user_id,
+        )
+
+    async def get_cell(
+        self, *, tenant_id: str, cell_id: str, user_id: str | None = None
+    ) -> JsonDict | None:
+        return await self._storage.get_cell(
+            tenant_id=tenant_id,
+            cell_id=cell_id,
+            user_id=user_id,
+        )
 
 
 def _episode_payload(row: JsonDict) -> JsonDict:

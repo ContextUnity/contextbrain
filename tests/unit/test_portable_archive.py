@@ -1,4 +1,4 @@
-"""Tests for Portable Archive v1 — export, validation, import, embeddings.
+"""Tests for Portable Archive export, validation, import, and embeddings.
 
 Run: ``uv run pytest services/brain/tests/unit/test_portable_archive.py -v``
 """
@@ -19,7 +19,7 @@ from contextunity.brain.core.exceptions import BrainValidationError
 from contextunity.brain.storage.portable import (
     BrainPortableArchiveReader,
     BrainPortableArchiveWriter,
-    FactRecord,
+    CellRecord,
     PortableManifest,
     SynapseRecord,
     import_portable_archive,
@@ -50,19 +50,6 @@ TENANT = "export-tenant"
 
 
 class TestParseRecord:
-    def test_parse_valid(self):
-        line = json.dumps(
-            {
-                "type": "fact",
-                "tenant_id": "t",
-                "user_id": "u",
-                "fact_key": "k",
-                "fact_value": "v",
-            }
-        )
-        rec = parse_record(line)
-        assert isinstance(rec, FactRecord)
-
     def test_parse_synapse_record(self):
         line = json.dumps(
             {
@@ -84,11 +71,41 @@ class TestParseRecord:
         with pytest.raises(BrainValidationError, match="Unknown record type"):
             parse_record('{"type": "alien"}')
 
+    def test_current_format_rejects_legacy_cell_kind(self):
+        with pytest.raises(ValueError, match="node_kind"):
+            parse_record(
+                json.dumps(
+                    {
+                        "type": "cell",
+                        "tenant_id": "t",
+                        "id": "cell-1",
+                        "content": "invalid current record",
+                        "node_kind": "fact",
+                    }
+                )
+            )
+
 
 # ── Export ────────────────────────────────────────────────────────
 
 
 class TestExport:
+    def test_export_excludes_fixture_tenant(self, store, run, tmp_path):
+        run(
+            store.upsert_cell(
+                tenant_id="_test",
+                cell_kind="fact",
+                content="synthetic fixture",
+            )
+        )
+
+        manifest = run(
+            BrainPortableArchiveWriter(tmp_path / "fixture-export", 8).export(store, ["_test"])
+        )
+
+        assert "_test" not in manifest.tenants
+        assert manifest.record_counts == {}
+
     def test_export_includes_blackboard(self, store, run, tmp_path):
         run(
             store.write_blackboard(
@@ -130,11 +147,11 @@ class TestExport:
             )
         )
         run(
-            store.upsert_fact(
-                user_id="u1",
+            store.upsert_cell(
                 tenant_id=TENANT,
-                key="color",
-                value="blue",
+                user_id="u1",
+                cell_kind="fact",
+                content="color=blue",
             )
         )
         run(
@@ -159,7 +176,7 @@ class TestExport:
         assert TENANT in manifest.tenants
         assert manifest.record_counts.get("taxonomy", 0) >= 1
         assert manifest.record_counts.get("trace", 0) >= 1
-        assert manifest.record_counts.get("fact", 0) >= 1
+        assert manifest.record_counts.get("cell", 0) >= 1
         assert manifest.record_counts.get("synapse", 0) == 1
 
         errors = BrainPortableArchiveReader(archive_dir).validate()
@@ -167,11 +184,11 @@ class TestExport:
 
     def test_idempotent_export(self, store, run, tmp_path):
         run(
-            store.upsert_fact(
-                user_id="u1",
+            store.upsert_cell(
                 tenant_id=TENANT,
-                key="k",
-                value="v",
+                user_id="u1",
+                cell_kind="fact",
+                content="k=v",
             )
         )
         dir1, dir2 = tmp_path / "exp1", tmp_path / "exp2"
@@ -203,11 +220,11 @@ class TestValidate:
 class TestImport:
     def test_dry_run_returns_counts(self, store, run, tmp_path):
         run(
-            store.upsert_fact(
-                user_id="u1",
+            store.upsert_cell(
                 tenant_id=TENANT,
-                key="fav",
-                value="red",
+                user_id="u1",
+                cell_kind="fact",
+                content="fav=red",
             )
         )
         archive_dir = tmp_path / "dry"
@@ -215,15 +232,20 @@ class TestImport:
 
         result = run(import_portable_archive(store, archive_dir, dry_run=True))
         assert result["ok"] is True
-        assert result["counts"].get("fact", 0) >= 1
+        assert result["counts"].get("cell", 0) >= 1
 
     def test_actual_import(self, store, run, tmp_path):
         run(
-            store.upsert_fact(
-                user_id="u1",
+            store.upsert_cell(
                 tenant_id=TENANT,
-                key="name",
-                value="Alice",
+                user_id="u1",
+                cell_kind="fact",
+                content="name=Alice",
+                source_type="auto_extract",
+                source_ref="trace-1",
+                scope_path="acme.memory",
+                confidence=0.7,
+                visibility="user",
             )
         )
         run(
@@ -252,20 +274,27 @@ class TestImport:
         )
         result = run(import_portable_archive(target, archive_dir, dry_run=False))
         assert result["ok"] is True
-        assert result["counts"].get("fact", 0) >= 1
+        assert result["counts"].get("cell", 0) >= 1
         assert result["counts"].get("blackboard", 0) >= 1
         assert result["counts"].get("taxonomy", 0) >= 1
 
-        facts = run(target.get_user_facts(user_id="u1", tenant_id=TENANT))
-        assert len(facts) >= 1
+        # legacy get_user_facts removed; query via cells instead
+        cells = run(target.query_cells(tenant_id=TENANT, cell_kind="fact", limit=10))
+        assert len(cells) >= 1
+        imported = next(cell for cell in cells if cell["content"] == "name=Alice")
+        assert imported["source_type"] == "auto_extract"
+        assert imported["source_ref"] == "trace-1"
+        assert imported["scope_path"] == "acme.memory"
+        assert imported["confidence"] == 0.7
+        assert imported["visibility"] == "user"
 
     def test_tenant_remap(self, store, run, tmp_path):
         run(
-            store.upsert_fact(
-                user_id="u1",
+            store.upsert_cell(
                 tenant_id=TENANT,
-                key="x",
-                value="y",
+                user_id="u1",
+                cell_kind="fact",
+                content="x=y",
             )
         )
         archive_dir = tmp_path / "remap"
@@ -283,10 +312,10 @@ class TestImport:
                 tenant_map={TENANT: "remapped"},
             )
         )
-        facts = run(target.get_user_facts(user_id="u1", tenant_id="remapped"))
-        assert len(facts) >= 1
+        cells = run(target.query_cells(tenant_id="remapped", cell_kind="fact", limit=5))
+        assert len(cells) >= 1
         # Original tenant empty
-        assert run(target.get_user_facts(user_id="u1", tenant_id=TENANT)) == []
+        assert run(target.query_cells(tenant_id=TENANT, cell_kind="fact", limit=5)) == []
 
     def test_invalid_archive_raises(self, run, tmp_path):
         target = SqliteBrainStore(
@@ -421,13 +450,38 @@ class TestImport:
 
 
 class TestEmbeddingValidation:
+    def test_referenced_embedding_file_is_required(self, tmp_path):
+        archive_dir = tmp_path / "missing-embeddings"
+        archive_dir.mkdir()
+        (archive_dir / "manifest.json").write_text(
+            PortableManifest(vector_dim=8).model_dump_json(),
+        )
+        (archive_dir / "records.jsonl").write_text(
+            CellRecord(
+                tenant_id=TENANT,
+                id="cell-1",
+                content="has a vector reference",
+                cell_kind="fact",
+                content_hash="sha256:cell-1",
+                confidence=0.5,
+                created_at="2026-07-13T00:00:00+00:00",
+                updated_at="2026-07-13T00:00:00+00:00",
+                embedding_ref="emb:cell:cell-1",
+            ).model_dump_json()
+            + "\n",
+        )
+
+        errors = BrainPortableArchiveReader(archive_dir).validate()
+
+        assert errors == ["Missing embeddings.jsonl for referenced vectors"]
+
     def test_no_orphan_refs(self, store, run, tmp_path):
         run(
-            store.upsert_fact(
-                user_id="u1",
+            store.upsert_cell(
                 tenant_id=TENANT,
-                key="k",
-                value="v",
+                user_id="u1",
+                cell_kind="fact",
+                content="k=v",
             )
         )
         archive_dir = tmp_path / "emb"

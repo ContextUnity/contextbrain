@@ -21,7 +21,11 @@ from contextunity.core.types import JsonDict, is_json_dict
 from pydantic import ValidationError
 
 from ...core.config import get_core_config
-from ...core.exceptions import BrainValidationError, SynapseFeatureDisabledError
+from ...core.exceptions import (
+    BrainValidationError,
+    SynapseFeatureDisabledError,
+    SynapseTenantMismatchError,
+)
 from ...payloads import QuerySynapsesPayload, RecordSynapsePayload, UpdateSynapseQPayload
 from ...reward_policy import apply_node_execution_reward, is_trainable_tenant
 from ...storage.contracts import BrainStorageProtocol
@@ -184,14 +188,23 @@ class SynapseHandlersMixin(BrainHandlerBase):
         _require_synapses_enabled()
         raw_payload = unit.payload if is_json_dict(unit.payload) else {}
         raw_tenant_id = raw_payload.get("tenant_id")
-        tenant_id = resolve_tenant_id(
-            token, raw_tenant_id if isinstance(raw_tenant_id, str) else None
-        )
+        payload_tenant = raw_tenant_id if isinstance(raw_tenant_id, str) else None
+        # Spoofed payload tenant is a typed policy_fault (SynapseTenantMismatchError),
+        # not the generic SECURITY_ERROR from resolve_tenant_id. Check before resolve
+        # so the gRPC code maps to BRAIN_SYNAPSE_TENANT_MISMATCH / PERMISSION_DENIED.
+        if (
+            payload_tenant
+            and token is not None
+            and hasattr(token, "can_access_tenant")
+            and not token.can_access_tenant(payload_tenant)
+        ):
+            raise SynapseTenantMismatchError(tenant_id=payload_tenant)
+        tenant_id = resolve_tenant_id(token, payload_tenant)
         raw_payload = await _maybe_convert_action_data_to_ref(
             self.storage, raw_payload, tenant_id=tenant_id
         )
-        # RecordSynapsePayload's own validator already rejects a spoofed
-        # tenant_id (typed policy_fault) against the verified auth context.
+        # RecordSynapsePayload's own validator also rejects spoofed tenant_id
+        # when auth context is set (unit / in-process construction paths).
         try:
             params = RecordSynapsePayload.model_validate(raw_payload)
         except ValidationError as exc:

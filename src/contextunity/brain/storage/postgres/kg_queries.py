@@ -157,7 +157,7 @@ async def graph_search(
 
     # Step 2: Fetch node attributes for all referenced nodes
     node_sql = """
-    SELECT id, node_kind, source_type, source_id, title, content,
+    SELECT id, cell_kind, source_type, source_id, title, content,
            struct_data, scope_path, tenant_id
     FROM cells
     WHERE tenant_id = %s AND id = ANY(%s::text[])
@@ -174,7 +174,7 @@ async def graph_search(
         nodes.append(
             {
                 "id": as_str(raw_row.get("id")),
-                "node_kind": as_str(raw_row.get("node_kind")),
+                "cell_kind": as_str(raw_row.get("cell_kind")),
                 "source_type": as_str(raw_row.get("source_type")),
                 "title": as_str(raw_row.get("title")),
                 "content": content[:500],

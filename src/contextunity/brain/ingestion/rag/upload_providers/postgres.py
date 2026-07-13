@@ -182,14 +182,14 @@ class PostgresUploadProvider(UploadProvider):
                     _ = await conn.execute(
                         """
                         INSERT INTO cells (
-                            id, tenant_id, user_id, node_kind, source_type, source_id, title,
+                            id, tenant_id, user_id, cell_kind, source_type, source_id, title,
                             content, struct_data, keywords_text, content_hash, embedding
                         )
                         VALUES (
                             %(id)s, %(tenant_id)s, %(user_id)s, 'chunk', %(source_type)s, %(source_id)s,
                             %(title)s, %(content)s, %(struct_data)s, %(keywords_text)s, %(content_hash)s, %(embedding)s
                         )
-                        ON CONFLICT (node_kind, content_hash) DO NOTHING
+                        ON CONFLICT (cell_kind, content_hash) DO NOTHING
                         """,
                         {
                             "id": payload.get("id"),

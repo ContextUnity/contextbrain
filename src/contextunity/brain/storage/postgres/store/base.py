@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from abc import ABC
 from contextlib import AbstractAsyncContextManager
 
 from contextunity.core import get_contextunit_logger
+from contextunity.core.braincell_identity import source_owned_content_hash
+from contextunity.core.types import JsonDict
 from psycopg import AsyncConnection, sql
 from psycopg_pool import AsyncConnectionPool
 
+from contextunity.brain.cell_confidence import cap_confidence
+from contextunity.brain.embedding_space import DEFAULT_EMBEDDING_DIMENSION
+
+from ...user_facts_guard import guard_and_drop_postgres_user_facts
 from ..models import BrainStorageInterface
 from ..schema import (
     build_column_backfill_sql,
@@ -18,6 +25,7 @@ from ..schema import (
     build_rls_sql,
     build_schema_sql,
 )
+from .helpers import Json, fetch_all
 
 logger = get_contextunit_logger(__name__)
 
@@ -34,7 +42,7 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
 
     Environment:
         BRAIN_SCHEMA: Schema name (default: 'brain')
-        PGVECTOR_DIM: Embedding dimension (default: 1536)
+        PGVECTOR_DIM: Embedding dimension (default: 768)
     """
 
     def __init__(
@@ -52,6 +60,10 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
         self._schema: str = schema
         self._pool: AsyncConnectionPool | None = None
 
+    def vector_backend_available(self) -> bool:
+        """Postgres store startup provisions and requires the pgvector backend."""
+        return True
+
     async def _get_pool(self) -> AsyncConnectionPool:
         """Get or create async connection pool.
 
@@ -68,6 +80,9 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
                 check=AsyncConnectionPool.check_connection,
                 configure=self._configure_connection,
                 kwargs={
+                    # Fail fast when host→Docker routing is broken (e.g. Tailscale);
+                    # avoids 60s hangs that look like a missing BRAIN_TEST_DSN.
+                    "connect_timeout": 5,
                     "keepalives": 1,
                     "keepalives_idle": 60,
                     "keepalives_interval": 10,
@@ -139,7 +154,7 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
         self,
         *,
         include_commerce: bool = False,
-        vector_dim: int = 768,
+        vector_dim: int = DEFAULT_EMBEDDING_DIMENSION,
     ) -> None:
         """Ensure database schema and tables exist.
 
@@ -196,6 +211,8 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
                 for stmt in build_preflight_rename_sql():
                     _ = await conn.execute(stmt.encode())
 
+                await guard_and_drop_postgres_user_facts(conn)
+
                 # 5. Run all DDL statements (all use IF NOT EXISTS)
                 statements = build_schema_sql(
                     vector_dim=vector_dim,
@@ -249,3 +266,166 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
             str: The resulting string value.
         """
         return self._schema
+
+    async def upsert_cell(
+        self,
+        *,
+        tenant_id: str,
+        cell_kind: str,
+        content: str,
+        metadata: JsonDict | None = None,
+        cell_id: str | None = None,
+        user_id: str | None = None,
+        scope_path: str | None = None,
+        content_hash: str | None = None,
+        source_type: str = "manual",
+        source_ref: str | None = None,
+        confidence: float = 0.5,
+        visibility: str = "tenant",
+    ) -> JsonDict:
+        """Upsert BrainCell with content_hash idempotency (pg)."""
+        if content_hash is None:
+            content_hash = source_owned_content_hash(
+                producer=source_type,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                cell_kind=cell_kind,
+                content=content,
+            )
+        if cell_id is None:
+            cell_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{tenant_id}:{content_hash}"))
+        capped = cap_confidence(source_type, confidence)
+        meta = dict(metadata or {})
+        meta.update(
+            {
+                "cell_kind": cell_kind,
+                "confidence": capped,
+                "visibility": visibility,
+            }
+        )
+        if source_ref is not None:
+            meta["source_ref"] = source_ref
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
+            rows = await fetch_all(
+                conn,
+                """
+                INSERT INTO cells (
+                    id, tenant_id, user_id, cell_kind, source_type, source_id, source_ref,
+                    content, struct_data, scope_path, content_hash, confidence, visibility
+                ) VALUES (
+                    %(id)s, %(tenant_id)s, %(user_id)s, %(cell_kind)s, %(source_type)s,
+                    %(source_id)s, %(source_ref)s,
+                    %(content)s, %(struct_data)s, %(scope_path)s, %(content_hash)s,
+                    %(confidence)s, %(visibility)s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    content = excluded.content,
+                    struct_data = excluded.struct_data,
+                    scope_path = excluded.scope_path,
+                    content_hash = excluded.content_hash,
+                    source_id = excluded.source_id,
+                    source_ref = excluded.source_ref,
+                    source_type = excluded.source_type,
+                    confidence = excluded.confidence,
+                    visibility = excluded.visibility,
+                    updated_at = now()
+                RETURNING id, tenant_id, cell_kind, source_type,
+                          scope_path, content_hash, confidence, visibility, created_at, updated_at
+                """,
+                {
+                    "id": cell_id,
+                    "tenant_id": tenant_id,
+                    "user_id": user_id,
+                    "cell_kind": cell_kind,
+                    "source_type": source_type,
+                    "source_id": source_ref,
+                    "source_ref": source_ref,
+                    "content": content,
+                    "struct_data": Json(meta),
+                    "scope_path": scope_path,
+                    "content_hash": content_hash,
+                    "confidence": capped,
+                    "visibility": visibility,
+                },
+            )
+            if rows:
+                return rows[0]
+            return JsonDict(
+                {
+                    "id": cell_id,
+                    "tenant_id": tenant_id,
+                    "cell_kind": cell_kind,
+                    "content_hash": content_hash,
+                }
+            )
+
+    async def query_cells(
+        self,
+        *,
+        tenant_id: str,
+        query_text: str | None = None,
+        cell_kind: str | None = None,
+        source_type: str | None = None,
+        scope_path: str | None = None,
+        metadata_filter: JsonDict | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[JsonDict]:
+        """Query cells with filters (pg). Supports query_text via tsvector, metadata @> ."""
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
+            where_clauses = ["tenant_id = %(tenant_id)s"]
+            params: dict[str, object] = {"tenant_id": tenant_id, "limit": limit, "offset": offset}
+            if user_id:
+                where_clauses.append("user_id = %(user_id)s")
+                params["user_id"] = user_id
+            if cell_kind:
+                where_clauses.append("cell_kind = %(cell_kind)s")
+                params["cell_kind"] = cell_kind
+            if source_type:
+                where_clauses.append("source_type = %(source_type)s")
+                params["source_type"] = source_type
+            if scope_path:
+                where_clauses.append("scope_path = %(scope_path)s")
+                params["scope_path"] = scope_path
+            if query_text:
+                where_clauses.append("search_vector @@ plainto_tsquery('simple', %(query_text)s)")
+                params["query_text"] = query_text
+            if metadata_filter:
+                where_clauses.append("struct_data @> %(metadata_filter)s::jsonb")
+                params["metadata_filter"] = Json(metadata_filter)
+            sql = f"""
+                SELECT id, tenant_id, cell_kind, content, struct_data as metadata,
+                       content_hash, scope_path, source_type,
+                       COALESCE(source_ref, source_id) as source_ref,
+                       confidence, visibility
+                FROM cells
+                WHERE {" AND ".join(where_clauses)}
+                ORDER BY created_at DESC
+                LIMIT %(limit)s
+                OFFSET %(offset)s
+            """
+            rows = await fetch_all(conn, sql, params)
+            return rows
+
+    async def get_cell(
+        self, *, tenant_id: str, cell_id: str, user_id: str | None = None
+    ) -> JsonDict | None:
+        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
+            where = ["tenant_id = %(tenant_id)s", "id = %(cell_id)s"]
+            params: dict[str, object] = {"tenant_id": tenant_id, "cell_id": cell_id}
+            if user_id:
+                where.append("(user_id = %(user_id)s OR user_id IS NULL)")
+                params["user_id"] = user_id
+            rows = await fetch_all(
+                conn,
+                f"""
+                SELECT id, tenant_id, cell_kind, content, struct_data as metadata,
+                       content_hash, source_type, COALESCE(source_ref, source_id) as source_ref,
+                       scope_path, confidence, visibility, created_at, updated_at
+                FROM cells
+                WHERE {" AND ".join(where)}
+                """,
+                params,
+            )
+            return rows[0] if rows else None

@@ -1,4 +1,4 @@
-"""Portable Archive v2 — Writer.
+"""Portable Archive writer.
 
 Exports store data into a validated JSONL archive.
 """
@@ -19,8 +19,13 @@ from contextunity.core.narrowing import (
     as_str,
     as_str_list,
 )
+from contextunity.core.tenant_policy import (
+    is_production_export_tenant,
+    validate_tenant_id,
+)
 from pydantic import BaseModel
 
+from contextunity.brain.embedding_space import DEFAULT_EMBEDDING_DIMENSION
 from contextunity.brain.storage.contracts import BrainStorageProtocol
 
 from ..sqlite.codecs import fetchone_row, sqlite_cell
@@ -30,7 +35,6 @@ from .models import (
     CellRecord,
     EmbeddingRecord,
     EpisodeRecord,
-    FactRecord,
     PortableManifest,
     SynapseRecord,
     TaxonomyRecord,
@@ -51,7 +55,11 @@ class BrainPortableArchiveWriter:
     output_dir: Path
     vector_dim: int
 
-    def __init__(self, output_dir: Path, vector_dim: int = 1536) -> None:
+    def __init__(
+        self,
+        output_dir: Path,
+        vector_dim: int = DEFAULT_EMBEDDING_DIMENSION,
+    ) -> None:
         self.output_dir = output_dir
         self.vector_dim = vector_dim
         self._counts: dict[str, int] = {}
@@ -73,12 +81,15 @@ class BrainPortableArchiveWriter:
             open(embeddings_path, "w", encoding="utf-8") as ef,
         ):
             for tenant_id in tenant_ids:
+                validate_tenant_id(tenant_id, allow_reserved=True)
+                if not is_production_export_tenant(tenant_id):
+                    logger.info("Skipping non-production tenant from portable export")
+                    continue
                 self._tenants.add(tenant_id)
                 await self._export_blackboard(store, tenant_id, rf)
                 await self._export_taxonomy(store, tenant_id, rf)
                 await self._export_traces(store, tenant_id, rf)
                 await self._export_episodes(store, tenant_id, rf, ef)
-                await self._export_facts(store, tenant_id, rf)
                 await self._export_graph(store, tenant_id, rf, ef)
                 await self._export_synapses(store, tenant_id, rf)
 
@@ -241,37 +252,6 @@ class BrainPortableArchiveWriter:
                     ),
                 )
 
-    async def _export_facts(
-        self,
-        store: BrainStorageProtocol,
-        tenant_id: str,
-        handle: TextIO,
-    ) -> None:
-        if not is_sqlite_export_store(store):
-            return
-        with store.get_sqlite_connection() as db:
-            cursor = db.execute(
-                "SELECT DISTINCT user_id FROM user_facts WHERE tenant_id = ?",
-                (tenant_id,),
-            )
-            uid_rows: list[sqlite3.Row] = list(cursor.fetchall())
-            user_ids = [as_str(sqlite_cell(row, "user_id")) for row in uid_rows]
-
-        for uid in user_ids:
-            facts = await store.get_user_facts(user_id=uid, tenant_id=tenant_id)
-            for fact in facts:
-                self._write(
-                    handle,
-                    FactRecord(
-                        tenant_id=tenant_id,
-                        user_id=uid,
-                        fact_key=as_str(fact.get("fact_key")),
-                        fact_value=as_str(fact.get("fact_value")),
-                        confidence=as_float(fact.get("confidence"), default=1.0),
-                        source_id=as_str(fact.get("source_id")) or None,
-                    ),
-                )
-
     async def _export_graph(
         self,
         store: BrainStorageProtocol,
@@ -311,14 +291,17 @@ class BrainPortableArchiveWriter:
                         tenant_id=tenant_id,
                         id=node_id,
                         content=as_str(d.get("content")),
-                        node_kind=as_str(d.get("node_kind"), default="concept"),
-                        source_type=as_str(d.get("source_type")) or None,
-                        source_id=as_str(d.get("source_id")) or None,
-                        title=as_str(d.get("title")) or None,
-                        keywords_text=as_str(d.get("keywords_text")) or None,
+                        cell_kind=as_str(d.get("cell_kind"), default="concept"),
+                        source_type=as_str(d.get("source_type"), default="manual"),
+                        source_ref=as_str(d.get("source_ref")) or None,
                         scope_path=as_str(d.get("scope_path")) or None,
+                        content_hash=as_str(d.get("content_hash")),
+                        confidence=as_float(d.get("confidence")),
+                        visibility=as_str(d.get("visibility"), default="tenant"),
                         metadata=json_dict_field(d.get("struct_data")),
                         user_id=as_str(d.get("user_id")) or None,
+                        created_at=as_str(d.get("created_at")),
+                        updated_at=as_str(d.get("updated_at")),
                         embedding_ref=emb_ref if has_emb else None,
                     ),
                 )

@@ -7,10 +7,21 @@ that are caught by ``@grpc_error_handler`` which does the proper
 
 from __future__ import annotations
 
+from typing import Literal
+
 import grpc
 from contextunity.core import ContextToken, ContextUnit
 from contextunity.core.exceptions import ContextUnityError, SecurityError
+from contextunity.core.permissions import Permissions
+from contextunity.core.pii import contains_pii
 from contextunity.core.sdk.service_helpers import make_response, parse_unit
+from contextunity.core.tenant_policy import (
+    SYSTEM_ALLOWED_CELL_KINDS,
+    SYSTEM_ALLOWED_RECORD_KINDS,
+    SYSTEM_ALLOWED_SOURCE_TYPES,
+    classify_tenant,
+    validate_tenant_id,
+)
 
 
 # Fetch from verified auth context instead of re-parsing metadata
@@ -123,6 +134,9 @@ def validate_tenant_access(
     token: ContextToken | None,
     tenant_id: str,
     _context: grpc.ServicerContext,
+    *,
+    operation: Literal["read", "write"] = "read",
+    record_kind: str | None = None,
 ) -> None:
     """Validate the token grants access to the specified tenant.
 
@@ -138,15 +152,73 @@ def validate_tenant_access(
             contradicts the token.
     """
 
+    if not tenant_id:
+        return  # Token-only legacy paths derive the tenant before storage access.
+    validate_tenant_id(tenant_id, allow_reserved=True)
     if token is None:
         return  # Missing token is handled by validate_token_for_*.
-
-    if not tenant_id:
-        return  # Token-only mode: server derives tenant from the token.
 
     if hasattr(token, "can_access_tenant") and not token.can_access_tenant(tenant_id):
         raise SecurityError(
             message=f"Tenant access denied: {tenant_id}",
+        )
+
+    tenant_class = classify_tenant(tenant_id)
+    has_permission = getattr(token, "has_permission", None)
+    if tenant_class == "documentation":
+        required = Permissions.DOCS_WRITE if operation == "write" else Permissions.DOCS_READ
+        if not callable(has_permission) or not has_permission(required):
+            raise SecurityError(
+                message=f"Documentation tenant access requires {required}",
+            )
+    elif tenant_class == "system":
+        is_system = getattr(token, "user_namespace", "") == "system"
+        is_admin = callable(has_permission) and has_permission(Permissions.ADMIN_ALL)
+        if not (is_system or is_admin):
+            raise SecurityError(message="System tenant access requires a system or admin token")
+        if operation == "write" and record_kind not in SYSTEM_ALLOWED_RECORD_KINDS:
+            raise SecurityError(
+                message="System tenant accepts only platform-state record kinds",
+            )
+
+
+def validate_tenant_write_policy(
+    token: ContextToken | None,
+    tenant_id: str,
+    _context: grpc.ServicerContext,
+    *,
+    content: str | None = None,
+    cell_kind: str | None = None,
+    source_type: str | None = None,
+    record_kind: str = "cell",
+) -> None:
+    """Enforce reserved-tenant write rules after permission validation."""
+    validate_tenant_access(
+        token,
+        tenant_id,
+        _context,
+        operation="write",
+        record_kind=record_kind,
+    )
+    tenant_class = classify_tenant(tenant_id)
+    if tenant_class == "documentation":
+        if cell_kind not in {"document", "documentation"} or source_type != "documentation":
+            raise SecurityError(
+                message="_doc accepts documentation BrainCells only",
+            )
+    elif tenant_class == "test" and content is not None:
+        if contains_pii(content):
+            raise SecurityError(message="_test accepts depersonalized fixture content only")
+    elif (
+        tenant_class == "system"
+        and record_kind == "cell"
+        and (
+            cell_kind not in SYSTEM_ALLOWED_CELL_KINDS
+            or source_type not in SYSTEM_ALLOWED_SOURCE_TYPES
+        )
+    ):
+        raise SecurityError(
+            message="_system accepts only config/summary platform-state cells",
         )
 
 
@@ -156,29 +228,55 @@ def resolve_tenant_id(
 ) -> str:
     """Derive the canonical tenant_id for this RPC.
 
-    Fail-closed: when neither the token's ``allowed_tenants`` nor the
-    payload provides a tenant, the request is rejected — there is no
-    shared fallback tenant.
+    Fail-closed per contract-boundaries:
+    - If explicit payload_tenant_id is given, use it (must be allowed by token if token has scope).
+    - Else if token has exactly one allowed_tenant, use it.
+    - 0 tenants or >1 tenants without explicit payload_tenant_id -> raise SecurityError.
+    Never silently pick allowed_tenants[0] (order-dependent, multi-tenant unsafe).
+
+    Token is SPOT for tenant identity. Matches router resolve_tenant_from_state pattern.
 
     Args:
         token (ContextToken | None): The security token for authentication.
-        payload_tenant_id (str | None): The payload tenant id parameter.
+        payload_tenant_id (str | None): The payload tenant id parameter (explicit).
 
     Returns:
-        str: The resulting string value.
+        str: The resolved tenant_id.
 
     Raises:
-        SecurityError: If no tenant can be derived from token or payload.
+        SecurityError: If cannot unambiguously resolve (0 or >1 without explicit).
     """
-    if token is not None and getattr(token, "allowed_tenants", None):
-        allowed = token.allowed_tenants
-        if payload_tenant_id and payload_tenant_id in allowed:
-            return payload_tenant_id
-        return allowed[0]
+    allowed: tuple[str, ...] = ()
+    if token is not None:
+        allowed = tuple(getattr(token, "allowed_tenants", None) or ())
+
     if payload_tenant_id:
+        if allowed and payload_tenant_id not in allowed:
+            raise SecurityError(
+                message=(
+                    f"Payload tenant_id {payload_tenant_id!r} not in "
+                    f"token.allowed_tenants={allowed}"
+                ),
+            )
         return payload_tenant_id
+
+    if len(allowed) == 1:
+        return allowed[0]
+
+    if len(allowed) == 0:
+        raise SecurityError(
+            message=(
+                "Cannot resolve tenant: token has no allowed_tenants "
+                "and no explicit tenant_id in payload."
+            ),
+        )
+
+    # len(allowed) > 1 and no explicit payload_tenant_id
     raise SecurityError(
-        message="Cannot resolve tenant: token has no allowed_tenants and payload has no tenant_id.",
+        message=(
+            f"Cannot resolve tenant: multiple allowed_tenants={sorted(allowed)} "
+            "and no explicit tenant_id. Provide tenant_id or narrow scope."
+        ),
     )
 
 
@@ -211,7 +309,9 @@ def validate_user_access(
 
     if user_id is None:
         raise SecurityError(
-            message="Tenant-wide access denied for user-bound token. Must specify matching user_id.",
+            message=(
+                "Tenant-wide access denied for user-bound token. Must specify matching user_id."
+            ),
         )
     if token.user_id != user_id:
         raise SecurityError(
@@ -226,6 +326,7 @@ __all__ = [
     "validate_token_for_read",
     "validate_token_for_write",
     "validate_tenant_access",
+    "validate_tenant_write_policy",
     "resolve_tenant_id",
     "validate_user_access",
 ]

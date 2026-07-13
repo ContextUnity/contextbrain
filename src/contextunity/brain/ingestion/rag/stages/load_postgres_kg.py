@@ -91,7 +91,7 @@ def _load_nodes(path: Path) -> list[GraphNode]:
             GraphNode(
                 id=as_str(row.get("id")),
                 content=as_str(row.get("content")),
-                node_kind=as_str(row.get("node_kind"), default="concept"),
+                cell_kind=as_str(row.get("cell_kind"), default="concept"),
                 source_type=as_str(row.get("source_type")) or None,
                 source_id=as_str(row.get("source_id")) or None,
                 title=as_str(row.get("title")) or None,

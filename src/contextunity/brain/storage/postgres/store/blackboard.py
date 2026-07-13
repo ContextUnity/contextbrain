@@ -16,7 +16,7 @@ from contextunity.core.parsing import json_dumps
 from contextunity.core.parsing import json_loads as parse_wire_json
 from contextunity.core.types import JsonDict, is_json_dict
 from psycopg import sql
-from psycopg.rows import tuple_row
+from psycopg.rows import dict_row
 
 from .base import PostgresStoreBase
 
@@ -123,10 +123,7 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
         # strictly batched (one storage call) while still letting us log
         # an expired-ref count separately from "never existed".
         async with await self.tenant_connection(tenant_id) as conn:
-            # Explicit `tuple_row` so the declared type matches what this
-            # function actually consumes (positional `row[N]` indexing below)
-            # instead of relying on the connection's own default row shape.
-            cur = conn.cursor(row_factory=tuple_row)
+            cur = conn.cursor(row_factory=dict_row)
             cursor = await cur.execute(
                 sql.SQL(
                     (
@@ -139,14 +136,14 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
                 ).format(placeholders),
                 (*ids, tenant_id),
             )
-            all_rows: list[tuple[object, ...]] = await cursor.fetchall()
+            all_rows: list[dict[str, object]] = await cursor.fetchall()
 
-        rows = [row for row in all_rows if not row[6]]
+        rows = [row for row in all_rows if row.get("is_expired") is not True]
         expired_count = len(all_rows) - len(rows)
 
         records: list[JsonDict] = []
         for row in rows:
-            content_cell: object = row[1]
+            content_cell = row.get("content")
             if is_json_dict(content_cell):
                 content_val = content_cell
             elif isinstance(content_cell, str):
@@ -154,7 +151,7 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
                 content_val = loaded if is_json_dict(loaded) else {}
             else:
                 content_val = {}
-            meta_cell: object = row[2]
+            meta_cell = row.get("metadata")
             if is_json_dict(meta_cell):
                 meta_val = meta_cell
             elif isinstance(meta_cell, str):
@@ -162,9 +159,9 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
                 meta_val = loaded_meta if is_json_dict(loaded_meta) else {}
             else:
                 meta_val = {}
-            created_by_cell: object = row[5]
-            id_cell: object = row[0]
-            created_at_cell: object = row[4]
+            created_by_cell = row.get("created_by")
+            id_cell = row.get("id")
+            created_at_cell = row.get("created_at")
             records.append(
                 {
                     # id/created_at come back from psycopg3 as native UUID/datetime
@@ -173,7 +170,7 @@ class BlackboardStoreMixin(PostgresStoreBase, ABC):
                     "id": str(id_cell) if isinstance(id_cell, (uuid.UUID, str)) else "",
                     "content": content_val,
                     "metadata": meta_val,
-                    "scope_path": as_str(row[3]),
+                    "scope_path": as_str(row.get("scope_path")),
                     "created_at": (
                         created_at_cell.isoformat()
                         if isinstance(created_at_cell, datetime)

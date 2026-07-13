@@ -15,8 +15,10 @@ that wiring once a real call site exists.
 Caller responsibility: none of the ``apply_*_reward`` functions take or check
 ``tenant_id`` — they operate purely on the Q-values handed to them. Callers
 MUST check ``is_trainable_tenant(tenant_id)`` first and skip calling these
-functions entirely for ``_test``/``_doc`` tenants — fixtures and documentation
-records must never feed production learning.
+functions entirely for reserved tenants — fixtures, documentation, and system
+records must never feed production learning. Portable export has a separate
+``is_production_export_tenant`` policy because documentation archives may be
+kept for operational use.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from __future__ import annotations
 from typing import Literal
 
 from contextunity.core.narrowing import as_str_list, str_list_as_json
+from contextunity.core.tenant_policy import is_production_learning_tenant
 from contextunity.core.types import JsonDict
 
 from .reward_constants import (
@@ -50,14 +53,10 @@ REWARD_SOURCES: tuple[RewardSource, ...] = (
     "pipeline_outcome",
 )
 
-# `_test` fixtures and `_doc` documentation BrainCells are excluded from
-# production learning/export by default.
-_TRAINING_EXCLUDED_TENANTS = frozenset({"_test", "_doc"})
-
 
 def is_trainable_tenant(tenant_id: str) -> bool:
     """Whether Synapses under this tenant may feed automatic reward updates."""
-    return tenant_id not in _TRAINING_EXCLUDED_TENANTS
+    return is_production_learning_tenant(tenant_id)
 
 
 # Role -> the Q dimension a `node_execution` / `session_outcome` /

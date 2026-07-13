@@ -11,9 +11,10 @@ import sqlite3
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol, runtime_checkable
 
-from contextunity.core.types import JsonDict, JsonValue
+from contextunity.core.types import JsonDict
 from psycopg import AsyncConnection
 
+from contextunity.brain.embedding_space import DEFAULT_EMBEDDING_DIMENSION
 from contextunity.brain.storage.postgres.models import (
     GraphEdge,
     GraphNode,
@@ -30,8 +31,53 @@ from contextunity.brain.storage.postgres.models import (
 TenantConnection = AsyncConnection[object] | sqlite3.Connection
 
 
+class _BrainCellStorageProtocol(Protocol):
+    """Canonical BrainCell persistence surface shared by service and admin stores."""
+
+    async def upsert_cell(
+        self,
+        *,
+        tenant_id: str,
+        cell_kind: str,
+        content: str,
+        metadata: JsonDict | None = None,
+        cell_id: str | None = None,
+        user_id: str | None = None,
+        scope_path: str | None = None,
+        content_hash: str | None = None,
+        source_type: str = "manual",
+        source_ref: str | None = None,
+        confidence: float = 0.5,
+        visibility: str = "tenant",
+    ) -> JsonDict:
+        """Upsert a canonical BrainCell (idempotent on content_hash when supplied)."""
+        ...
+
+    async def query_cells(
+        self,
+        *,
+        tenant_id: str,
+        query_text: str | None = None,
+        cell_kind: str | None = None,
+        source_type: str | None = None,
+        scope_path: str | None = None,
+        metadata_filter: JsonDict | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[JsonDict]:
+        """Query BrainCells with optional filters."""
+        ...
+
+    async def get_cell(
+        self, *, tenant_id: str, cell_id: str, user_id: str | None = None
+    ) -> JsonDict | None:
+        """Retrieve one tenant-owned BrainCell by ID."""
+        ...
+
+
 @runtime_checkable
-class BrainStorageProtocol(Protocol):
+class BrainStorageProtocol(_BrainCellStorageProtocol, Protocol):
     """Minimum storage interface consumed by Brain gRPC handlers.
 
     Every method listed here is called by at least one handler mixin.
@@ -42,15 +88,23 @@ class BrainStorageProtocol(Protocol):
     # ── Schema lifecycle ──────────────────────────────────────────
 
     async def ensure_schema(
-        self, *, include_commerce: bool = False, vector_dim: int = 1536
+        self,
+        *,
+        include_commerce: bool = False,
+        vector_dim: int = DEFAULT_EMBEDDING_DIMENSION,
     ) -> None:
         """Create or migration-verify the database tables and indices.
 
         Args:
             include_commerce: Whether to provision e-commerce specific schemas
                 (product indices, matcher tables).
-            vector_dim: Dimension of vector embedding columns. Defaults to 1536.
+            vector_dim: Dimension of vector embedding columns. Defaults to the
+                deployment-wide embedding dimension.
         """
+        ...
+
+    def vector_backend_available(self) -> bool:
+        """Return whether this backend can execute vector similarity operations."""
         ...
 
     # ── Blackboard (Flat Memory) ──────────────────────────────────
@@ -310,6 +364,59 @@ class BrainStorageProtocol(Protocol):
         """
         ...
 
+    async def enqueue_embedding_job(
+        self,
+        *,
+        tenant_id: str,
+        cell_id: str,
+        content_hash: str,
+        profile: str,
+        max_pending: int,
+    ) -> JsonDict: ...
+
+    async def claim_embedding_jobs(
+        self, *, tenant_id: str, limit: int, lease_seconds: int
+    ) -> list[JsonDict]: ...
+
+    async def complete_embedding_job(
+        self,
+        *,
+        tenant_id: str,
+        job_id: str,
+        lease_id: str,
+        vector: list[float],
+    ) -> JsonDict: ...
+
+    async def restore_cell_embedding(
+        self,
+        *,
+        tenant_id: str,
+        cell_id: str,
+        vector: list[float],
+    ) -> None:
+        """Restore an archived vector for an existing canonical BrainCell."""
+        ...
+
+    async def fail_embedding_job(
+        self, *, tenant_id: str, job_id: str, lease_id: str, error_code: str
+    ) -> JsonDict: ...
+
+    async def terminal_fail_embedding_job(
+        self, *, tenant_id: str, job_id: str, lease_id: str, error_code: str
+    ) -> JsonDict: ...
+
+    async def get_embedding_status(
+        self, *, tenant_id: str, cell_id: str, content_hash: str | None, profile: str
+    ) -> JsonDict: ...
+
+    async def get_embedding_job(
+        self, *, tenant_id: str, job_id: str, lease_id: str
+    ) -> JsonDict | None: ...
+
+    async def mark_embedding_skipped(
+        self, *, tenant_id: str, job_id: str, lease_id: str, error_code: str
+    ) -> JsonDict: ...
+
     # ── Episodic Memory ───────────────────────────────────────────
     # Handler: MemoryHandlersMixin
 
@@ -400,45 +507,6 @@ class BrainStorageProtocol(Protocol):
 
         Returns:
             The number of episodes deleted.
-        """
-        ...
-
-    # ── User Facts ────────────────────────────────────────────────
-    # Handler: MemoryHandlersMixin
-
-    async def upsert_fact(
-        self,
-        *,
-        user_id: str,
-        tenant_id: str,
-        key: str,
-        value: JsonValue,
-        confidence: float = 1.0,
-        source_id: str | None = None,
-    ) -> None:
-        """Add or update a distilled fact about a user's preferences or traits.
-
-        Used to persist long-term user personalization parameters.
-
-        Args:
-            user_id: The target user.
-            tenant_id: Tenant partition ID.
-            key: Fact category/name key (e.g., "favorite_sport").
-            value: The fact content.
-            confidence: Reliability score (0.0 to 1.0). Defaults to 1.0.
-            source_id: Optional trace/episode ID from which the fact was extracted.
-        """
-        ...
-
-    async def get_user_facts(self, *, user_id: str, tenant_id: str) -> list[JsonDict]:
-        """Retrieve all long-term personalization facts stored for a user.
-
-        Args:
-            user_id: Target user identifier.
-            tenant_id: Tenant partition ID.
-
-        Returns:
-            A list of user fact dictionaries.
         """
         ...
 
@@ -571,7 +639,7 @@ class BrainStorageProtocol(Protocol):
         ...
 
     async def decay_synapses(self, *, tenant_id: str, factor: float = 0.99) -> int:
-        """Phase 3/5-ready Q-decay hook — not implemented before Dream Cycle lands.
+        """Phase 3/5-ready Q-decay hook — not implemented before Consolidation Cycle lands.
 
         Feature-flagged off by default (``brain.yml: synapses.decay_enabled``).
         Calling this while the flag is disabled is a caller error, not a
@@ -600,7 +668,7 @@ class BrainStorageProtocol(Protocol):
 
 
 @runtime_checkable
-class AdminQueryProtocol(Protocol):
+class AdminQueryProtocol(_BrainCellStorageProtocol, Protocol):
     """Cross-tenant admin observability queries (Brain Admin RPC backing store).
 
     All methods are async so handlers can ``await`` uniformly. SQLite backends
@@ -657,4 +725,8 @@ class AdminQueryProtocol(Protocol):
     ) -> JsonDict: ...
 
 
-__all__ = ["AdminQueryProtocol", "BrainStorageProtocol", "TenantConnection"]
+__all__ = [
+    "AdminQueryProtocol",
+    "BrainStorageProtocol",
+    "TenantConnection",
+]

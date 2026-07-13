@@ -1,4 +1,4 @@
-"""Tests for synapses schema presence and reward constants.
+"""Tests for Synapse schema presence and reward constants.
 
 Schema DDL column/index name assertions are deleted — the DDL is the source
 of truth; tests that echo it provide no behavioral coverage.
@@ -7,27 +7,27 @@ of truth; tests that echo it provide no behavioral coverage.
 from __future__ import annotations
 
 
-class TestExperiencesSchema:
-    """Verify experiences table exists in the combined schema DDL."""
+class TestSynapsesSchema:
+    """Verify the Synapse table exists in the combined schema DDL."""
 
     def test_table_exists_in_schema(self):
-        from contextunity.brain.storage.postgres.schema import _experiences_schema
+        from contextunity.brain.storage.postgres.schema import _synapses_schema
 
-        stmts = _experiences_schema(1536)
+        stmts = _synapses_schema(1536)
         all_sql = " ".join(stmts)
         assert "synapses" in all_sql
 
     def test_table_has_embedding_column(self):
-        from contextunity.brain.storage.postgres.schema import _experiences_schema
+        from contextunity.brain.storage.postgres.schema import _synapses_schema
 
-        stmts = _experiences_schema(768)
+        stmts = _synapses_schema(768)
         create_stmt = stmts[0]
         assert "VECTOR(768)" in create_stmt
 
     def test_fresh_schema_fault_class_constraint_matches_core_taxonomy(self):
-        from contextunity.brain.storage.postgres.schema import _experiences_schema
+        from contextunity.brain.storage.postgres.schema import _synapses_schema
 
-        create_stmt = _experiences_schema(1536)[0]
+        create_stmt = _synapses_schema(1536)[0]
         for fault_class in (
             "agent_fault",
             "infra_fault",
@@ -45,10 +45,10 @@ class TestExperiencesSchema:
         assert "synapses" in all_sql
 
 
-class TestExperiencesRLS:
+class TestSynapsesRLS:
     """Test that synapses is included in RLS policies."""
 
-    def test_experiences_in_rls_tenant_tables(self):
+    def test_synapses_in_rls_tenant_tables(self):
         from contextunity.brain.storage.postgres.schema import build_rls_sql
 
         rls_stmts = build_rls_sql()

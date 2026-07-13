@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from contextunity.core.narrowing import as_float, as_int, as_str
 from contextunity.core.types import JsonDict, JsonValue
 
+from ...embedding_jobs import embedding_job_status_counts, first_row
 from .helpers import fetch_all
 
 
@@ -17,6 +18,18 @@ def _row_int(row: JsonDict, key: str) -> int:
 
 def _row_float(row: JsonDict, key: str) -> float:
     return as_float(row.get(key), default=0.0)
+
+
+def _first_row_int(rows: list[JsonDict], key: str) -> int:
+    """Read one aggregate result without exposing list-position semantics."""
+    row = first_row(rows)
+    return _row_int(row, key) if row is not None else 0
+
+
+def _first_row_float(rows: list[JsonDict], key: str) -> float:
+    """Read one aggregate float result without exposing list-position semantics."""
+    row = first_row(rows)
+    return _row_float(row, key) if row is not None else 0.0
 
 
 if TYPE_CHECKING:
@@ -146,7 +159,7 @@ class PostgresAdminOps:
                 {k: v for k, v in qparams.items() if k not in ("limit", "offset")},
             )
 
-        total = _row_int(count_rows[0], "total") if count_rows else 0
+        total = _first_row_int(count_rows, "total")
         traces = [_trace_payload(row) for row in rows]
         return traces, total
 
@@ -164,9 +177,10 @@ class PostgresAdminOps:
                 """,
                 {"trace_id": trace_id},
             )
-        if not rows:
+        row = first_row(rows)
+        if row is None:
             return None
-        return _trace_payload(rows[0])
+        return _trace_payload(row)
 
     async def get_filter_options(self, *, tenant_id: str | None) -> JsonDict:
         cols = [
@@ -222,9 +236,10 @@ class PostgresAdminOps:
                 "SELECT tenant_id FROM event_journal WHERE id::text = %(trace_id)s LIMIT 1",
                 {"trace_id": trace_id},
             )
-        if not rows:
+        row = first_row(rows)
+        if row is None:
             return None
-        tenant = str(rows[0].get("tenant_id") or "")
+        tenant = str(row.get("tenant_id") or "")
         return tenant or None
 
     async def get_related_episodes(self, trace_id: str) -> list[JsonDict]:
@@ -293,7 +308,7 @@ class PostgresAdminOps:
                 {k: v for k, v in qparams.items() if k not in ("limit", "offset")},
             )
 
-        total = _row_int(count_rows[0], "total") if count_rows else 0
+        total = _first_row_int(count_rows, "total")
         events = [_episode_payload(row) for row in rows]
         return events, total
 
@@ -306,13 +321,13 @@ class PostgresAdminOps:
             conditions.append("tenant_id = %(tenant_id)s")
             qparams["tenant_id"] = tenant_id
         if kind:
-            conditions.append("node_kind = %(kind)s")
+            conditions.append("cell_kind = %(kind)s")
             qparams["kind"] = kind
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         qparams["limit"] = limit
 
         query = f"""
-            SELECT id::text, node_kind, source_type, title,
+            SELECT id::text, cell_kind, source_type, title,
                    LEFT(content, 200) AS content_preview, tenant_id, created_at::text
             FROM cells
             {where}
@@ -325,7 +340,7 @@ class PostgresAdminOps:
         return [
             {
                 "id": str(row.get("id") or ""),
-                "node_kind": str(row.get("node_kind") or ""),
+                "cell_kind": str(row.get("cell_kind") or ""),
                 "source_type": str(row.get("source_type") or ""),
                 "title": str(row.get("title") or ""),
                 "content_preview": str(row.get("content_preview") or ""),
@@ -345,16 +360,38 @@ class PostgresAdminOps:
 
         ep_query = f"SELECT COUNT(*) AS total FROM episodic_events {where}"
         cells_query = f"SELECT COUNT(*) AS total FROM cells {where}"
+        source_query = f"""
+            SELECT source_type, COUNT(*) AS total
+            FROM cells
+            {where}
+            GROUP BY source_type
+            ORDER BY source_type
+        """
+        jobs_query = f"""
+            SELECT status, COUNT(*)::integer AS count
+            FROM cell_embedding_jobs
+            {where}
+            GROUP BY status
+            ORDER BY status
+        """
 
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
             ep_rows = await fetch_all(conn, ep_query, qparams)
             cells_rows = await fetch_all(conn, cells_query, qparams)
+            source_rows = await fetch_all(conn, source_query, qparams)
+            job_rows = await fetch_all(conn, jobs_query, qparams)
 
-        episode_count = _row_int(ep_rows[0], "total") if ep_rows else 0
-        cells_count = _row_int(cells_rows[0], "total") if cells_rows else 0
+        episode = first_row(ep_rows)
+        cells = first_row(cells_rows)
+        episode_count = _row_int(episode, "total") if episode is not None else 0
+        cells_count = _row_int(cells, "total") if cells is not None else 0
+        source_types: JsonDict = {
+            str(row.get("source_type") or "unknown"): _row_int(row, "total") for row in source_rows
+        }
         return {
-            "episodes": {"count": episode_count},
-            "cells": {"count": cells_count},
+            "episodic_events": {"count": episode_count},
+            "cells": {"count": cells_count, "by_source_type": source_types},
+            "embedding_jobs": embedding_job_status_counts(job_rows),
         }
 
     async def get_system_analytics(self, *, tenant_id: str | None, hours: int | None) -> JsonDict:
@@ -385,7 +422,7 @@ class PostgresAdminOps:
         async with await self._storage.tenant_connection("*", user_id="*") as conn:
             rows = await fetch_all(conn, query, qparams)
 
-        row = rows[0] if rows else {}
+        row = first_row(rows) or {}
         return {
             "total_traces": _row_int(row, "total_traces"),
             "avg_timing_ms": _row_int(row, "avg_timing_ms"),
@@ -425,7 +462,7 @@ class PostgresAdminOps:
                 f"SELECT COUNT(*) AS n FROM event_journal {_where()}",
                 base_qparams,
             )
-            total_traces = _row_int(rows[0], "n") if rows else 0
+            total_traces = _first_row_int(rows, "n")
             if total_traces == 0:
                 return _empty_analytics_summary()
 
@@ -437,21 +474,21 @@ class PostgresAdminOps:
                 f"SELECT COUNT(*) AS n FROM event_journal {_and(cond_24h)}",
                 base_qparams,
             )
-            traces_24h = _row_int(rows[0], "n") if rows else 0
+            traces_24h = _first_row_int(rows, "n")
 
             rows = await fetch_all(
                 conn,
                 f"SELECT COUNT(*) AS n FROM event_journal {_and(cond_1h)}",
                 base_qparams,
             )
-            traces_1h = _row_int(rows[0], "n") if rows else 0
+            traces_1h = _first_row_int(rows, "n")
 
             rows = await fetch_all(
                 conn,
                 f"SELECT AVG(timing_ms)::int AS n FROM event_journal {_where()}",
                 base_qparams,
             )
-            avg_timing_ms = _row_int(rows[0], "n") if rows else 0
+            avg_timing_ms = _first_row_int(rows, "n")
 
             rows = await fetch_all(
                 conn,
@@ -460,7 +497,7 @@ class PostgresAdminOps:
                 + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
             )
-            p95_timing_ms = _row_int(rows[0], "n") if rows else 0
+            p95_timing_ms = _first_row_int(rows, "n")
 
             rows = await fetch_all(
                 conn,
@@ -469,8 +506,8 @@ class PostgresAdminOps:
                 f"FROM event_journal {_where()}",
                 base_qparams,
             )
-            total_input_tokens = _row_int(rows[0], "i") if rows else 0
-            total_output_tokens = _row_int(rows[0], "o") if rows else 0
+            total_input_tokens = _first_row_int(rows, "i")
+            total_output_tokens = _first_row_int(rows, "o")
 
             rows = await fetch_all(
                 conn,
@@ -479,8 +516,8 @@ class PostgresAdminOps:
                 f"FROM event_journal {_and(cond_24h)}",
                 base_qparams,
             )
-            tokens_24h_in = _row_int(rows[0], "i") if rows else 0
-            tokens_24h_out = _row_int(rows[0], "o") if rows else 0
+            tokens_24h_in = _first_row_int(rows, "i")
+            tokens_24h_out = _first_row_int(rows, "o")
 
             rows = await fetch_all(
                 conn,
@@ -489,7 +526,7 @@ class PostgresAdminOps:
                 + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
             )
-            unique_sessions = _row_int(rows[0], "n") if rows else 0
+            unique_sessions = _first_row_int(rows, "n")
 
             rows = await fetch_all(
                 conn,
@@ -497,7 +534,7 @@ class PostgresAdminOps:
                 "WHERE user_id IS NOT NULL AND user_id != ''" + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
             )
-            unique_users = _row_int(rows[0], "n") if rows else 0
+            unique_users = _first_row_int(rows, "n")
 
             tool_where = "WHERE tool->>'tool' IS NOT NULL AND tool->>'tool' != ''"
             if tcond:
@@ -539,7 +576,7 @@ class PostgresAdminOps:
                 + (f" AND {tcond}" if tcond else ""),
                 base_qparams,
             )
-            security_event_count = _row_int(rows[0], "n") if rows else 0
+            security_event_count = _first_row_int(rows, "n")
 
             rows = await fetch_all(
                 conn,
@@ -547,7 +584,7 @@ class PostgresAdminOps:
                 f"FROM event_journal {_where()}",
                 base_qparams,
             )
-            total_cost = _row_float(rows[0], "n") if rows else 0.0
+            total_cost = _first_row_float(rows, "n")
 
             rows = await fetch_all(
                 conn,
@@ -555,7 +592,7 @@ class PostgresAdminOps:
                 f"FROM event_journal {_and(cond_24h)}",
                 base_qparams,
             )
-            cost_24h_total = _row_float(rows[0], "n") if rows else 0.0
+            cost_24h_total = _first_row_float(rows, "n")
 
         return {
             "total_traces": total_traces,
@@ -577,6 +614,69 @@ class PostgresAdminOps:
             "total_cost": total_cost,
             "cost_24h_total": cost_24h_total,
         }
+
+    # ── BrainCell canonical (Phase 3, delegated to main store) ─────
+
+    async def upsert_cell(
+        self,
+        *,
+        tenant_id: str,
+        cell_kind: str,
+        content: str,
+        metadata: JsonDict | None = None,
+        cell_id: str | None = None,
+        user_id: str | None = None,
+        scope_path: str | None = None,
+        content_hash: str | None = None,
+        source_type: str = "manual",
+        source_ref: str | None = None,
+        confidence: float = 0.5,
+        visibility: str = "tenant",
+    ) -> JsonDict:
+        return await self._storage.upsert_cell(
+            tenant_id=tenant_id,
+            cell_kind=cell_kind,
+            content=content,
+            metadata=metadata,
+            cell_id=cell_id,
+            user_id=user_id,
+            scope_path=scope_path,
+            content_hash=content_hash,
+            source_type=source_type,
+            source_ref=source_ref,
+            confidence=confidence,
+            visibility=visibility,
+        )
+
+    async def query_cells(
+        self,
+        *,
+        tenant_id: str,
+        query_text: str | None = None,
+        cell_kind: str | None = None,
+        source_type: str | None = None,
+        scope_path: str | None = None,
+        metadata_filter: JsonDict | None = None,
+        limit: int = 10,
+        offset: int = 0,
+        user_id: str | None = None,
+    ) -> list[JsonDict]:
+        return await self._storage.query_cells(
+            tenant_id=tenant_id,
+            query_text=query_text,
+            cell_kind=cell_kind,
+            source_type=source_type,
+            scope_path=scope_path,
+            metadata_filter=metadata_filter,
+            limit=limit,
+            offset=offset,
+            user_id=user_id,
+        )
+
+    async def get_cell(
+        self, *, tenant_id: str, cell_id: str, user_id: str | None = None
+    ) -> JsonDict | None:
+        return await self._storage.get_cell(tenant_id=tenant_id, cell_id=cell_id, user_id=user_id)
 
 
 __all__ = ["PostgresAdminOps"]

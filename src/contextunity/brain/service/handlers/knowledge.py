@@ -8,12 +8,18 @@ import grpc
 from contextunity.core import contextunit_pb2, get_contextunit_logger
 from contextunity.core.grpc_errors import grpc_error_handler, grpc_stream_error_handler
 from contextunity.core.permissions import Permissions
+from contextunity.core.types import JsonDict
 
+from ...core.config import get_core_config
+from ...core.exceptions import BrainCellNotFoundError
 from ...payloads import (
     CreateKGRelationPayload,
+    GetCellPayload,
     GraphSearchPayload,
+    QueryCellsPayload,
     QueryMemoryPayload,
     SearchPayload,
+    UpsertCellPayload,
     UpsertPayload,
 )
 from ..handler_base import BrainHandlerBase
@@ -21,13 +27,23 @@ from ..helpers import (
     extract_token_from_context,
     make_response,
     parse_unit,
+    resolve_tenant_id,
     validate_tenant_access,
+    validate_tenant_write_policy,
     validate_token_for_read,
     validate_token_for_write,
     validate_user_access,
 )
 
 logger = get_contextunit_logger(__name__)
+
+
+async def _query_vector(*, storage: BrainHandlerBase, text: str) -> list[float]:
+    """Generate a vector only when the selected storage can consume it."""
+    dimension = get_core_config().embeddings.dimension
+    if not text or not storage.storage.vector_backend_available():
+        return [0.0] * dimension
+    return await storage.embedder.embed_async(text)
 
 
 class KnowledgeHandlersMixin(BrainHandlerBase):
@@ -47,11 +63,7 @@ class KnowledgeHandlersMixin(BrainHandlerBase):
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
-        query_vec = (
-            await self.embedder.embed_async(params.query_text)
-            if params.query_text
-            else [0.1] * 1536
-        )
+        query_vec = await _query_vector(storage=self, text=params.query_text)
 
         results = await self.storage.hybrid_search(
             query_text=params.query_text,
@@ -168,7 +180,14 @@ class KnowledgeHandlersMixin(BrainHandlerBase):
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
         params = UpsertPayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
+        validate_tenant_write_policy(
+            token,
+            params.tenant_id,
+            context,
+            content=params.content,
+            cell_kind="document",
+            source_type=params.source_type,
+        )
         validate_user_access(token, params.user_id, context)
 
         from contextunity.brain.ingest import IngestionService
@@ -188,6 +207,158 @@ class KnowledgeHandlersMixin(BrainHandlerBase):
             parent_unit=unit,  # Inherit trace_id and extend provenance
         )
 
+    @grpc_error_handler
+    async def UpsertCell(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
+        """Upsert canonical BrainCell using cells storage with content_hash idempotency."""
+        unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_write(unit, token, context, required_permission=Permissions.BRAIN_WRITE)
+        params = UpsertCellPayload.model_validate(unit.payload or {})
+        tenant_id = resolve_tenant_id(token, params.tenant_id)
+        validate_tenant_write_policy(
+            token,
+            tenant_id,
+            context,
+            content=params.content,
+            cell_kind=params.cell_kind,
+            source_type=params.source_type,
+        )
+        validate_user_access(token, params.user_id, context)
+
+        result = await self.storage.upsert_cell(
+            tenant_id=tenant_id,
+            user_id=params.user_id,
+            cell_kind=params.cell_kind,
+            content=params.content,
+            metadata=params.metadata,
+            cell_id=params.cell_id,
+            scope_path=params.scope_path,
+            content_hash=params.content_hash,
+            source_type=params.source_type,
+            source_ref=params.source_ref,
+            confidence=params.confidence,
+            visibility=params.visibility,
+        )
+
+        return make_response(
+            payload=JsonDict(
+                {
+                    "id": result.get("id"),
+                    "tenant_id": result.get("tenant_id"),
+                    "cell_kind": result.get("cell_kind"),
+                    "source_type": result.get("source_type"),
+                    "scope_path": result.get("scope_path"),
+                    "content_hash": result.get("content_hash"),
+                    "confidence": result.get("confidence"),
+                    "visibility": result.get("visibility"),
+                    "created_at": result.get("created_at"),
+                    "updated_at": result.get("updated_at"),
+                }
+            ),
+            parent_unit=unit,
+        )
+
+    @grpc_stream_error_handler
+    async def QueryCells(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
+        """Query canonical BrainCells."""
+        unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
+        params = QueryCellsPayload.model_validate(unit.payload or {})
+        tenant_id = resolve_tenant_id(token, params.tenant_id)
+        validate_tenant_access(token, tenant_id, context)
+        validate_user_access(token, params.user_id, context)
+
+        results = await self.storage.query_cells(
+            tenant_id=tenant_id,
+            query_text=params.query_text,
+            cell_kind=params.cell_kind,
+            source_type=params.source_type,
+            scope_path=params.scope_path,
+            metadata_filter=params.metadata_filter,
+            limit=params.limit,
+            offset=params.offset,
+            user_id=params.user_id,
+        )
+
+        for res in results:
+            yield make_response(
+                payload=JsonDict(
+                    {
+                        "id": res.get("id"),
+                        "tenant_id": res.get("tenant_id"),
+                        "cell_kind": res.get("cell_kind"),
+                        "content": res.get("content"),
+                        "metadata": res.get("metadata"),
+                        "score": res.get("score"),
+                        "source_type": res.get("source_type"),
+                        "source_ref": res.get("source_ref"),
+                        "scope_path": res.get("scope_path"),
+                        "content_hash": res.get("content_hash"),
+                        "confidence": res.get("confidence"),
+                        "visibility": res.get("visibility"),
+                    }
+                ),
+                parent_unit=unit,
+            )
+
+    @grpc_error_handler
+    async def GetCell(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
+        """Get single BrainCell by ID."""
+        unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_read(unit, token, context, required_permission=Permissions.BRAIN_READ)
+        params = GetCellPayload.model_validate(unit.payload or {})
+        tenant_id = resolve_tenant_id(token, params.tenant_id)
+        validate_tenant_access(token, tenant_id, context)
+        validate_user_access(token, params.user_id, context)
+
+        result = await self.storage.get_cell(
+            tenant_id=tenant_id,
+            cell_id=params.cell_id,
+            user_id=params.user_id,
+        )
+
+        if result is None:
+            raise BrainCellNotFoundError(
+                message="BrainCell not found",
+                tenant_id=tenant_id,
+                cell_id=params.cell_id,
+            )
+
+        return make_response(
+            payload=JsonDict(
+                {
+                    "id": result.get("id"),
+                    "tenant_id": result.get("tenant_id"),
+                    "cell_kind": result.get("cell_kind"),
+                    "content": result.get("content"),
+                    "metadata": result.get("metadata"),
+                    "source_type": result.get("source_type"),
+                    "source_ref": result.get("source_ref"),
+                    "scope_path": result.get("scope_path"),
+                    "content_hash": result.get("content_hash"),
+                    "confidence": result.get("confidence"),
+                    "visibility": result.get("visibility"),
+                    "created_at": result.get("created_at"),
+                    "updated_at": result.get("updated_at"),
+                }
+            ),
+            parent_unit=unit,
+        )
+
     @grpc_stream_error_handler
     async def QueryMemory(
         self,
@@ -202,9 +373,7 @@ class KnowledgeHandlersMixin(BrainHandlerBase):
         validate_tenant_access(token, params.tenant_id, context)
         validate_user_access(token, params.user_id, context)
 
-        query_vec = (
-            await self.embedder.embed_async(params.content) if params.content else [0.1] * 1536
-        )
+        query_vec = await _query_vector(storage=self, text=params.content)
 
         results = await self.storage.hybrid_search(
             query_text=params.content,

@@ -58,9 +58,11 @@ class TestResolveTenantId:
         token = _token(tenants=["acme", "corp"])
         assert resolve_tenant_id(token, "corp") == "corp"
 
-    def test_payload_tenant_not_in_token_uses_first(self):
+    def test_payload_tenant_not_in_token_raises(self):
+        """Explicit tenant must be in allowed; mismatch is fail-closed (no silent pick)."""
         token = _token(tenants=["acme"])
-        assert resolve_tenant_id(token, "other") == "acme"
+        with pytest.raises(SecurityError):
+            resolve_tenant_id(token, "other")
 
     def test_no_token_uses_payload(self):
         assert resolve_tenant_id(None, "legacy") == "legacy"
@@ -78,6 +80,12 @@ class TestResolveTenantId:
     def test_token_with_empty_tenants_uses_payload(self):
         token = _token(tenants=[])
         assert resolve_tenant_id(token, "legacy") == "legacy"
+
+    def test_multi_tenant_without_explicit_payload_fails_closed(self):
+        """>1 allowed_tenants requires explicit tenant_id; no [0] pick (order-dependent unsafe)."""
+        token = _token(tenants=["acme", "corp"])
+        with pytest.raises(SecurityError, match="multiple allowed_tenants"):
+            resolve_tenant_id(token)
 
 
 # ═══════════════════════════════════════════════════════════════════

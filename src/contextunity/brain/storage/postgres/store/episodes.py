@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC
 
-from contextunity.core.types import JsonDict, JsonValue
+from contextunity.core.types import JsonDict
 
 from .base import PostgresStoreBase
 from .helpers import Json, execute, fetch_all, vec
@@ -56,59 +56,6 @@ class EpisodesMixin(PostgresStoreBase, ABC):
                 ORDER BY created_at DESC LIMIT %(limit)s
             """,
                 {"tenant_id": tenant_id, "user_id": user_id, "limit": limit},
-            )
-
-    async def upsert_fact(
-        self,
-        *,
-        user_id: str,
-        tenant_id: str = "default",
-        key: str,
-        value: JsonValue,
-        confidence: float = 1.0,
-        source_id: str | None = None,
-    ) -> None:
-        """Upsert a user fact."""
-        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
-            _ = await execute(
-                conn,
-                """
-                INSERT INTO user_facts (tenant_id, user_id, fact_key, fact_value, confidence, source_id, updated_at)
-                VALUES (%(tenant_id)s, %(user_id)s, %(key)s, %(value)s, %(confidence)s, %(source_id)s, now())
-                ON CONFLICT (tenant_id, user_id, fact_key) DO UPDATE SET
-                    fact_value = EXCLUDED.fact_value, confidence = EXCLUDED.confidence,
-                    source_id = EXCLUDED.source_id, updated_at = now()
-            """,
-                {
-                    "tenant_id": tenant_id,
-                    "user_id": user_id,
-                    "key": key,
-                    "value": value,
-                    "confidence": confidence,
-                    "source_id": source_id,
-                },
-            )
-
-    async def get_user_facts(
-        self,
-        *,
-        user_id: str,
-        tenant_id: str = "default",
-    ) -> list[JsonDict]:
-        """Get all facts for a user.
-
-        Returns list of dicts with: fact_key, fact_value, confidence, updated_at.
-        """
-        async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
-            return await fetch_all(
-                conn,
-                """
-                SELECT fact_key, fact_value, confidence, updated_at
-                FROM user_facts
-                WHERE tenant_id = %(tenant_id)s AND user_id = %(user_id)s
-                ORDER BY updated_at DESC
-            """,
-                {"tenant_id": tenant_id, "user_id": user_id},
             )
 
     # ── Retention & Distillation ──

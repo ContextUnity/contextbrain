@@ -7,6 +7,7 @@ Usage: `from .store import PostgresBrainStore`
 
 from .base import PostgresStoreBase
 from .blackboard import BlackboardStoreMixin
+from .embedding_jobs import EmbeddingJobsMixin
 from .episodes import EpisodesMixin
 from .graph import GraphMixin
 from .search import SearchMixin
@@ -23,6 +24,7 @@ class PostgresBrainStore(
     SearchMixin,
     BlackboardStoreMixin,
     SynapsesMixin,
+    EmbeddingJobsMixin,
     PostgresStoreBase,
 ):
     """PostgreSQL knowledge store with pgvector and ltree support."""

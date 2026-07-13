@@ -116,6 +116,15 @@ class SynapseTenantMismatchError(ContextbrainError):
     retryable: bool = False
 
 
+@register_error("BRAIN_CELL_NOT_FOUND")
+class BrainCellNotFoundError(ContextbrainError):
+    """Requested BrainCell id does not exist for the resolved tenant scope."""
+
+    code: str = "BRAIN_CELL_NOT_FOUND"
+    message: str = "BrainCell not found"
+    retryable: bool = False
+
+
 @register_error("BRAIN_SYNAPSE_DECAY_DISABLED")
 class SynapseDecayDisabledError(ContextbrainError):
     """``decay_synapses`` was called while ``brain.yml: synapses.decay_enabled`` is off.

@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from contextunity.brain.service.embedders import EmbeddingCache
+from contextunity.brain.service.embeddings import EmbeddingCache
 
 # ── Fake Redis ────────────────────────────────────────────────────
 

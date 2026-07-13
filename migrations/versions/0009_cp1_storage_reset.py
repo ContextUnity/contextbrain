@@ -41,11 +41,31 @@ depends_on = None
 
 
 def _rename_table(old: str, new: str) -> str:
-    return f"ALTER TABLE IF EXISTS {old} RENAME TO {new};"
+    # Keep textually identical to schema.py ``_rename_table`` (preflight parity).
+    return f"""
+        DO $$
+        BEGIN
+            IF to_regclass(format('%I.%I', current_schema(), '{old}')) IS NOT NULL
+               AND to_regclass(format('%I.%I', current_schema(), '{new}')) IS NULL THEN
+                ALTER TABLE {old} RENAME TO {new};
+            END IF;
+        END
+        $$;
+    """
 
 
 def _rename_index(old: str, new: str) -> str:
-    return f"ALTER INDEX IF EXISTS {old} RENAME TO {new};"
+    # Keep textually identical to schema.py ``_rename_index`` (preflight parity).
+    return f"""
+        DO $$
+        BEGIN
+            IF to_regclass(format('%I.%I', current_schema(), '{old}')) IS NOT NULL
+               AND to_regclass(format('%I.%I', current_schema(), '{new}')) IS NULL THEN
+                ALTER INDEX {old} RENAME TO {new};
+            END IF;
+        END
+        $$;
+    """
 
 
 def _rename_constraint(table: str, old: str, new: str) -> str:

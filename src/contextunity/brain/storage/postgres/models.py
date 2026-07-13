@@ -21,7 +21,7 @@ class GraphNode(BaseModel):
     id: str
     content: str
     embedding: list[float] | None = None
-    node_kind: str = "concept"
+    cell_kind: str = "concept"
     source_type: str | None = None
     source_id: str | None = None
     scope_path: str | None = None
@@ -58,7 +58,7 @@ class GraphTraversalNode(TypedDict):
     """Node projection returned by structural graph traversal."""
 
     id: str
-    node_kind: str
+    cell_kind: str
     source_type: str
     title: str
     content: str

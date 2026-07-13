@@ -58,10 +58,9 @@ class TestRpcPermissionMap:
     def test_memory_rpcs_mapped(self):
         assert "AddEpisode" in RPC_PERMISSION_MAP
         assert "GetRecentEpisodes" in RPC_PERMISSION_MAP
-        assert "UpsertFact" in RPC_PERMISSION_MAP
-        assert "GetUserFacts" in RPC_PERMISSION_MAP
         assert "WriteBlackboard" in RPC_PERMISSION_MAP
         assert "ReadBlackboard" in RPC_PERMISSION_MAP
+        assert "PruneExpiredBlackboard" in RPC_PERMISSION_MAP
 
     def test_trace_rpcs_mapped(self):
         assert "LogTrace" in RPC_PERMISSION_MAP
@@ -74,7 +73,6 @@ class TestRpcPermissionMap:
             "GetTaxonomy",
             "QueryMemory",
             "GetRecentEpisodes",
-            "GetUserFacts",
             "ReadBlackboard",
             "GetTraces",
         ]
@@ -87,8 +85,8 @@ class TestRpcPermissionMap:
             "CreateKGRelation",
             "Upsert",
             "AddEpisode",
-            "UpsertFact",
             "WriteBlackboard",
+            "PruneExpiredBlackboard",
             "LogTrace",
         ]
         for rpc in write_rpcs:

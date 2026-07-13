@@ -1,4 +1,4 @@
-"""Portable Archive v2 — Importer.
+"""Portable Archive importer.
 
 Imports archive into a target ``BrainStorageProtocol``-compatible store.
 Guarantees: no silent degradation, idempotent blackboard, embedding restore.
@@ -20,7 +20,6 @@ from .models import (
     CellEdgeRecord,
     CellRecord,
     EpisodeRecord,
-    FactRecord,
     SynapseRecord,
     TaxonomyRecord,
     TraceRecord,
@@ -35,7 +34,6 @@ PortableRecord = (
     | TraceRecord
     | TaxonomyRecord
     | EpisodeRecord
-    | FactRecord
     | CellRecord
     | CellEdgeRecord
     | SynapseRecord
@@ -115,7 +113,7 @@ async def import_portable_archive(
 
 
 def _get_record_id(rec: BaseModel) -> str:
-    for attr in ("id", "trace_id", "episode_id", "fact_key", "path", "source_id"):
+    for attr in ("id", "trace_id", "episode_id", "path", "source_id"):
         val: object = getattr(rec, attr, None)
         if val:
             return str(val)
@@ -144,38 +142,28 @@ async def _import_record(
     elif isinstance(rec, EpisodeRecord):
         emb = emb_map.get(rec.embedding_ref) if rec.embedding_ref else None
         await _import_episode(store, rec, tid, emb)
-    elif isinstance(rec, FactRecord):
-        await store.upsert_fact(
-            user_id=rec.user_id,
-            tenant_id=tid,
-            key=rec.fact_key,
-            value=rec.fact_value,
-            confidence=rec.confidence,
-            source_id=rec.source_id,
-        )
     elif isinstance(rec, CellRecord):
-        from contextunity.brain.storage.postgres.models import GraphNode
-
         emb = emb_map.get(rec.embedding_ref) if rec.embedding_ref else None
-        await store.upsert_graph(
-            [
-                GraphNode(
-                    id=rec.id,
-                    content=rec.content,
-                    node_kind=rec.node_kind,
-                    source_type=rec.source_type,
-                    source_id=rec.source_id,
-                    title=rec.title,
-                    keywords_text=rec.keywords_text,
-                    scope_path=rec.scope_path,
-                    metadata=rec.metadata,
-                    user_id=rec.user_id,
-                    embedding=emb,
-                )
-            ],
-            [],
+        await store.upsert_cell(
             tenant_id=tid,
+            cell_id=rec.id,
+            user_id=rec.user_id,
+            cell_kind=rec.cell_kind,
+            content=rec.content,
+            metadata=rec.metadata,
+            scope_path=rec.scope_path,
+            content_hash=rec.content_hash,
+            source_type=rec.source_type,
+            source_ref=rec.source_ref,
+            confidence=rec.confidence,
+            visibility=rec.visibility,
         )
+        if emb is not None:
+            await store.restore_cell_embedding(
+                tenant_id=tid,
+                cell_id=rec.id,
+                vector=emb,
+            )
     elif isinstance(rec, CellEdgeRecord):
         from contextunity.brain.storage.postgres.models import GraphEdge
 

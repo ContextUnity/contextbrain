@@ -35,11 +35,11 @@ class GraphMixin(PostgresStoreBase, ABC):
                         conn,
                         """
                         INSERT INTO cells (
-                            id, tenant_id, user_id, node_kind, source_type, source_id,
+                            id, tenant_id, user_id, cell_kind, source_type, source_id,
                             title, content, struct_data, keywords_text, scope_path, embedding,
                             content_hash
                         ) VALUES (
-                            %(id)s, %(tenant_id)s, %(user_id)s, %(node_kind)s, %(source_type)s,
+                            %(id)s, %(tenant_id)s, %(user_id)s, %(cell_kind)s, %(source_type)s,
                             %(source_id)s, %(title)s, %(content)s, %(struct_data)s,
                             %(keywords_text)s, %(scope_path)s, %(embedding)s, %(content_hash)s
                         )
@@ -53,7 +53,7 @@ class GraphMixin(PostgresStoreBase, ABC):
                             "id": node.id,
                             "tenant_id": tenant_id,
                             "user_id": user_id,
-                            "node_kind": node.node_kind,
+                            "cell_kind": node.cell_kind,
                             "source_type": node.source_type,
                             "source_id": node.source_id,
                             "title": node.title,

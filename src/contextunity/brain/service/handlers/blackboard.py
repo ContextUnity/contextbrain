@@ -13,14 +13,14 @@ from contextunity.core import contextunit_pb2, get_contextunit_logger
 from contextunity.core.grpc_errors import grpc_error_handler
 from contextunity.core.permissions import Permissions
 
-from ...payloads import ReadBlackboardPayload, WriteBlackboardPayload
+from ...payloads import PruneExpiredBlackboardPayload, ReadBlackboardPayload, WriteBlackboardPayload
 from ..handler_base import BrainHandlerBase
 from ..helpers import (
     extract_token_from_context,
     make_response,
     parse_unit,
     resolve_tenant_id,
-    validate_tenant_access,
+    validate_tenant_write_policy,
     validate_token_for_read,
     validate_token_for_write,
 )
@@ -51,7 +51,12 @@ class BlackboardHandlersMixin(BrainHandlerBase):
         # Blackboard is a memory surface, so the memory:* family is canonical.
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
         params = WriteBlackboardPayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
+        validate_tenant_write_policy(
+            token,
+            params.tenant_id,
+            context,
+            record_kind="blackboard",
+        )
 
         # Validate scope_path format (ltree)
         if not _LTREE_PATTERN.match(params.scope_path):
@@ -106,6 +111,30 @@ class BlackboardHandlersMixin(BrainHandlerBase):
 
         return make_response(
             payload={"records": records},
+            parent_unit=unit,
+        )
+
+    @grpc_error_handler
+    async def PruneExpiredBlackboard(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
+        """Prune expired Blackboard records for one tenant."""
+        unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
+        params = PruneExpiredBlackboardPayload.model_validate(unit.payload or {})
+        validate_tenant_write_policy(
+            token,
+            params.tenant_id,
+            context,
+            record_kind="blackboard",
+        )
+
+        deleted = await self.storage.prune_expired_blackboard(tenant_id=params.tenant_id)
+        return make_response(
+            payload={"deleted_count": deleted, "tenant_id": params.tenant_id},
             parent_unit=unit,
         )
 

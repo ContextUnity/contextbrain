@@ -14,8 +14,9 @@ Example usage in service:
 
 from contextunity.core.faults import AGENT_FAULT, FAULT_CLASSES
 from contextunity.core.passbyref import DEFAULT_PASSBYREF_THRESHOLD_BYTES, payload_size_bytes
+from contextunity.core.sdk.responses import MemoryLayerName
 from contextunity.core.sdk.types import StrictPayloadModel
-from contextunity.core.types import JsonDict, JsonValue, is_object_dict
+from contextunity.core.types import JsonDict, is_object_dict
 from pydantic import Field, model_validator
 
 from .core.exceptions import SynapseTenantMismatchError
@@ -82,6 +83,54 @@ class QueryMemoryPayload(StrictPayloadModel):
     filters: JsonDict = Field(default_factory=dict)
 
 
+class EnqueueCellEmbeddingPayload(StrictPayloadModel):
+    """Request to durably enqueue one stored cell for embedding."""
+
+    tenant_id: str = Field(min_length=1, max_length=128)
+    cell_id: str = Field(min_length=1, max_length=128)
+    content_hash: str = Field(min_length=1, max_length=128)
+    profile: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class ClaimCellEmbeddingJobsPayload(StrictPayloadModel):
+    """Request for a bounded tenant-scoped embedding lease batch."""
+
+    tenant_id: str = Field(min_length=1, max_length=128)
+    limit: int = Field(default=10, ge=1, le=1000)
+
+
+class EmbedClaimedCellPayload(StrictPayloadModel):
+    """Request to process one leased embedding job inside Brain."""
+
+    tenant_id: str = Field(min_length=1, max_length=128)
+    job_id: str = Field(min_length=1, max_length=128)
+    lease_id: str = Field(min_length=1, max_length=128)
+
+
+class FailCellEmbeddingJobPayload(StrictPayloadModel):
+    """Request to mark one leased job as terminally failed."""
+
+    tenant_id: str = Field(min_length=1, max_length=128)
+    job_id: str = Field(min_length=1, max_length=128)
+    lease_id: str = Field(min_length=1, max_length=128)
+    error_code: str = Field(min_length=1, max_length=128)
+
+
+class GetCellEmbeddingStatusPayload(StrictPayloadModel):
+    """Request for status of one cell/profile idempotency key."""
+
+    tenant_id: str = Field(min_length=1, max_length=128)
+    cell_id: str = Field(min_length=1, max_length=128)
+    content_hash: str | None = Field(default=None, max_length=128)
+    profile: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class GetEmbeddingCapabilityPayload(StrictPayloadModel):
+    """Tenant-scoped request for embedding runtime readiness."""
+
+    tenant_id: str = Field(min_length=1, max_length=128)
+
+
 # Episodic & Entity Memory
 # =====================================================
 
@@ -96,17 +145,6 @@ class AddEpisodePayload(StrictPayloadModel):
     metadata: JsonDict = Field(default_factory=dict)
 
 
-class UpsertFactPayload(StrictPayloadModel):
-    """Payload for UpsertFact RPC."""
-
-    user_id: str
-    tenant_id: str
-    key: str
-    value: JsonValue
-    confidence: float = 1.0
-    source_id: str | None = None
-
-
 class GetRecentEpisodesPayload(StrictPayloadModel):
     """Payload for GetRecentEpisodes RPC."""
 
@@ -115,11 +153,12 @@ class GetRecentEpisodesPayload(StrictPayloadModel):
     limit: int = 5
 
 
-class GetUserFactsPayload(StrictPayloadModel):
-    """Payload for GetUserFacts RPC."""
+class GetOldEpisodesPayload(StrictPayloadModel):
+    """Payload for GetOldEpisodes RPC."""
 
     tenant_id: str
-    user_id: str
+    older_than_days: int = 30
+    limit: int = 100
 
 
 class RetentionCleanupPayload(StrictPayloadModel):
@@ -211,6 +250,12 @@ class ReadBlackboardPayload(StrictPayloadModel):
     """Payload for ReadBlackboard RPC."""
 
     ids: list[str]  # UUID strings
+
+
+class PruneExpiredBlackboardPayload(StrictPayloadModel):
+    """Payload for PruneExpiredBlackboard RPC."""
+
+    tenant_id: str = Field(min_length=1)
 
 
 # =====================================================
@@ -536,7 +581,7 @@ class AdminGetMemoryLayerStatsPayload(StrictPayloadModel):
     tenant_id is required unless the token has admin:all.
     """
 
-    layer: str | None = None
+    layer: MemoryLayerName | None = None
     tenant_id: str | None = None
 
 
@@ -601,3 +646,48 @@ class AdminGetAnalyticsSummaryPayload(StrictPayloadModel):
 
     tenant_id: str | None = None
     hours: int | None = None
+
+
+# =====================================================
+# Phase 3: Canonical BrainCell payloads (M01)
+# Per planner/roadmap/phase-03/tasks/braincell-canonical-api.md
+# =====================================================
+
+
+class UpsertCellPayload(StrictPayloadModel):
+    """Payload for UpsertCell RPC (canonical over cells table)."""
+
+    tenant_id: str | None = None
+    cell_id: str | None = None
+    user_id: str | None = None
+    cell_kind: str
+    content: str
+    metadata: JsonDict = Field(default_factory=dict)
+    scope_path: str | None = None
+    content_hash: str | None = None
+    source_type: str = "manual"
+    source_ref: str | None = None
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    visibility: str = "tenant"
+
+
+class QueryCellsPayload(StrictPayloadModel):
+    """Payload for QueryCells RPC."""
+
+    tenant_id: str | None = None
+    user_id: str | None = None
+    query_text: str | None = None
+    cell_kind: str | None = None
+    source_type: str | None = None
+    scope_path: str | None = None
+    metadata_filter: JsonDict = Field(default_factory=dict)
+    limit: int = Field(default=10, ge=1, le=100)
+    offset: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class GetCellPayload(StrictPayloadModel):
+    """Payload for GetCell RPC."""
+
+    tenant_id: str | None = None
+    user_id: str | None = None
+    cell_id: str

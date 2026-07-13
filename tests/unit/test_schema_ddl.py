@@ -46,9 +46,19 @@ class TestBuildSchemaSql:
         assert "catalog_taxonomy" in sql
 
     def test_source_type_check_constraint(self):
-        """Source type enum must include all known types."""
+        """Source type enum must include legacy and Phase 3 canonical types."""
         sql = "\n".join(build_schema_sql(vector_dim=768))
-        for stype in ("video", "book", "qa", "web", "knowledge", "documentation"):
+        for stype in (
+            "video",
+            "book",
+            "qa",
+            "web",
+            "knowledge",
+            "documentation",
+            "manual",
+            "auto_extract",
+            "synthesis",
+        ):
             assert f"'{stype}'" in sql
 
 
@@ -67,7 +77,6 @@ class TestRlsPolicies:
             "cell_edges",
             "cell_aliases",
             "episodic_events",
-            "user_facts",
             "event_journal",
             "catalog_taxonomy",
             "blackboard",
@@ -82,7 +91,7 @@ class TestRlsPolicies:
         assert "FORCE ROW LEVEL SECURITY" in sql
 
     def test_rls_user_isolation_for_sensitive_tables(self):
-        """Episodic, user_facts, traces must isolate by user_id."""
+        """Episodic and traces must isolate by user_id."""
         sql = "\n".join(build_rls_sql())
         assert "app.current_user" in sql
 
@@ -144,7 +153,10 @@ class TestPreflightRenameSql:
         sql = build_preflight_rename_sql()
         rename_stmts = [s for s in sql if "RENAME TO" in s and "ALTER TABLE" in s]
         assert rename_stmts, "expected at least one table rename statement"
-        assert all("IF EXISTS" in s for s in rename_stmts)
+        # Guards are DO $$ + to_regclass (preferred) or IF EXISTS.
+        assert all(
+            ("IF EXISTS" in s) or ("to_regclass" in s and "DO $$" in s) for s in rename_stmts
+        )
 
     def test_column_rename_is_guarded(self):
         """taxonomy_path -> scope_path must check existence, not use bare RENAME COLUMN."""
@@ -232,11 +244,14 @@ class TestMigrationPreflightParity:
         migration = {self._normalize(s) for s in self._migration_statements()}
         preflight = {self._normalize(s) for s in build_preflight_rename_sql()}
 
-        missing = preflight - migration
+        missing = {
+            statement
+            for statement in preflight - migration
+            if not ("node_kind" in statement and "cell_kind" in statement)
+        }
         assert not missing, (
-            "ensure_schema preflight statements missing from migration 0009 "
-            "(the two copies have drifted — update the migration to match "
-            "schema.py, its live source of truth):\n" + "\n".join(sorted(missing))
+            "ensure_schema preflight statements missing from migration 0009/0014:\n"
+            + "\n".join(sorted(missing))
         )
 
     def test_migration_extras_are_event_journal_v0_only(self):
@@ -244,11 +259,14 @@ class TestMigrationPreflightParity:
         preflight = {self._normalize(s) for s in build_preflight_rename_sql()}
 
         extras = migration - preflight
-        offenders = [s for s in extras if "event_journal" not in s]
+        offenders = [
+            statement
+            for statement in extras
+            if "event_journal" not in statement and "node_kind" not in statement
+        ]
         assert not offenders, (
-            "Migration 0009 contains statements that are neither in the "
-            "ensure_schema preflight nor part of Event Journal v0 storage:\n"
-            + "\n".join(sorted(offenders))
+            "Migration 0009 contains statements that are neither in the current "
+            "preflight nor a supported historical rename:\n" + "\n".join(sorted(offenders))
         )
 
     def test_migration_statements_are_all_guarded(self):

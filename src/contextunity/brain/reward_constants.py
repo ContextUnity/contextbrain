@@ -72,7 +72,7 @@ def q_composite(q_action: float, q_hypothesis: float, q_relevance: float) -> flo
     """Canonical BrainSynapse composite-Q formula.
 
     Postgres computes this as a ``GENERATED ALWAYS AS`` column
-    (``storage/postgres/schema.py`` ``_experiences_schema``) with no rounding;
+    (``storage/postgres/schema.py`` ``_synapses_schema``) with no rounding;
     the SQLite backend has no generated-column support in this codepath, so
     its storage mixin calls this function explicitly. Deliberately unrounded
     — same operators, same operand order, same IEEE 754 double precision —

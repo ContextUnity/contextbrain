@@ -7,6 +7,7 @@ from contextunity.core.config import (
 
 from .main import (
     BrainConfig,
+    EmbeddingEnrichmentConfig,
     get_core_config,
     load_config,
     reset_core_config,
@@ -16,14 +17,15 @@ from .models import (
     ModelsConfig,
 )
 from .providers import (
-    LocalOpenAIConfig,
-    OpenAIConfig,
+    EmbeddingProviderConfig,
+    EmbeddingProviderKind,
     PostgresConfig,
 )
 
 __all__ = [
     # Main classes
     "BrainConfig",
+    "EmbeddingEnrichmentConfig",
     # Main functions
     "get_core_config",
     "load_config",
@@ -35,7 +37,7 @@ __all__ = [
     # Model configs
     "ModelsConfig",
     # Provider configs
-    "OpenAIConfig",
-    "LocalOpenAIConfig",
+    "EmbeddingProviderConfig",
+    "EmbeddingProviderKind",
     "PostgresConfig",
 ]

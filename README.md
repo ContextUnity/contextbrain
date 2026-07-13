@@ -91,9 +91,9 @@ Only the `brain_admin` role can bypass RLS (used by Brain Admin / ContextForge d
 
 | Type | Storage | Description |
 |------|---------|-------------|
-| **Semantic** | `knowledge_nodes` (pgvector) | Long-term knowledge as vector embeddings |
+| **Semantic** | `cells` (pgvector / sqlite-vec) | Long-term BrainCells with vector embeddings |
 | **Episodic** | `conversation_episodes` (Postgres) | Session summaries, queryable conversation history |
-| **Entity** | `user_facts` (Postgres) | Persistent user facts across sessions |
+| **BrainCells** | `cells` (Postgres) | Durable facts, preferences, and documentation |
 | **Embedding Cache** | Redis (optional) | Avoids redundant API calls; falls back to LRU (2048 entries) |
 
 ---

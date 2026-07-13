@@ -26,7 +26,6 @@ class TestRLSPolicies:
         "cell_edges",
         "cell_aliases",
         "episodic_events",
-        "user_facts",
         "event_journal",
         "catalog_taxonomy",
         "blackboard",
@@ -141,8 +140,8 @@ class TestRLSPolicies:
         assert stmts1 == stmts2
 
     def test_expected_table_count(self):
-        """Exactly 9 tenant-scoped tables are configured."""
-        assert len(self.EXPECTED_TENANT_TABLES) == 9
+        """Exactly 8 tenant-scoped tables are configured."""
+        assert len(self.EXPECTED_TENANT_TABLES) == 8
 
 
 # ── set_tenant_context Tests ─────────────────────────────────────

@@ -58,7 +58,7 @@ class SearchMixin(PostgresStoreBase, ABC):
                 sql.SQL(
                     (
                         "SELECT id, 1 - (embedding <=> %s::vector) AS score FROM cells"
-                        " WHERE node_kind = 'chunk' AND embedding IS NOT NULL AND "
+                        " WHERE cell_kind = 'chunk' AND embedding IS NOT NULL AND "
                     )
                 )
                 + where_sql
@@ -79,7 +79,7 @@ class SearchMixin(PostgresStoreBase, ABC):
                             "search_vector || COALESCE(keywords_vector, ''::tsvector),"
                             "websearch_to_tsquery('simple', %s)"
                             ") AS score FROM cells"
-                            " WHERE node_kind = 'chunk' AND ("
+                            " WHERE cell_kind = 'chunk' AND ("
                             "search_vector || COALESCE(keywords_vector, ''::tsvector)"
                             ") @@ websearch_to_tsquery('simple', %s) AND "
                         )
@@ -165,7 +165,7 @@ class SearchMixin(PostgresStoreBase, ABC):
         cur = conn.cursor(row_factory=dict_row)
         rows = await cur.execute(
             """
-            SELECT id, node_kind, source_type, source_id, title, content,
+            SELECT id, cell_kind, source_type, source_id, title, content,
                    struct_data, scope_path, tenant_id, user_id
             FROM cells WHERE tenant_id = %s AND id = ANY(%s::text[])
         """,
@@ -181,7 +181,7 @@ class SearchMixin(PostgresStoreBase, ABC):
             nodes.append(
                 GraphNode(
                     id=as_str(raw_row.get("id")),
-                    node_kind=as_str(raw_row.get("node_kind")),
+                    cell_kind=as_str(raw_row.get("cell_kind")),
                     content=as_str(raw_row.get("content")),
                     source_type=as_str(raw_row.get("source_type")) or None,
                     source_id=as_str(raw_row.get("source_id")) or None,

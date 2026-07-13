@@ -88,20 +88,20 @@ class TestRequireAdminTenantScope:
     def test_admin_all_with_tenant_id_returns_tenant(self):
         """admin:all + tenant_id → returns tenant_id as filter."""
         tok = _token(("admin:all",))
-        result = _require_admin_tenant_scope(tok, "nszu", "TestRpc")
-        assert result == "nszu"
+        result = _require_admin_tenant_scope(tok, "sample_project", "TestRpc")
+        assert result == "sample_project"
 
     def test_non_admin_all_with_valid_tenant_returns_tenant(self):
         """Single allowed_tenant + matching tenant_id → allowed."""
-        tok = _token((Permissions.ADMIN_READ,), ("nszu",))
-        result = _require_admin_tenant_scope(tok, "nszu", "TestRpc")
-        assert result == "nszu"
+        tok = _token((Permissions.ADMIN_READ,), ("sample_project",))
+        result = _require_admin_tenant_scope(tok, "sample_project", "TestRpc")
+        assert result == "sample_project"
 
     def test_non_admin_all_missing_tenant_id_raises(self):
         """No admin:all + no tenant_id → SecurityError."""
         from contextunity.core.exceptions import SecurityError
 
-        tok = _token((Permissions.ADMIN_READ,), ("nszu",))
+        tok = _token((Permissions.ADMIN_READ,), ("sample_project",))
         with pytest.raises(SecurityError, match="tenant_id is required"):
             _require_admin_tenant_scope(tok, None, "AdminSearchTraces")
 
@@ -111,13 +111,13 @@ class TestRequireAdminTenantScope:
 
         tok = _token((Permissions.ADMIN_READ,), ())
         with pytest.raises(SecurityError):
-            _require_admin_tenant_scope(tok, "nszu", "AdminSearchTraces")
+            _require_admin_tenant_scope(tok, "sample_project", "AdminSearchTraces")
 
     def test_non_admin_all_wrong_tenant_raises(self):
-        """Allowed tenant 'nszu', requesting 'other' → SecurityError."""
+        """Allowed tenant 'sample_project', requesting 'other' → SecurityError."""
         from contextunity.core.exceptions import SecurityError
 
-        tok = _token((Permissions.ADMIN_READ,), ("nszu",))
+        tok = _token((Permissions.ADMIN_READ,), ("sample_project",))
         with pytest.raises(SecurityError, match="tenant access denied"):
             _require_admin_tenant_scope(tok, "other", "AdminSearchTraces")
 
@@ -151,23 +151,27 @@ class TestTokenCanViewTenant:
     def test_scoped_token_can_view_own_tenant(self):
         from contextunity.brain.service.handlers.admin import _token_can_view_tenant
 
-        assert _token_can_view_tenant(_token((Permissions.ADMIN_READ,), ("nszu",)), "nszu")
+        assert _token_can_view_tenant(
+            _token((Permissions.ADMIN_READ,), ("sample_project",)), "sample_project"
+        )
 
     def test_scoped_token_cannot_view_other_tenant(self):
-        """A token scoped to 'nszu' must NOT view 'other' tenant's trace by id."""
+        """A token scoped to 'sample_project' must NOT view 'other' tenant's trace by id."""
         from contextunity.brain.service.handlers.admin import _token_can_view_tenant
 
-        assert not _token_can_view_tenant(_token((Permissions.ADMIN_READ,), ("nszu",)), "other")
+        assert not _token_can_view_tenant(
+            _token((Permissions.ADMIN_READ,), ("sample_project",)), "other"
+        )
 
     def test_empty_allowed_tenants_cannot_view_any(self):
         from contextunity.brain.service.handlers.admin import _token_can_view_tenant
 
-        assert not _token_can_view_tenant(_token((Permissions.ADMIN_READ,), ()), "nszu")
+        assert not _token_can_view_tenant(_token((Permissions.ADMIN_READ,), ()), "sample_project")
 
     def test_non_token_cannot_view(self):
         from contextunity.brain.service.handlers.admin import _token_can_view_tenant
 
-        assert not _token_can_view_tenant(None, "nszu")
+        assert not _token_can_view_tenant(None, "sample_project")
 
 
 # ── AdminHandlersMixin on generated servicer ──────────────────────────────
@@ -219,20 +223,20 @@ class TestAdminTokenPermissions:
 
     def test_admin_read_with_single_tenant_cannot_cross_tenant(self):
         """Token with single allowed_tenant cannot access another tenant."""
-        tok = _token(("admin:read",), ("nszu",))
-        assert tok.can_access_tenant("nszu")
+        tok = _token(("admin:read",), ("sample_project",))
+        assert tok.can_access_tenant("sample_project")
         assert not tok.can_access_tenant("other")
 
     def test_admin_all_can_access_any_tenant(self):
         tok = _token(("admin:all",))
-        assert tok.can_access_tenant("nszu")
+        assert tok.can_access_tenant("sample_project")
         assert tok.can_access_tenant("other")
         assert tok.can_access_tenant("any-tenant")
 
     def test_empty_allowed_tenants_cannot_access_any_tenant(self):
         """Empty allowed_tenants without admin:all cannot access any tenant."""
         tok = _token(("admin:read",), ())
-        assert not tok.can_access_tenant("nszu")
+        assert not tok.can_access_tenant("sample_project")
         assert not tok.can_access_tenant("any-tenant")
 
 

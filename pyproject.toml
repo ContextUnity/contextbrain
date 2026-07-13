@@ -115,6 +115,19 @@ hf-transformers = [
 hf-embeddings = [
     "sentence-transformers>=3.0.0",
 ]
+# Default local BrainCell provider. Kept optional so the base Brain package,
+# deterministic service-boundary tests, and HTTP-only deployments do not pull
+# an ONNX runtime or model-download dependencies.
+embeddings-onnx = [
+    "huggingface-hub>=0.20.0",
+    "numpy>=1.24.0",
+    "onnxruntime>=1.16.0",
+    "tokenizers>=0.15.0",
+]
+# SQLite vector storage for PATH L. Postgres deployments use pgvector instead.
+sqlite-vectors = [
+    "sqlite-vec>=0.1.6",
+]
 # NLP enrichment (NER + topic extraction)
 nlp = [
     "spacy>=3.7.0",

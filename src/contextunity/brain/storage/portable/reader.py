@@ -1,4 +1,4 @@
-"""Portable Archive v1 — Reader and Validator.
+"""Portable Archive reader and validator.
 Validates archive structure, record schemas, and embedding consistency.
 """
 
@@ -71,7 +71,9 @@ class BrainPortableArchiveReader:
 
         # Validate embedding refs if embeddings.jsonl exists
         emb_path = self.archive_dir / "embeddings.jsonl"
-        if emb_refs_used and emb_path.exists():
+        if emb_refs_used and not emb_path.exists():
+            errors.append("Missing embeddings.jsonl for referenced vectors")
+        elif emb_refs_used:
             emb_refs_found: set[str] = set()
             with open(emb_path) as f:
                 for i, line in enumerate(f, 1):
@@ -105,6 +107,9 @@ class BrainPortableArchiveReader:
 
     def iter_records(self):
         """Yield parsed records from the archive."""
+        if self.manifest is None:
+            manifest_path = self.archive_dir / "manifest.json"
+            self.manifest = PortableManifest.model_validate_json(manifest_path.read_text())
         records_path = self.archive_dir / "records.jsonl"
         with open(records_path) as f:
             for line in f:

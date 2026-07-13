@@ -1,4 +1,4 @@
-"""Pydantic models for Portable Archive v1 records.
+"""Pydantic models for the current Portable Archive records.
 All models use ``ConfigDict(extra="forbid")`` — malformed records
 are rejected at parse time, never silently imported.
 """
@@ -9,12 +9,11 @@ from datetime import datetime, timezone
 from typing import ClassVar, Literal
 
 from contextunity.core.parsing import json_loads as parse_wire_json
-from contextunity.core.types import JsonDict, JsonValue, is_json_dict
+from contextunity.core.types import JsonDict, is_json_dict
 from pydantic import BaseModel, ConfigDict, Field
 
 from contextunity.brain.core.exceptions import BrainValidationError
-
-ARCHIVE_FORMAT = "contextunity.brain.portable.v2"
+from contextunity.brain.embedding_space import DEFAULT_EMBEDDING_DIMENSION
 
 # ── Manifest ──────────────────────────────────────────────────────
 
@@ -24,10 +23,8 @@ class PortableManifest(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    format: Literal["contextunity.brain.portable.v2"] = ARCHIVE_FORMAT
     source_backend: str = "sqlite-vec"
-    schema_version: int = 2
-    vector_dim: int = 1536
+    vector_dim: int = DEFAULT_EMBEDDING_DIMENSION
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     record_counts: dict[str, int] = Field(default_factory=dict)
     tenants: list[str] = Field(default_factory=list)
@@ -84,21 +81,24 @@ class TaxonomyRecord(BaseModel):
 
 
 class CellRecord(BaseModel):
-    """Represent and manage BrainCell Record logic within the system."""
+    """Canonical BrainCell archive record."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
     type: Literal["cell"] = "cell"
     tenant_id: str
     id: str
     content: str
-    node_kind: str = "concept"
-    source_type: str | None = None
-    source_id: str | None = None
-    title: str | None = None
-    keywords_text: str | None = None
+    cell_kind: str = "concept"
+    source_type: str = "manual"
+    source_ref: str | None = None
     scope_path: str | None = None
+    content_hash: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    visibility: str = "tenant"
     metadata: JsonDict = Field(default_factory=dict)
     user_id: str | None = None
+    created_at: str
+    updated_at: str
     embedding_ref: str | None = None
 
 
@@ -128,19 +128,6 @@ class EpisodeRecord(BaseModel):
     metadata: JsonDict = Field(default_factory=dict)
     created_at: str
     embedding_ref: str | None = None
-
-
-class FactRecord(BaseModel):
-    """Represent and manage Fact Record logic within the system."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-    type: Literal["fact"] = "fact"
-    tenant_id: str
-    user_id: str
-    fact_key: str
-    fact_value: JsonValue
-    confidence: float = 1.0
-    source_id: str | None = None
 
 
 class SynapseRecord(BaseModel):
@@ -191,7 +178,6 @@ RECORD_TYPES: dict[str, type[BaseModel]] = {
     "cell": CellRecord,
     "cell_edge": CellEdgeRecord,
     "episode": EpisodeRecord,
-    "fact": FactRecord,
     "synapse": SynapseRecord,
 }
 
@@ -218,7 +204,6 @@ def parse_record(line: str) -> BaseModel:
 
 
 __all__ = [
-    "ARCHIVE_FORMAT",
     "PortableManifest",
     "BlackboardRecord",
     "TraceRecord",
@@ -226,7 +211,6 @@ __all__ = [
     "CellRecord",
     "CellEdgeRecord",
     "EpisodeRecord",
-    "FactRecord",
     "SynapseRecord",
     "EmbeddingRecord",
     "RECORD_TYPES",

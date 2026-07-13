@@ -38,7 +38,9 @@ class TraceHandlersMixin(BrainHandlerBase):
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.TRACE_WRITE)
         params = LogTracePayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
+        validate_tenant_access(
+            token, params.tenant_id, context, operation="write", record_kind="trace"
+        )
         validate_user_access(token, params.user_id, context)
 
         user_id = params.user_id

@@ -9,7 +9,7 @@ from contextunity.core import get_contextunit_logger
 logger = get_contextunit_logger(__name__)
 
 # Current schema version — bump when adding tables/columns.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 # CP-1 breaking preflight rename map (legacy -> canonical), mirrors the
 # Postgres preflight in `postgres/schema.py`. A developer's persistent
@@ -27,7 +27,10 @@ _TABLE_RENAMES: tuple[tuple[str, str], ...] = (
     # `vec_cells` and all search/insert code reads/writes only that one.
     ("vec_knowledge_nodes", "vec_cells"),
 )
-_COLUMN_RENAMES: tuple[tuple[str, str, str], ...] = (("cells", "taxonomy_path", "scope_path"),)
+_COLUMN_RENAMES: tuple[tuple[str, str, str], ...] = (
+    ("cells", "taxonomy_path", "scope_path"),
+    ("cells", "node_kind", "cell_kind"),
+)
 
 # Event Journal v0 columns (storage only — no public Event Journal RPCs yet),
 # added to Postgres by its preflight migration. Backfilled here the same way
@@ -79,6 +82,12 @@ def apply_preflight_renames(db: sqlite3.Connection) -> None:
         cells_columns = {row[1] for row in db.execute("PRAGMA table_info(cells)").fetchall()}
         if "content_hash" not in cells_columns:
             db.execute("ALTER TABLE cells ADD COLUMN content_hash TEXT")
+        if "source_ref" not in cells_columns:
+            db.execute("ALTER TABLE cells ADD COLUMN source_ref TEXT")
+        if "confidence" not in cells_columns:
+            db.execute("ALTER TABLE cells ADD COLUMN confidence REAL NOT NULL DEFAULT 0.5")
+        if "visibility" not in cells_columns:
+            db.execute("ALTER TABLE cells ADD COLUMN visibility TEXT NOT NULL DEFAULT 'tenant'")
 
 
 def build_core_ddl() -> list[str]:
@@ -112,20 +121,42 @@ def build_core_ddl() -> list[str]:
             id              TEXT PRIMARY KEY,
             tenant_id       TEXT NOT NULL,
             user_id         TEXT,
-            node_kind       TEXT DEFAULT 'concept',
+            cell_kind       TEXT DEFAULT 'concept',
             source_type     TEXT,
             source_id       TEXT,
+            source_ref      TEXT,
             title           TEXT,
             content         TEXT NOT NULL,
             struct_data     TEXT,
             keywords_text   TEXT,
             scope_path      TEXT,
             content_hash    TEXT,
+            confidence      REAL NOT NULL DEFAULT 0.5,
+            visibility      TEXT NOT NULL DEFAULT 'tenant',
             created_at      TEXT DEFAULT (datetime('now')),
             updated_at      TEXT DEFAULT (datetime('now'))
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_cells_tenant ON cells (tenant_id)",
+        """
+        CREATE TABLE IF NOT EXISTS cell_embedding_jobs (
+            job_id          TEXT PRIMARY KEY,
+            tenant_id       TEXT NOT NULL,
+            cell_id         TEXT NOT NULL,
+            content_hash    TEXT NOT NULL,
+            profile         TEXT NOT NULL,
+            status          TEXT NOT NULL CHECK (status IN ('pending','processing','ready','failed','skipped')),
+            attempt         INTEGER NOT NULL DEFAULT 0,
+            lease_id        TEXT,
+            lease_until     TEXT,
+            error_code      TEXT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (cell_id) REFERENCES cells(id) ON DELETE CASCADE
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_embedding_jobs_claim ON cell_embedding_jobs (tenant_id, status, lease_until)",
         # CellEdges
         """
         CREATE TABLE IF NOT EXISTS cell_edges (
@@ -190,21 +221,8 @@ def build_core_ddl() -> list[str]:
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_ep_tenant_user ON episodic_events (tenant_id, user_id)",
-        # User facts
-        """
-        CREATE TABLE IF NOT EXISTS user_facts (
-            tenant_id   TEXT NOT NULL,
-            user_id     TEXT NOT NULL,
-            fact_key    TEXT NOT NULL,
-            fact_value  TEXT,
-            confidence  REAL DEFAULT 1.0,
-            source_id   TEXT,
-            updated_at  TEXT DEFAULT (datetime('now')),
-            PRIMARY KEY (tenant_id, user_id, fact_key)
-        )
-        """,
         # BrainSynapse (Flat Memory Phase B) — mirrors the canonical Postgres
-        # `synapses` table (postgres/schema.py `_experiences_schema`). SQLite
+        # `synapses` table (postgres/schema.py `_synapses_schema`). SQLite
         # has no generated-column support in this SQLite build path, so
         # `q_composite` is stored (not generated) and kept in sync by the
         # storage mixin at write/update time using the same formula.

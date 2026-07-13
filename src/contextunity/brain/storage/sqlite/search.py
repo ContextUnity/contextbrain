@@ -104,7 +104,7 @@ class SearchMixin(SqliteConnectionMixin):
             if query_text and query_text.strip():
                 text_q = """
                     SELECT id FROM cells
-                    WHERE tenant_id = ? AND node_kind = 'chunk'
+                    WHERE tenant_id = ? AND cell_kind = 'chunk'
                       AND (content LIKE ? OR keywords_text LIKE ? OR title LIKE ?)
                 """
                 like_pat = f"%{query_text.strip()}%"
@@ -156,7 +156,7 @@ class SearchMixin(SqliteConnectionMixin):
             node_placeholders = ", ".join("?" for _ in ranked_ids)
             cursor = db.execute(
                 f"""
-                SELECT id, node_kind, source_type, source_id, title,
+                SELECT id, cell_kind, source_type, source_id, title,
                        content, struct_data, scope_path, tenant_id, user_id
                 FROM cells
                 WHERE tenant_id = ? AND id IN ({node_placeholders})
@@ -172,7 +172,7 @@ class SearchMixin(SqliteConnectionMixin):
                 node_id = as_str(sqlite_cell(row, "id"))
                 node_map[node_id] = GraphNode(
                     id=node_id,
-                    node_kind=as_str(sqlite_cell(row, "node_kind")),
+                    cell_kind=as_str(sqlite_cell(row, "cell_kind")),
                     content=as_str(sqlite_cell(row, "content")),
                     source_type=as_str(sqlite_cell(row, "source_type")) or None,
                     source_id=as_str(sqlite_cell(row, "source_id")) or None,

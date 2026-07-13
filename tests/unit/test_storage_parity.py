@@ -61,8 +61,11 @@ async def postgres_store():
     from contextunity.brain.storage.postgres import PostgresBrainStore
 
     store = PostgresBrainStore(dsn=BRAIN_TEST_DSN)
-    yield store
-    await store.close()
+    await store.ensure_schema()
+    try:
+        yield store
+    finally:
+        await store.close()
 
 
 TENANT = "test-tenant"
@@ -295,13 +298,13 @@ class TestUserWildcardRlsPostgres:
 
         tenant = f"rls-user-{_uuid.uuid4().hex}"
         await postgres_store.upsert_graph(
-            [GraphNode(id=f"{tenant}-a", content="user a cell", node_kind="concept")],
+            [GraphNode(id=f"{tenant}-a", content="user a cell", cell_kind="concept")],
             [],
             tenant_id=tenant,
             user_id="user-a",
         )
         await postgres_store.upsert_graph(
-            [GraphNode(id=f"{tenant}-b", content="user b cell", node_kind="concept")],
+            [GraphNode(id=f"{tenant}-b", content="user b cell", cell_kind="concept")],
             [],
             tenant_id=tenant,
             user_id="user-b",
@@ -452,9 +455,9 @@ class TestGraphParity:
         from contextunity.brain.storage.postgres.models import GraphEdge, GraphNode
 
         nodes = [
-            GraphNode(id="n1", content="Node 1", node_kind="concept"),
-            GraphNode(id="n2", content="Node 2", node_kind="concept"),
-            GraphNode(id="n3", content="Node 3", node_kind="concept"),
+            GraphNode(id="n1", content="Node 1", cell_kind="concept"),
+            GraphNode(id="n2", content="Node 2", cell_kind="concept"),
+            GraphNode(id="n3", content="Node 3", cell_kind="concept"),
         ]
         edges = [
             GraphEdge(source_id="n1", target_id="n2", relation="related"),
@@ -554,7 +557,7 @@ class TestSearchParity:
                     GraphNode(
                         id="cell-1",
                         content="The quick brown fox jumps over the lazy dog",
-                        node_kind="chunk",
+                        cell_kind="chunk",
                     )
                 ],
                 [],
@@ -579,7 +582,7 @@ class TestSearchParity:
 
         run(
             sqlite_store.upsert_graph(
-                [GraphNode(id="cell-secret", content="classified findings", node_kind="chunk")],
+                [GraphNode(id="cell-secret", content="classified findings", cell_kind="chunk")],
                 [],
                 tenant_id=TENANT,
             )
@@ -603,13 +606,13 @@ class TestSearchParity:
                     GraphNode(
                         id="cell-scope-good",
                         content="scoped parity marker",
-                        node_kind="chunk",
+                        cell_kind="chunk",
                         scope_path="acme.a_b.step",
                     ),
                     GraphNode(
                         id="cell-scope-bad",
                         content="scoped parity marker",
-                        node_kind="chunk",
+                        cell_kind="chunk",
                         scope_path="acme.axb.step",
                     ),
                 ],
@@ -630,7 +633,7 @@ class TestSearchParity:
         assert [result.node.id for result in results] == ["cell-scope-good"]
 
     def test_search_ignores_non_chunk_nodes(self, sqlite_store, run):
-        """Only ``node_kind='chunk'`` cells are text-searchable — ``concept``
+        """Only ``cell_kind='chunk'`` cells are text-searchable — ``concept``
         nodes (used for graph-structure-only entries, e.g. TestGraphParity's
         fixtures) are excluded by design."""
         from contextunity.brain.storage.postgres.models import GraphNode
@@ -639,7 +642,7 @@ class TestSearchParity:
             sqlite_store.upsert_graph(
                 [
                     GraphNode(
-                        id="concept-1", content="unsearchable concept node", node_kind="concept"
+                        id="concept-1", content="unsearchable concept node", cell_kind="concept"
                     )
                 ],
                 [],
@@ -672,7 +675,7 @@ class TestSearchPostgresParity:
                 GraphNode(
                     id=f"pg-search-{time.time_ns()}",
                     content="Postgres canonical cells search proof",
-                    node_kind="chunk",
+                    cell_kind="chunk",
                 )
             ],
             [],
@@ -793,96 +796,6 @@ class TestEpisodesPostgresParity:
                 user_id=USER,
                 content="x",
                 tenant_id="",
-            )
-
-
-# ── Facts ─────────────────────────────────────────────────────────
-
-
-class TestFactsParity:
-    """Facts: upsert → get → upsert updates."""
-
-    def test_upsert_and_get(self, sqlite_store, run):
-        run(
-            sqlite_store.upsert_fact(
-                user_id=USER,
-                tenant_id=TENANT,
-                key="favorite_color",
-                value="blue",
-                confidence=0.9,
-            )
-        )
-
-        facts = run(sqlite_store.get_user_facts(user_id=USER, tenant_id=TENANT))
-        assert len(facts) == 1
-        assert facts[0]["fact_key"] == "favorite_color"
-        assert facts[0]["fact_value"] == "blue"
-        assert facts[0]["confidence"] == 0.9
-
-    def test_upsert_updates_existing(self, sqlite_store, run):
-        run(
-            sqlite_store.upsert_fact(
-                user_id=USER,
-                tenant_id=TENANT,
-                key="name",
-                value="Alice",
-            )
-        )
-        run(
-            sqlite_store.upsert_fact(
-                user_id=USER,
-                tenant_id=TENANT,
-                key="name",
-                value="Bob",
-            )
-        )
-
-        facts = run(sqlite_store.get_user_facts(user_id=USER, tenant_id=TENANT))
-        assert len(facts) == 1
-        assert facts[0]["fact_value"] == "Bob"
-
-    def test_tenant_isolation(self, sqlite_store, run):
-        run(
-            sqlite_store.upsert_fact(
-                user_id=USER,
-                tenant_id=TENANT,
-                key="secret",
-                value="classified",
-            )
-        )
-
-        facts = run(
-            sqlite_store.get_user_facts(
-                user_id=USER,
-                tenant_id=OTHER_TENANT,
-            )
-        )
-        assert facts == []
-
-    def test_tenant_required(self, sqlite_store, run):
-        with pytest.raises(BrainValidationError, match="tenant_id"):
-            run(
-                sqlite_store.upsert_fact(
-                    user_id=USER,
-                    tenant_id="",
-                    key="k",
-                    value="v",
-                )
-            )
-
-
-class TestFactsPostgresParity:
-    """Same typed-error shape against live Postgres — failure-path parity,
-    not just the successful-path proof TestFactsParity gives for SQLite."""
-
-    @pytest.mark.asyncio
-    async def test_tenant_required(self, postgres_store):
-        with pytest.raises(BrainValidationError, match="tenant_id"):
-            await postgres_store.upsert_fact(
-                user_id=USER,
-                tenant_id="",
-                key="k",
-                value="v",
             )
 
 

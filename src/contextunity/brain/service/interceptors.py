@@ -26,17 +26,26 @@ RPC_PERMISSION_MAP: dict[str, str] = {
     "GraphSearch": Permissions.BRAIN_READ,
     "CreateKGRelation": Permissions.BRAIN_WRITE,
     "Upsert": Permissions.BRAIN_WRITE,
+    "UpsertCell": Permissions.BRAIN_WRITE,
+    "QueryCells": Permissions.BRAIN_READ,
+    "GetCell": Permissions.BRAIN_READ,
+    "EnqueueCellEmbedding": Permissions.BRAIN_WRITE,
+    "ClaimCellEmbeddingJobs": Permissions.BRAIN_EMBED,
+    "EmbedClaimedCell": Permissions.BRAIN_EMBED,
+    "FailCellEmbeddingJob": Permissions.BRAIN_EMBED,
+    "GetCellEmbeddingStatus": Permissions.BRAIN_READ,
+    "GetEmbeddingCapability": Permissions.BRAIN_EMBED,
     "QueryMemory": Permissions.BRAIN_READ,
     "GetTaxonomy": Permissions.BRAIN_READ,
     # Memory
     "AddEpisode": Permissions.MEMORY_WRITE,
     "GetRecentEpisodes": Permissions.MEMORY_READ,
-    "UpsertFact": Permissions.MEMORY_WRITE,
-    "GetUserFacts": Permissions.MEMORY_READ,
+    "GetOldEpisodes": Permissions.MEMORY_READ,
     "RetentionCleanup": Permissions.MEMORY_WRITE,
     "GetEpisodeStats": Permissions.MEMORY_READ,
     "WriteBlackboard": Permissions.MEMORY_WRITE,
     "ReadBlackboard": Permissions.MEMORY_READ,
+    "PruneExpiredBlackboard": Permissions.MEMORY_WRITE,
     # BrainSynapse — memory:* family, same as Blackboard/episodes above.
     # UpdateSynapseQ may later warrant a dedicated review permission for
     # admin-verdict updates, but memory:write is correct for the general

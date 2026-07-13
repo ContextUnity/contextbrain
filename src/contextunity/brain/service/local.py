@@ -4,16 +4,42 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from importlib.util import find_spec
 
 import grpc
 from contextunity.core import brain_pb2_grpc, get_contextunit_logger
+from contextunity.core.exceptions import ConfigurationError
 
 from ..storage.duckdb_store import DuckDBStore
 from ..storage.sqlite import SqliteBrainStore
 from .brain_service import BrainService
-from .embedders import get_embedder
+from .embeddings import get_embedder
 
 logger = get_contextunit_logger(__name__)
+
+
+def _validate_local_vector_support(
+    *, enrichment_enabled: bool, provider: str, has_sqlite_vec: bool
+) -> None:
+    """Fail before local startup when enabled enrichment lacks its vector runtime."""
+    if not enrichment_enabled:
+        return
+    missing: list[str] = []
+    if not has_sqlite_vec:
+        missing.append("sqlite-vec")
+    provider_modules = {
+        "onnx": ("onnxruntime", "huggingface_hub", "numpy", "tokenizers"),
+        "sentence_transformers": ("sentence_transformers",),
+    }
+    for module in provider_modules.get(provider, ()):
+        if find_spec(module) is None:
+            missing.append(module)
+    if missing:
+        raise ConfigurationError(
+            "Local embedding enrichment requires vector support that is not installed: "
+            + ", ".join(missing)
+            + ". Install with: uv sync --package contextunity-cli --extra local-vectors"
+        )
 
 
 class LocalBrainServer:
@@ -70,7 +96,12 @@ async def create_local_brain() -> LocalBrainServer:
 
     brain_config = get_brain_config()
 
-    storage = SqliteBrainStore()
+    storage = SqliteBrainStore(vector_dim=brain_config.embeddings.dimension)
+    _validate_local_vector_support(
+        enrichment_enabled=brain_config.embedding_enrichment.enabled,
+        provider=brain_config.embeddings.provider,
+        has_sqlite_vec=storage.has_sqlite_vec(),
+    )
     brain = BrainService(
         storage=storage,
         duckdb=DuckDBStore(),

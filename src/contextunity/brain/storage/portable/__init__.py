@@ -1,4 +1,4 @@
-"""Portable Archive v2 — public API.
+"""Portable Archive public API.
 
 Usage::
 
@@ -11,14 +11,12 @@ Usage::
 
 from .importer import ImportResult, import_portable_archive
 from .models import (
-    ARCHIVE_FORMAT,
     RECORD_TYPES,
     BlackboardRecord,
     CellEdgeRecord,
     CellRecord,
     EmbeddingRecord,
     EpisodeRecord,
-    FactRecord,
     PortableManifest,
     SynapseRecord,
     TaxonomyRecord,
@@ -29,7 +27,6 @@ from .reader import BrainPortableArchiveReader
 from .writer import BrainPortableArchiveWriter
 
 __all__ = [
-    "ARCHIVE_FORMAT",
     "BlackboardRecord",
     "BrainPortableArchiveReader",
     "BrainPortableArchiveWriter",
@@ -37,7 +34,6 @@ __all__ = [
     "CellRecord",
     "EmbeddingRecord",
     "EpisodeRecord",
-    "FactRecord",
     "ImportResult",
     "PortableManifest",
     "RECORD_TYPES",

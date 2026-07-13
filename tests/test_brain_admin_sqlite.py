@@ -49,7 +49,7 @@ async def test_sqlite_admin_search_traces_and_analytics(
     assert details["agent_id"] == "agent-a"
 
     layers = ops.get_memory_layer_stats(tenant_id=None)
-    assert "episodes" in layers
+    assert "episodic_events" in layers
     assert "cells" in layers
 
     analytics = ops.get_analytics_summary(tenant_id=None, hours=None)
@@ -82,3 +82,61 @@ async def test_sqlite_admin_search_traces_and_analytics(
     assert system_analytics["unique_users"] == 1
     assert system_analytics["total_input_tokens"] == 10
     assert system_analytics["total_output_tokens"] == 5
+
+
+@pytest.mark.asyncio
+async def test_memory_layer_stats_include_cell_source_types(
+    sqlite_store: SqliteBrainStore,
+) -> None:
+    for index, source_type in enumerate(
+        ("auto_extract", "documentation", "documentation", "synthesis", "manual")
+    ):
+        await sqlite_store.upsert_cell(
+            tenant_id="demo",
+            cell_kind="documentation" if source_type == "documentation" else "fact",
+            content=f"{source_type} cell {index}",
+            source_type=source_type,
+        )
+
+    stats = SqliteAdminOps(sqlite_store).get_memory_layer_stats(tenant_id="demo")
+
+    assert stats["cells"] == {
+        "count": 5,
+        "by_source_type": {
+            "auto_extract": 1,
+            "documentation": 2,
+            "manual": 1,
+            "synthesis": 1,
+        },
+    }
+    assert stats["embedding_jobs"] == {
+        "pending": 0,
+        "processing": 0,
+        "ready": 0,
+        "failed": 0,
+        "skipped": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_memory_layer_stats_include_embedding_job_states(
+    sqlite_store: SqliteBrainStore,
+) -> None:
+    cell = await sqlite_store.upsert_cell(
+        tenant_id="demo",
+        cell_kind="documentation",
+        content="queue state",
+        content_hash="sha256:queue-state",
+        source_type="documentation",
+    )
+    await sqlite_store.enqueue_embedding_job(
+        tenant_id="demo",
+        cell_id=str(cell["id"]),
+        content_hash="sha256:queue-state",
+        profile="default",
+        max_pending=10,
+    )
+
+    stats = SqliteAdminOps(sqlite_store).get_memory_layer_stats(tenant_id="demo")
+
+    assert stats["embedding_jobs"]["pending"] == 1

@@ -119,7 +119,7 @@ async def assert_admin_ops_over_seeded_trace(
     assert summary["total_traces"] >= 1
 
     layers = await ops.get_memory_layer_stats(tenant_id=None)
-    assert "episodes" in layers
+    assert "episodic_events" in layers
     assert "cells" in layers
 
     filters = await ops.get_filter_options(tenant_id=None)

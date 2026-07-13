@@ -123,18 +123,8 @@ class IngestionService:
         # Placeholder: Chunking logic would go here
         chunks = [content]
 
-        from .storage.postgres.models import GraphNode
-
         doc_id = None
         for chunk in chunks:
-            # Generate real embeddings if embedder is available
-            if embedder is not None:
-                # Fail closed: a failed embedding must not be silently replaced
-                # with a sentinel vector that would poison the vector store.
-                embedding = await embedder.embed_async(chunk)
-            else:
-                embedding = [0.1] * 1536
-
             unit = ContextUnit(
                 modality="text",
                 payload={"content": chunk, "metadata": enriched_metadata},
@@ -143,26 +133,25 @@ class IngestionService:
             )
 
             # Use deterministic ID from metadata if provided (enables true upsert)
-            doc_id = enriched_metadata.pop("_doc_id", None) or str(unit.unit_id)
+            doc_id = enriched_metadata.get("_doc_id") or str(unit.unit_id)
             if not isinstance(doc_id, str):
                 doc_id = str(doc_id)
 
-            # Map ContextUnit to GraphNode for persistence
-            node = GraphNode(
-                id=doc_id,
-                content=chunk,
-                embedding=embedding,
-                node_kind="chunk",
-                source_type=source_type,
-                metadata=enriched_metadata,
-                tenant_id=tenant_id,
-            )
+            cell_metadata = dict(enriched_metadata)
+            if embedder is not None:
+                cell_metadata["embedding_enrichment"] = "pending"
 
-            await self.storage.upsert_graph(
-                nodes=[node],
-                edges=[],
+            await self.storage.upsert_cell(
                 tenant_id=tenant_id,
                 user_id=user_id,
+                cell_id=doc_id,
+                cell_kind="document",
+                content=chunk,
+                metadata=cell_metadata,
+                source_type=source_type,
+                source_ref=as_str(enriched_metadata.get("source_ref")) or None,
+                confidence=0.8,
+                visibility=as_str(enriched_metadata.get("visibility")) or "tenant",
             )
             entities = as_json_dict_list(enriched_metadata.get("entities", []))
             await self.graph.add_data(unit, entities)
