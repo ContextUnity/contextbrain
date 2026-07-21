@@ -8,7 +8,7 @@ import types
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncContextManager
+from typing import AsyncContextManager, Literal
 
 from contextunity.core import get_contextunit_logger
 
@@ -19,6 +19,22 @@ try:
     _sqlite_vec_module = importlib.import_module("sqlite_vec")
 except ImportError:
     _sqlite_vec_module = None
+
+
+class _ClosingSqliteConnection(sqlite3.Connection):
+    """Close per-call connections after a ``with`` block commits or rolls back."""
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: types.TracebackType | None,
+    ) -> Literal[False]:
+        try:
+            _ = super().__exit__(exc_type, exc_value, traceback)
+            return False
+        finally:
+            self.close()
 
 
 class SqliteConnectionMixin:
@@ -36,7 +52,11 @@ class SqliteConnectionMixin:
         Returns:
             sqlite3.Connection: An instance of sqlite3.Connection.
         """
-        db = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        db = sqlite3.connect(
+            str(self.db_path),
+            check_same_thread=False,
+            factory=_ClosingSqliteConnection,
+        )
         _ = db.execute("PRAGMA journal_mode=WAL;")
         _ = db.execute("PRAGMA foreign_keys=ON;")
         db.enable_load_extension(True)

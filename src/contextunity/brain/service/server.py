@@ -45,16 +45,13 @@ async def serve():
     brain = BrainService()
 
     # Ensure schema exists on startup (idempotent — uses IF NOT EXISTS)
-    await brain.storage.ensure_schema(
-        include_commerce=True,
-        vector_dim=brain_config.postgres.vector_dim,
-    )
+    await brain.storage.ensure_schema(vector_dim=brain_config.postgres.vector_dim)
 
     brain_pb2_grpc.add_BrainServiceServicer_to_server(brain, server)
 
     from contextunity.core.grpc_utils import graceful_shutdown, start_grpc_server
 
-    heartbeat_task = await start_grpc_server(
+    runtime_handle = await start_grpc_server(
         server,
         "brain",
         brain_config.port,
@@ -65,7 +62,7 @@ async def serve():
         config=brain_config,
     )
 
-    await graceful_shutdown(server, "Brain", heartbeat_task=heartbeat_task)
+    await graceful_shutdown(server, "Brain", runtime_handle=runtime_handle)
 
 
 if __name__ == "__main__":

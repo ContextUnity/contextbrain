@@ -7,23 +7,27 @@ Usage: `from .store import PostgresBrainStore`
 
 from .base import PostgresStoreBase
 from .blackboard import BlackboardStoreMixin
+from .conversation_history import ConversationHistoryMixin
 from .embedding_jobs import EmbeddingJobsMixin
-from .episodes import EpisodesMixin
 from .graph import GraphMixin
+from .outcomes import OutcomeObservationsMixin
 from .search import SearchMixin
 from .synapses import SynapsesMixin
-from .taxonomy import TaxonomyMixin
+from .trace_artifacts import TraceArtifactsMixin
 from .traces import TracesMixin
+from .udb import UdbMixin
 
 
 class PostgresBrainStore(
     GraphMixin,
-    EpisodesMixin,
+    ConversationHistoryMixin,
+    TraceArtifactsMixin,
     TracesMixin,
-    TaxonomyMixin,
+    UdbMixin,
     SearchMixin,
     BlackboardStoreMixin,
     SynapsesMixin,
+    OutcomeObservationsMixin,
     EmbeddingJobsMixin,
     PostgresStoreBase,
 ):

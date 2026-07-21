@@ -7,13 +7,13 @@ from types import SimpleNamespace
 import pytest
 from contextunity.core.exceptions import ConfigurationError
 
-from contextunity.brain.service.local import _validate_local_vector_support
+from contextunity.brain.service.local import validate_local_vector_support
 
 
 def test_enabled_local_enrichment_rejects_missing_vector_runtime() -> None:
     """Local mode cannot accept embedding work without a vector backend."""
     with pytest.raises(ConfigurationError, match="--extra local-vectors"):
-        _validate_local_vector_support(
+        validate_local_vector_support(
             enrichment_enabled=True,
             provider="onnx",
             has_sqlite_vec=False,
@@ -22,7 +22,7 @@ def test_enabled_local_enrichment_rejects_missing_vector_runtime() -> None:
 
 def test_disabled_local_enrichment_needs_no_vector_dependencies() -> None:
     """Local non-vector workflows stay lightweight while the gate is off."""
-    _validate_local_vector_support(
+    validate_local_vector_support(
         enrichment_enabled=False,
         provider="onnx",
         has_sqlite_vec=False,
@@ -36,6 +36,7 @@ async def test_local_brain_passes_config_to_permission_interceptor(monkeypatch):
     cfg = SimpleNamespace(
         shield_url="shield.local:50054",
         port=55051,
+        sqlite_path="/tmp/test-brain.sqlite3",
         embeddings=SimpleNamespace(dimension=768, provider="onnx"),
         embedding_enrichment=SimpleNamespace(enabled=False),
     )
@@ -62,7 +63,7 @@ async def test_local_brain_passes_config_to_permission_interceptor(monkeypatch):
     monkeypatch.setattr(
         local,
         "SqliteBrainStore",
-        lambda *, vector_dim: SimpleNamespace(has_sqlite_vec=lambda: False),
+        lambda *, db_path, vector_dim: SimpleNamespace(has_sqlite_vec=lambda: False),
     )
     monkeypatch.setattr(local, "DuckDBStore", lambda: object())
     monkeypatch.setattr(local, "get_embedder", lambda _cfg: object())
@@ -76,4 +77,4 @@ async def test_local_brain_passes_config_to_permission_interceptor(monkeypatch):
     assert isinstance(server.grpc_server, FakeServer)
     assert seen["shield_url"] == "shield.local:50054"
     assert seen["config"] is cfg
-    assert seen["endpoint"] == "[::]:55051"
+    assert seen["endpoint"] == "127.0.0.1:55051"

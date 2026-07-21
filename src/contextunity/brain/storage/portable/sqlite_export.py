@@ -17,7 +17,7 @@ class SqlitePortableExport(BrainStorageProtocol, Protocol):
     def has_sqlite_vec(self) -> bool: ...
 
 
-def is_sqlite_export_store(store: BrainStorageProtocol) -> TypeGuard[SqlitePortableExport]:
+def is_sqlite_export_store(store: object) -> TypeGuard[SqlitePortableExport]:
     return hasattr(store, "get_sqlite_connection") and hasattr(store, "has_sqlite_vec")
 
 

@@ -54,6 +54,14 @@ class HttpEmbedder:
         """Synchronously generate one vector."""
         return run_coroutine_sync(lambda: self.embed_async(text))
 
+    async def embed_query_async(self, text: str) -> list[float]:
+        """Delegate query roles to the explicitly configured remote model."""
+        return await self.embed_async(text)
+
+    async def embed_document_async(self, text: str) -> list[float]:
+        """Delegate document roles to the explicitly configured remote model."""
+        return await self.embed_async(text)
+
     async def embed_async(self, text: str) -> list[float]:
         """Generate and validate one vector through the configured endpoint."""
         cached = await self._cache.get(self._identity, text)

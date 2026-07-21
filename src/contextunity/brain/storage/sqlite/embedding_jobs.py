@@ -81,11 +81,45 @@ class EmbeddingJobsMixin(SqliteConnectionMixin):
             if cell["content_hash"] != content_hash:
                 return {"status": "rejected", "reason_code": "content_hash_mismatch"}
             existing = conn.execute(
-                "SELECT job_id, status, idempotency_key FROM cell_embedding_jobs "
+                "SELECT job_id, status, error_code, idempotency_key FROM cell_embedding_jobs "
                 "WHERE tenant_id = ? AND cell_id = ? AND content_hash = ? AND profile = ?",
                 (tenant_id, cell_id, content_hash, profile),
             ).fetchone()
             if existing is not None:
+                if (
+                    existing["status"] == "skipped"
+                    and existing["error_code"] == "content_superseded"
+                ):
+                    pending = conn.execute(
+                        "SELECT COUNT(*) AS count FROM cell_embedding_jobs WHERE tenant_id = ? "
+                        "AND status IN ('pending', 'processing')",
+                        (tenant_id,),
+                    ).fetchone()["count"]
+                    if pending >= max_pending:
+                        return {"status": "rejected", "reason_code": "pending_limit"}
+                    conn.execute(
+                        "UPDATE cell_embedding_jobs SET status = 'pending', attempt = 0, "
+                        "lease_id = NULL, lease_until = NULL, error_code = NULL, "
+                        "updated_at = datetime('now') WHERE job_id = ?",
+                        (existing["job_id"],),
+                    )
+                    self._embedding_meta(
+                        conn,
+                        tenant_id=tenant_id,
+                        cell_id=cell_id,
+                        status="pending",
+                        profile=profile,
+                        content_hash=content_hash,
+                        attempt=0,
+                    )
+                    conn.commit()
+                    return {
+                        "job_id": existing["job_id"],
+                        "status": "pending",
+                        "idempotency_key": existing["idempotency_key"],
+                        "accepted": True,
+                        "requeued": True,
+                    }
                 return {
                     "job_id": existing["job_id"],
                     "status": existing["status"],

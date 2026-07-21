@@ -49,7 +49,7 @@ class EmbeddingJobsMixin(PostgresStoreBase, ABC):
                 return {"status": "rejected", "reason_code": "content_hash_mismatch"}
             existing = await fetch_all(
                 conn,
-                "SELECT job_id, status, idempotency_key FROM cell_embedding_jobs "
+                "SELECT job_id, status, error_code, idempotency_key FROM cell_embedding_jobs "
                 "WHERE tenant_id = %(tenant_id)s AND cell_id = %(cell_id)s "
                 "AND content_hash = %(content_hash)s AND profile = %(profile)s",
                 {
@@ -61,6 +61,43 @@ class EmbeddingJobsMixin(PostgresStoreBase, ABC):
             )
             existing_row = first_row(existing)
             if existing_row is not None:
+                if (
+                    existing_row.get("status") == "skipped"
+                    and existing_row.get("error_code") == "content_superseded"
+                ):
+                    pending = await fetch_all(
+                        conn,
+                        "SELECT count(*) AS count FROM cell_embedding_jobs "
+                        "WHERE tenant_id = %(tenant_id)s "
+                        "AND status IN ('pending', 'processing')",
+                        {"tenant_id": tenant_id},
+                    )
+                    pending_row = first_row(pending)
+                    if pending_row is not None and get_int(pending_row, "count") >= max_pending:
+                        return {"status": "rejected", "reason_code": "pending_limit"}
+                    await execute(
+                        conn,
+                        "UPDATE cell_embedding_jobs SET status = 'pending', attempt = 0, "
+                        "lease_id = NULL, lease_until = NULL, error_code = NULL, "
+                        "updated_at = now() WHERE job_id = %(job_id)s",
+                        {"job_id": existing_row["job_id"]},
+                    )
+                    await self._update_cell_meta(
+                        conn,
+                        tenant_id=tenant_id,
+                        cell_id=cell_id,
+                        status="pending",
+                        profile=profile,
+                        content_hash=content_hash,
+                        attempt=0,
+                    )
+                    return {
+                        "job_id": existing_row["job_id"],
+                        "status": "pending",
+                        "idempotency_key": existing_row["idempotency_key"],
+                        "accepted": True,
+                        "requeued": True,
+                    }
                 return {**existing_row, "accepted": False}
             pending = await fetch_all(
                 conn,

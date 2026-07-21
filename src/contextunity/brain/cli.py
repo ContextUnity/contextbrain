@@ -10,7 +10,7 @@ from rich.console import Console
 
 app = typer.Typer(
     name="contextbrain",
-    help="ContextBrain — Vector Storage, Episodic Memory, & Knowledge Graph",
+    help="ContextBrain — Vector Storage, Conversation History, & Knowledge Graph",
     add_completion=False,
     invoke_without_command=True,
 )

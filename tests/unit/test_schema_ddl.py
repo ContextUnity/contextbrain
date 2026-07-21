@@ -37,13 +37,13 @@ class TestBuildSchemaSql:
         sql = "\n".join(build_schema_sql(vector_dim=1536))
         assert "VECTOR(1536)" in sql
 
-    def test_commerce_excluded_by_default(self):
-        sql = "\n".join(build_schema_sql(vector_dim=768))
-        assert "catalog_taxonomy" not in sql
-
-    def test_commerce_included_when_enabled(self):
-        sql = "\n".join(build_schema_sql(vector_dim=768, include_commerce=True))
-        assert "catalog_taxonomy" in sql
+    def test_execution_trace_control_evidence_constraint_has_bootstrap_parity(self) -> None:
+        schema_sql = "\n".join(build_schema_sql(vector_dim=768))
+        backfill_sql = "\n".join(build_column_backfill_sql())
+        for sql in (schema_sql, backfill_sql):
+            assert "control_evidence" in sql
+            assert "execution_traces_control_evidence_object_check" in sql
+            assert "jsonb_typeof(control_evidence) = 'object'" in sql
 
     def test_source_type_check_constraint(self):
         """Source type enum must include legacy and Phase 3 canonical types."""
@@ -76,9 +76,9 @@ class TestRlsPolicies:
             "cells",
             "cell_edges",
             "cell_aliases",
-            "episodic_events",
-            "event_journal",
-            "catalog_taxonomy",
+            "conversation_records",
+            "conversation_migration_receipts",
+            "execution_traces",
             "blackboard",
             "synapses",
         ]
@@ -91,7 +91,7 @@ class TestRlsPolicies:
         assert "FORCE ROW LEVEL SECURITY" in sql
 
     def test_rls_user_isolation_for_sensitive_tables(self):
-        """Episodic and traces must isolate by user_id."""
+        """Conversation History and traces must isolate by user_id."""
         sql = "\n".join(build_rls_sql())
         assert "app.current_user" in sql
 
@@ -144,7 +144,7 @@ class TestPreflightRenameSql:
             "cell_aliases",
             "blackboard",
             "synapses",
-            "event_journal",
+            "execution_traces",
         ):
             assert canonical in sql, f"Missing rename target for canonical table {canonical}"
 
@@ -157,6 +157,18 @@ class TestPreflightRenameSql:
         assert all(
             ("IF EXISTS" in s) or ("to_regclass" in s and "DO $$" in s) for s in rename_stmts
         )
+
+    def test_conversation_preflight_rejects_malformed_rows_before_rename(self):
+        """Startup must preserve the legacy source when required evidence is invalid."""
+        sql = "\n".join(build_preflight_rename_sql())
+        rejection = "malformed legacy conversation row blocks migration"
+        rename = "ALTER TABLE episodic_events RENAME TO conversation_records"
+        assert rejection in sql
+        assert "tenant_id IS NULL OR tenant_id = ''" in sql
+        assert "user_id IS NULL OR user_id = ''" in sql
+        assert "content IS NULL" in sql
+        assert "jsonb_typeof(COALESCE(metadata, '{}'::jsonb)) <> 'object'" in sql
+        assert sql.index(rejection) < sql.index(rename)
 
     def test_column_rename_is_guarded(self):
         """taxonomy_path -> scope_path must check existence, not use bare RENAME COLUMN."""
@@ -180,7 +192,7 @@ class TestPreflightRenameSql:
             ("cell_aliases", "knowledge_aliases_tenant_isolation"),
             ("blackboard", "blackboard_records_tenant_isolation"),
             ("synapses", "agent_experiences_tenant_isolation"),
-            ("event_journal", "agent_traces_tenant_isolation"),
+            ("execution_traces", "agent_traces_tenant_isolation"),
         ):
             assert f"DROP POLICY IF EXISTS {old_policy} ON {table};" in sql, (
                 f"Missing legacy RLS policy drop for {table} ({old_policy})"
@@ -247,7 +259,13 @@ class TestMigrationPreflightParity:
         missing = {
             statement
             for statement in preflight - migration
-            if not ("node_kind" in statement and "cell_kind" in statement)
+            if not (
+                ("node_kind" in statement and "cell_kind" in statement)
+                or "execution_traces" in statement
+                or "event_journal" in statement
+                or "conversation_records" in statement
+                or "episodic_events" in statement
+            )
         }
         assert not missing, (
             "ensure_schema preflight statements missing from migration 0009/0014:\n"
@@ -279,3 +297,32 @@ class TestMigrationPreflightParity:
             assert "IF EXISTS" in normalized or normalized.startswith("DO $$"), (
                 f"Unguarded migration statement: {normalized}"
             )
+
+
+class TestExecutionTraceMigrationDdl:
+    """The dedicated migration owns the reversible physical trace rename."""
+
+    @staticmethod
+    def _migration_source() -> str:
+        from pathlib import Path
+
+        return (
+            Path(__file__).resolve().parents[2]
+            / "migrations"
+            / "versions"
+            / "0015_execution_traces.py"
+        ).read_text(encoding="utf-8")
+
+    def test_upgrade_is_fail_closed_and_idempotent(self):
+        source = self._migration_source()
+        assert "unmapped generic event row blocks trace migration" in source
+        assert "ALTER TABLE event_journal RENAME TO execution_traces" in source
+        assert "ADD COLUMN IF NOT EXISTS graph_run_id" in source
+        assert "CREATE UNIQUE INDEX IF NOT EXISTS execution_traces_tenant_run_uq" in source
+        assert "DROP COLUMN IF EXISTS event_type" in source
+
+    def test_downgrade_preserves_terminal_data_for_reupgrade(self):
+        source = self._migration_source()
+        assert "ALTER TABLE execution_traces RENAME TO event_journal" in source
+        assert "DROP COLUMN graph_run_id" not in source
+        assert "ADD COLUMN event_type TEXT NOT NULL DEFAULT 'trace.logged'" in source

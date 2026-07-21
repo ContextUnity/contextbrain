@@ -23,6 +23,7 @@ from contextunity.core.tenant_policy import (
     is_production_export_tenant,
     validate_tenant_id,
 )
+from contextunity.core.types import is_json_dict
 from pydantic import BaseModel
 
 from contextunity.brain.embedding_space import DEFAULT_EMBEDDING_DIMENSION
@@ -33,11 +34,11 @@ from .models import (
     BlackboardRecord,
     CellEdgeRecord,
     CellRecord,
+    ConversationArchiveRecord,
     EmbeddingRecord,
-    EpisodeRecord,
+    OutcomeObservationArchiveRecord,
     PortableManifest,
     SynapseRecord,
-    TaxonomyRecord,
     TraceRecord,
 )
 from .sqlite_export import is_sqlite_export_store
@@ -87,9 +88,9 @@ class BrainPortableArchiveWriter:
                     continue
                 self._tenants.add(tenant_id)
                 await self._export_blackboard(store, tenant_id, rf)
-                await self._export_taxonomy(store, tenant_id, rf)
                 await self._export_traces(store, tenant_id, rf)
-                await self._export_episodes(store, tenant_id, rf, ef)
+                await self._export_outcome_observations(store, tenant_id, rf)
+                await self._export_conversation_history(store, tenant_id, rf)
                 await self._export_graph(store, tenant_id, rf, ef)
                 await self._export_synapses(store, tenant_id, rf)
 
@@ -154,26 +155,6 @@ class BrainPortableArchiveWriter:
                     ),
                 )
 
-    async def _export_taxonomy(
-        self,
-        store: BrainStorageProtocol,
-        tenant_id: str,
-        handle: TextIO,
-    ) -> None:
-        items = await store.get_all_taxonomy(tenant_id=tenant_id)
-        for item in items:
-            self._write(
-                handle,
-                TaxonomyRecord(
-                    tenant_id=tenant_id,
-                    domain=as_str(item.get("domain")),
-                    name=as_str(item.get("name")),
-                    path=as_str(item.get("path")),
-                    keywords=as_str_list(item.get("keywords")),
-                    metadata=as_json_dict(item.get("metadata")),
-                ),
-            )
-
     async def _export_traces(
         self,
         store: BrainStorageProtocol,
@@ -183,6 +164,25 @@ class BrainPortableArchiveWriter:
         traces = await store.get_traces(tenant_id=tenant_id, limit=10000)
         for trace in traces:
             provenance_values = as_str_list(trace.get("provenance"))
+            schema_version = as_str(trace.get("trace_schema_version"), default="legacy_v0")
+            raw_control = trace.get("control_evidence")
+            if raw_control is None:
+                control_evidence = {}
+            elif is_json_dict(raw_control):
+                control_evidence = raw_control
+            else:
+                raise ValueError("portable execution-trace control evidence must be a JSON object")
+            if schema_version in {
+                "contextunity.execution-trace/v2",
+                "contextunity.execution-trace/v3",
+                "contextunity.execution-trace/v4",
+                "contextunity.execution-trace/v5",
+            }:
+                from contextunity.brain.payloads.memory import TraceControlEvidencePayload
+
+                control_evidence = TraceControlEvidencePayload.model_validate(
+                    control_evidence
+                ).model_dump(mode="json", exclude_unset=True)
             self._write(
                 handle,
                 TraceRecord(
@@ -196,17 +196,74 @@ class BrainPortableArchiveWriter:
                     token_usage=as_json_dict(trace.get("token_usage")),
                     timing_ms=as_int(trace.get("timing_ms")) or None,
                     metadata=as_json_dict(trace.get("metadata")),
+                    security_flags=as_json_dict(trace.get("security_flags")),
                     provenance=provenance_values or None,
+                    graph_run_id=as_str(trace.get("graph_run_id")) or None,
+                    payload_digest=as_str(trace.get("payload_digest")) or None,
+                    terminal_status=as_str(trace.get("terminal_status")) or None,
+                    terminal_reason=as_str(trace.get("terminal_reason")) or None,
+                    trace_schema_version=schema_version,
+                    prompt_evidence=as_json_dict_list(trace.get("prompt_evidence")),
+                    steps=as_json_dict_list(trace.get("steps")),
+                    control_evidence=control_evidence,
+                    final_verdict=as_json_dict(trace.get("final_verdict")),
                     created_at=as_str(trace.get("created_at")),
                 ),
             )
 
-    async def _export_episodes(
+    async def _export_outcome_observations(
         self,
         store: BrainStorageProtocol,
         tenant_id: str,
         handle: TextIO,
-        emb_handle: TextIO,
+    ) -> None:
+        if not is_sqlite_export_store(store):
+            return
+        from ..sqlite.codecs import json_dict_field
+
+        with store.get_sqlite_connection() as db:
+            rows = db.execute(
+                "SELECT * FROM outcome_observations WHERE tenant_id=? ORDER BY created_at, observation_id",
+                (tenant_id,),
+            ).fetchall()
+            for row in rows:
+                d = _row_dict(row)
+                raw_kind = as_str(d.get("observation_kind"))
+                if raw_kind == "verified_success":
+                    observation_kind = "verified_success"
+                elif raw_kind == "verified_failure":
+                    observation_kind = "verified_failure"
+                elif raw_kind == "neutral":
+                    observation_kind = "neutral"
+                else:
+                    raise ValueError("portable outcome observation kind is invalid")
+                if as_str(d.get("source_authority")) != "operator_review/v1":
+                    raise ValueError("portable outcome source authority is invalid")
+                self._write(
+                    handle,
+                    OutcomeObservationArchiveRecord(
+                        observation_id=as_str(d.get("observation_id")),
+                        tenant_id=tenant_id,
+                        trace_id=as_str(d.get("trace_id")),
+                        graph_run_id=as_str(d.get("graph_run_id")),
+                        verdict_digest=as_str(d.get("verdict_digest")),
+                        observation_kind=observation_kind,
+                        source_authority="operator_review/v1",
+                        source_ref=as_str(d.get("source_ref")),
+                        occurred_at=as_str(d.get("occurred_at")),
+                        idempotency_key=as_str(d.get("idempotency_key")),
+                        canonical_digest=as_str(d.get("canonical_digest")),
+                        policy_version=as_str(d.get("policy_version")),
+                        resolution_receipt=json_dict_field(d.get("resolution_receipt")),
+                        created_at=as_str(d.get("created_at")),
+                    ),
+                )
+
+    async def _export_conversation_history(
+        self,
+        store: BrainStorageProtocol,
+        tenant_id: str,
+        handle: TextIO,
     ) -> None:
         if not is_sqlite_export_store(store):
             return
@@ -215,40 +272,36 @@ class BrainPortableArchiveWriter:
         with store.get_sqlite_connection() as db:
             cursor = db.execute(
                 """
-                SELECT id, user_id, session_id, content, metadata, created_at
-                FROM episodic_events WHERE tenant_id = ?
-                ORDER BY created_at
+                SELECT record_id, user_id, session_id, role, kind, content,
+                       content_hash, source_hash, graph_run_id, metadata_version,
+                       idempotency_key, metadata, created_at
+                FROM conversation_records WHERE tenant_id = ?
+                ORDER BY created_at, record_id
                 """,
                 (tenant_id,),
             )
-            ep_rows: list[sqlite3.Row] = list(cursor.fetchall())
-            for row in ep_rows:
+            records: list[sqlite3.Row] = list(cursor.fetchall())
+            for row in records:
                 d = _row_dict(row)
-                episode_id = as_str(d.get("id"))
-                emb_ref = f"emb:episode:{episode_id}"
-                has_emb = False
-                if store.has_sqlite_vec():
-                    emb_cur = db.execute(
-                        "SELECT embedding FROM vec_episodic_events WHERE event_id = ?",
-                        (episode_id,),
-                    )
-                    emb_row = fetchone_row(emb_cur)
-                    if emb_row is not None:
-                        embedding_cell: object = sqlite_cell(emb_row, "embedding")
-                        if isinstance(embedding_cell, (bytes, bytearray)) and embedding_cell:
-                            self._write_embedding(emb_handle, emb_ref, bytes(embedding_cell))
-                            has_emb = True
                 self._write(
                     handle,
-                    EpisodeRecord(
-                        tenant_id=tenant_id,
-                        user_id=as_str(d.get("user_id")),
-                        episode_id=episode_id,
-                        content=as_str(d.get("content")),
-                        session_id=as_str(d.get("session_id")) or None,
-                        metadata=json_dict_field(d.get("metadata")),
-                        created_at=as_str(d.get("created_at")),
-                        embedding_ref=emb_ref if has_emb else None,
+                    ConversationArchiveRecord.model_validate(
+                        {
+                            "tenant_id": tenant_id,
+                            "record_id": as_str(d.get("record_id")),
+                            "user_id": as_str(d.get("user_id")),
+                            "session_id": as_str(d.get("session_id")) or None,
+                            "role": as_str(d.get("role")),
+                            "kind": as_str(d.get("kind")),
+                            "content": as_str(d.get("content")),
+                            "content_hash": as_str(d.get("content_hash")),
+                            "source_hash": as_str(d.get("source_hash")),
+                            "graph_run_id": as_str(d.get("graph_run_id")) or None,
+                            "metadata_version": as_int(d.get("metadata_version")),
+                            "idempotency_key": as_str(d.get("idempotency_key")),
+                            "metadata": json_dict_field(d.get("metadata")),
+                            "created_at": as_str(d.get("created_at")),
+                        }
                     ),
                 )
 

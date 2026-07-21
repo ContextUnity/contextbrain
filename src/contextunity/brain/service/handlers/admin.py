@@ -29,11 +29,9 @@ from ...payloads import (
     AdminGetCellsPayload,
     AdminGetFilterOptionsPayload,
     AdminGetMemoryLayerStatsPayload,
-    AdminGetRelatedEpisodesPayload,
     AdminGetSessionTracesPayload,
     AdminGetSystemAnalyticsPayload,
     AdminGetTraceDetailsPayload,
-    AdminSearchEpisodesPayload,
     AdminSearchTracesPayload,
     ListTenantsPayload,
 )
@@ -123,10 +121,10 @@ class AdminHandlersMixin(BrainHandlerBase):
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> contextunit_pb2.ContextUnit:
-        """Cross-tenant trace search.
+        """Cross-tenant trace search using canonical storage-backed filters.
 
-        ``service`` and ``status`` payload filters are not yet supported by storage;
-        they are ignored until a backend implements them.
+        ``status`` maps to ``terminal_status``; strict payload validation rejects
+        the unsupported ``service`` field instead of silently ignoring it.
         """
         unit = parse_unit(request)
         token = extract_token_from_context(context)
@@ -137,6 +135,7 @@ class AdminHandlersMixin(BrainHandlerBase):
         traces, total = await self._admin_ops.search_traces(
             tenant_id=resolved_tenant,
             agent_id=params.agent_id,
+            status=params.status,
             hours=params.hours,
             limit=params.limit,
             offset=params.offset,
@@ -209,7 +208,7 @@ class AdminHandlersMixin(BrainHandlerBase):
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> contextunit_pb2.ContextUnit:
-        """Distinct filter values from event_journal for admin UI dropdowns."""
+        """Distinct filter values from execution traces for admin UI dropdowns."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_read(unit, token, context, required_permission=Permissions.ADMIN_READ)
@@ -241,50 +240,6 @@ class AdminHandlersMixin(BrainHandlerBase):
             tenant_id=resolved_tenant,
         )
         return make_response(payload={"traces": traces}, parent_unit=unit)
-
-    @grpc_error_handler
-    async def AdminGetRelatedEpisodes(
-        self,
-        request: contextunit_pb2.ContextUnit,
-        context: grpc.ServicerContext,
-    ) -> contextunit_pb2.ContextUnit:
-        """Fetch episodic_events related to a trace by trace_id (cross-tenant)."""
-        unit = parse_unit(request)
-        token = extract_token_from_context(context)
-        validate_token_for_read(unit, token, context, required_permission=Permissions.ADMIN_READ)
-        params = AdminGetRelatedEpisodesPayload.model_validate(unit.payload or {})
-
-        trace_tenant = await self._admin_ops.get_trace_tenant(params.trace_id)
-        if not trace_tenant or not _token_can_view_tenant(token, trace_tenant):
-            return make_response(payload={"episodes": []}, parent_unit=unit)
-
-        episodes = await self._admin_ops.get_related_episodes(params.trace_id)
-        return make_response(payload={"episodes": episodes}, parent_unit=unit)
-
-    @grpc_error_handler
-    async def AdminSearchEpisodes(
-        self,
-        request: contextunit_pb2.ContextUnit,
-        context: grpc.ServicerContext,
-    ) -> contextunit_pb2.ContextUnit:
-        """Cross-tenant episodic event search with pagination."""
-        unit = parse_unit(request)
-        token = extract_token_from_context(context)
-        validate_token_for_read(unit, token, context, required_permission=Permissions.ADMIN_READ)
-        params = AdminSearchEpisodesPayload.model_validate(unit.payload or {})
-        resolved_tenant = _require_admin_tenant_scope(
-            token, params.tenant_id, "AdminSearchEpisodes"
-        )
-
-        events, total = await self._admin_ops.search_episodes(
-            tenant_id=resolved_tenant,
-            user_id=params.user_id,
-            session_id=params.session_id,
-            hours=params.hours,
-            limit=params.limit,
-            offset=params.offset,
-        )
-        return make_response(payload={"events": events, "total": total}, parent_unit=unit)
 
     @grpc_error_handler
     async def AdminGetCells(

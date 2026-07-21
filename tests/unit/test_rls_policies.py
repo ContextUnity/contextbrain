@@ -25,9 +25,9 @@ class TestRLSPolicies:
         "cells",
         "cell_edges",
         "cell_aliases",
-        "episodic_events",
-        "event_journal",
-        "catalog_taxonomy",
+        "conversation_records",
+        "conversation_migration_receipts",
+        "execution_traces",
         "blackboard",
         "synapses",
     ]
@@ -176,8 +176,8 @@ class TestSetTenantContext:
         mock_conn = AsyncMock()
         await set_tenant_context(mock_conn, "project_a")
 
-        # SET LOCAL ROLE brain_app + app.current_tenant + app.current_user
-        assert mock_conn.execute.call_count == 3
+        # SET LOCAL ROLE brain_app + one combined tenant/user config statement.
+        assert mock_conn.execute.call_count == 2
         call_args = str(mock_conn.execute.call_args_list)
         assert "SET LOCAL ROLE brain_app" in call_args
         assert "app.current_tenant" in call_args or "project_a" in call_args
@@ -188,5 +188,8 @@ class TestSetTenantContext:
         from contextunity.brain.storage.postgres.store.helpers import set_tenant_context
 
         mock_conn = AsyncMock()
-        await set_tenant_context(mock_conn, "*")
-        assert mock_conn.execute.call_count == 3
+        await set_tenant_context(mock_conn, "*", search_path='"brain", public')
+        assert mock_conn.execute.call_count == 2
+        call_args = str(mock_conn.execute.call_args_list)
+        assert "search_path" in call_args
+        assert '"brain", public' in call_args

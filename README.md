@@ -3,7 +3,7 @@
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE.md)
 
-ContextBrain is the **Knowledge Storage & RAG Service** of the [ContextUnity](https://github.com/ContextUnity) ecosystem. It provides a centralized memory backend using PostgreSQL + pgvector for vector search, knowledge graphs, taxonomy hierarchies, and episodic agent memory.
+ContextBrain is the **Knowledge Storage & RAG Service** of the [ContextUnity](https://github.com/ContextUnity) ecosystem. It owns vector search, knowledge graphs, and typed Conversation History on PostgreSQL or SQLite.
 
 ---
 
@@ -11,7 +11,7 @@ ContextBrain is the **Knowledge Storage & RAG Service** of the [ContextUnity](ht
 
 - **RAG backends** — store and retrieve knowledge for LLM applications
 - **Product catalogs** — taxonomy, enrichment, and semantic search
-- **Memory systems** — episodic and entity-based memory for AI agents
+- **Memory systems** — typed Conversation History and BrainCell memory for AI agents
 - **News aggregation** — fact storage and deduplication
 
 ---
@@ -52,7 +52,7 @@ src/contextunity/brain/
 │   ├── handlers/               # Domain-specific: knowledge, memory, taxonomy, commerce, news, traces
 │   └── interceptors.py         # BrainPermissionInterceptor (RLS enforcement)
 ├── storage/postgres/           # PostgreSQL + pgvector (primary store)
-│   ├── store/                  # Modular mixin pattern (search, graph, episodes, taxonomy)
+│   ├── store/                  # Modular mixins (search, graph, conversation history)
 │   └── schema.py               # DDL definitions
 ├── ingestion/rag/              # RAG pipeline & NLP processors
 ├── payloads.py                 # Pydantic validation models
@@ -92,7 +92,7 @@ Only the `brain_admin` role can bypass RLS (used by Brain Admin / ContextForge d
 | Type | Storage | Description |
 |------|---------|-------------|
 | **Semantic** | `cells` (pgvector / sqlite-vec) | Long-term BrainCells with vector embeddings |
-| **Episodic** | `conversation_episodes` (Postgres) | Session summaries, queryable conversation history |
+| **Conversation History** | `conversation_records` | Typed bounded tenant/user/session history |
 | **BrainCells** | `cells` (Postgres) | Durable facts, preferences, and documentation |
 | **Embedding Cache** | Redis (optional) | Avoids redundant API calls; falls back to LRU (2048 entries) |
 

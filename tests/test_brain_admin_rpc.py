@@ -49,8 +49,6 @@ class TestAdminRpcsInPermissionMap:
         "AdminGetMemoryLayerStats",
         "AdminGetFilterOptions",
         "AdminGetSessionTraces",
-        "AdminGetRelatedEpisodes",
-        "AdminSearchEpisodes",
         "AdminGetCells",
         "AdminGetAnalyticsSummary",
     )
@@ -177,6 +175,21 @@ class TestTokenCanViewTenant:
 # ── AdminHandlersMixin on generated servicer ──────────────────────────────
 
 
+def test_admin_search_traces_rejects_unbacked_service_filter() -> None:
+    from pydantic import ValidationError
+
+    from contextunity.brain.payloads.admin import AdminSearchTracesPayload
+
+    with pytest.raises(ValidationError, match="service filter is unsupported"):
+        AdminSearchTracesPayload.model_validate({"tenant_id": "acme", "service": "router"})
+
+    accepted = AdminSearchTracesPayload.model_validate({"tenant_id": "acme", "status": "succeeded"})
+    assert accepted.status == "succeeded"
+    for invalid in ("", "unknown", "success"):
+        with pytest.raises(ValidationError, match="status"):
+            AdminSearchTracesPayload.model_validate({"tenant_id": "acme", "status": invalid})
+
+
 class TestAdminHandlersMixinOnServicer:
     """Verify the mixin methods exist on the BrainServiceServicer surface."""
 
@@ -188,8 +201,6 @@ class TestAdminHandlersMixinOnServicer:
         "AdminGetMemoryLayerStats",
         "AdminGetFilterOptions",
         "AdminGetSessionTraces",
-        "AdminGetRelatedEpisodes",
-        "AdminSearchEpisodes",
         "AdminGetCells",
         "AdminGetAnalyticsSummary",
     )
@@ -216,6 +227,12 @@ class TestAdminTokenPermissions:
     def test_admin_all_implies_admin_read(self):
         tok = _token(("admin:all",))
         assert tok.has_permission(Permissions.ADMIN_READ)
+        assert tok.has_permission(Permissions.CONVERSATION_READ)
+
+    def test_admin_read_grants_only_bounded_conversation_read(self):
+        tok = _token((Permissions.ADMIN_READ,), ("sample_project",))
+        assert tok.has_permission(Permissions.CONVERSATION_READ)
+        assert not tok.has_permission(Permissions.MEMORY_READ)
 
     def test_admin_read_alone_does_not_imply_admin_all(self):
         tok = _token(("admin:read",))
@@ -288,7 +305,7 @@ class TestHoursIntervalIsParameterSafe:
         from psycopg.adapt import Transformer
 
         sql = (
-            b"SELECT 1 FROM event_journal "
+            b"SELECT 1 FROM execution_traces "
             b"WHERE created_at > NOW() - make_interval(hours => %(hours)s)"
         )
         q = PostgresQuery(Transformer())

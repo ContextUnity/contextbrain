@@ -14,10 +14,16 @@ branch_labels = None
 depends_on = None
 
 
+def _is_post_0001_udb_ddl(statement: str) -> bool:
+    """Keep UDB in its own migration instead of leaking live DDL into 0001."""
+    return "debug_case" in statement or "debug_" in statement
+
+
 def upgrade() -> None:
     vector_dim = int(get_env("PGVECTOR_DIM") or 768)
     for stmt in build_schema_sql(vector_dim=vector_dim):
-        op.execute(stmt)
+        if not _is_post_0001_udb_ddl(stmt):
+            op.execute(stmt)
 
 
 def downgrade() -> None:

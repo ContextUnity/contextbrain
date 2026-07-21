@@ -246,37 +246,12 @@ def resolve_tenant_id(
     Raises:
         SecurityError: If cannot unambiguously resolve (0 or >1 without explicit).
     """
-    allowed: tuple[str, ...] = ()
-    if token is not None:
-        allowed = tuple(getattr(token, "allowed_tenants", None) or ())
+    from contextunity.core.authz import resolve_token_tenant
 
-    if payload_tenant_id:
-        if allowed and payload_tenant_id not in allowed:
-            raise SecurityError(
-                message=(
-                    f"Payload tenant_id {payload_tenant_id!r} not in "
-                    f"token.allowed_tenants={allowed}"
-                ),
-            )
-        return payload_tenant_id
-
-    if len(allowed) == 1:
-        return allowed[0]
-
-    if len(allowed) == 0:
-        raise SecurityError(
-            message=(
-                "Cannot resolve tenant: token has no allowed_tenants "
-                "and no explicit tenant_id in payload."
-            ),
-        )
-
-    # len(allowed) > 1 and no explicit payload_tenant_id
-    raise SecurityError(
-        message=(
-            f"Cannot resolve tenant: multiple allowed_tenants={sorted(allowed)} "
-            "and no explicit tenant_id. Provide tenant_id or narrow scope."
-        ),
+    return resolve_token_tenant(
+        token,
+        requested_tenant_id=payload_tenant_id,
+        boundary="Brain RPC",
     )
 
 

@@ -89,7 +89,6 @@ ingestion = [
 ]
 # Observability
 observability = [
-    "langfuse>=2.0.0",
     "opentelemetry-instrumentation-threading>=0.48b0",
 ]
 # Alternative LLM providers

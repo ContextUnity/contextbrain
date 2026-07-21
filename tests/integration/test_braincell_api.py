@@ -99,6 +99,50 @@ async def test_query_cells_filters_user_id_kind_and_text(store: SqliteBrainStore
 
 
 @pytest.mark.asyncio
+async def test_private_visibility_requires_owning_user_for_query_and_get(
+    store: SqliteBrainStore,
+) -> None:
+    private = await _upsert(
+        store,
+        tenant_id="t1",
+        user_id="owner-a",
+        cell_kind="chunk",
+        content="private canonical cell",
+        visibility="private",
+    )
+
+    assert await _query(store, tenant_id="t1", query_text="private canonical") == []
+    assert [
+        item["id"]
+        for item in await _query(
+            store,
+            tenant_id="t1",
+            user_id="owner-a",
+            query_text="private canonical",
+        )
+    ] == [private["id"]]
+    assert await _get(store, tenant_id="t1", cell_id=private["id"]) is None
+    assert (
+        await _get(
+            store,
+            tenant_id="t1",
+            user_id="owner-b",
+            cell_id=private["id"],
+        )
+        is None
+    )
+    assert (
+        await _get(
+            store,
+            tenant_id="t1",
+            user_id="owner-a",
+            cell_id=private["id"],
+        )
+        is not None
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_cell_by_id(store: SqliteBrainStore):
     """GetCell returns the record or None."""
     r = await _upsert(store, tenant_id="tX", user_id=None, cell_kind="concept", content="only one")
@@ -139,11 +183,11 @@ async def test_source_ref_persisted(store: SqliteBrainStore):
         cell_kind="fact",
         content="with ref",
         source_type="manual",
-        source_ref="episode:abc",
+        source_ref="conversation:abc",
     )
     got = await _get(store, tenant_id="t1", cell_id=result["id"])
     assert got is not None
-    assert got.get("source_ref") == "episode:abc"
+    assert got.get("source_ref") == "conversation:abc"
 
 
 def test_tenant_mismatch_classifies_as_policy_fault():
@@ -163,10 +207,11 @@ def test_tenant_mismatch_classifies_as_policy_fault():
 
 
 def test_payload_tenant_spoofing_classifies_as_policy_fault():
-    token = MagicMock()
-    token.allowed_tenants = ("project-a",)
+    from contextunity.core import ContextToken
 
-    with pytest.raises(SecurityError, match="not in") as exc_info:
+    token = ContextToken(token_id="project-a-token", allowed_tenants=("project-a",))
+
+    with pytest.raises(SecurityError, match="outside token scope") as exc_info:
         resolve_tenant_id(token, "evil-tenant")
 
     assert classify_exception(exc_info.value) == "policy_fault"

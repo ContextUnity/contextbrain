@@ -7,7 +7,6 @@ SQLite runs in default CI. Postgres runs when ``BRAIN_TEST_DSN`` is set
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from pathlib import Path
 
@@ -20,8 +19,6 @@ from contextunity.brain.storage.postgres import PostgresBrainStore
 from contextunity.brain.storage.postgres.store.admin import PostgresAdminOps
 from contextunity.brain.storage.sqlite import SqliteBrainStore
 from contextunity.brain.storage.sqlite.admin_ops import AsyncSqliteAdminOps
-
-BRAIN_TEST_DSN = (os.environ.get("BRAIN_TEST_DSN") or os.environ.get("POSTGRES_DSN") or "").strip()
 
 TENANT = "demo"
 AGENT = "agent-a"
@@ -59,9 +56,42 @@ async def _seed_trace(store: SqliteBrainStore | PostgresBrainStore, *, tenant: s
 @pytest.mark.asyncio
 async def test_sqlite_admin_ops_parity_via_factory(sqlite_store: SqliteBrainStore) -> None:
     trace_id = await _seed_trace(sqlite_store, tenant=TENANT)
+    _ = await _seed_trace(sqlite_store, tenant=TENANT)
     ops = create_admin_ops(sqlite_store)
     assert isinstance(ops, AsyncSqliteAdminOps)
     await assert_admin_ops_over_seeded_trace(ops, trace_id=trace_id, tenant_id=TENANT)
+
+
+@pytest.mark.asyncio
+async def test_sqlite_admin_trace_status_filter_is_real(sqlite_store: SqliteBrainStore) -> None:
+    trace_id = await _seed_trace(sqlite_store, tenant=TENANT)
+    with sqlite_store.get_sqlite_connection() as db:
+        db.execute(
+            "UPDATE execution_traces SET terminal_status = ? WHERE id = ?",
+            ("succeeded", trace_id),
+        )
+        db.commit()
+    ops = AsyncSqliteAdminOps(sqlite_store)
+    matched, matched_total = await ops.search_traces(
+        tenant_id=TENANT,
+        agent_id=None,
+        status="succeeded",
+        hours=None,
+        limit=10,
+        offset=0,
+    )
+    missing, missing_total = await ops.search_traces(
+        tenant_id=TENANT,
+        agent_id=None,
+        status="failed",
+        hours=None,
+        limit=10,
+        offset=0,
+    )
+    assert [trace["id"] for trace in matched] == [trace_id]
+    assert matched_total == 1
+    assert missing == []
+    assert missing_total == 0
 
 
 @pytest.mark.asyncio
@@ -98,38 +128,72 @@ async def test_create_admin_ops_rejects_unknown_storage() -> None:
 
 @pytest.mark.integration_live
 @pytest.mark.asyncio
-async def test_postgres_admin_ops_parity() -> None:
-    if not BRAIN_TEST_DSN:
-        pytest.skip("Set BRAIN_TEST_DSN or POSTGRES_DSN for Postgres admin parity")
-
+async def test_postgres_admin_ops_parity(brain_test_dsn: str) -> None:
     tenant = f"parity-{uuid.uuid4().hex[:8]}"
-    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN)
-    await store.ensure_schema()
-    trace_id = await _seed_trace(store, tenant=tenant)
+    from psycopg import AsyncConnection, sql
 
-    ops: AdminQueryProtocol = PostgresAdminOps(store)
-    await assert_admin_ops_over_seeded_trace(ops, trace_id=trace_id, tenant_id=tenant)
+    schema = f"admin_parity_{uuid.uuid4().hex}"
+    store = PostgresBrainStore(
+        dsn=brain_test_dsn,
+        schema=schema,
+        pool_min_size=1,
+        pool_max_size=1,
+    )
+    try:
+        await store.ensure_schema()
+        trace_id = await _seed_trace(store, tenant=tenant)
+        _ = await _seed_trace(store, tenant=tenant)
+        ops: AdminQueryProtocol = PostgresAdminOps(store)
+        await assert_admin_ops_over_seeded_trace(ops, trace_id=trace_id, tenant_id=tenant)
+    finally:
+        try:
+            await store.close()
+        finally:
+            admin = await AsyncConnection.connect(brain_test_dsn, autocommit=True)
+            try:
+                _ = await admin.execute(
+                    sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+                )
+            finally:
+                await admin.close()
 
 
 @pytest.mark.integration_live
 @pytest.mark.asyncio
-async def test_postgres_source_type_stats() -> None:
-    if not BRAIN_TEST_DSN:
-        pytest.skip("Set BRAIN_TEST_DSN or POSTGRES_DSN for Postgres admin parity")
-
+async def test_postgres_source_type_stats(brain_test_dsn: str) -> None:
     tenant = f"stats-{uuid.uuid4().hex[:8]}"
-    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN)
-    await store.ensure_schema()
-    for index, source_type in enumerate(("auto_extract", "documentation", "synthesis")):
-        await store.upsert_cell(
-            tenant_id=tenant,
-            cell_kind="documentation",
-            content=f"source stats {index}",
-            source_type=source_type,
-        )
-    stats = await PostgresAdminOps(store).get_memory_layer_stats(tenant_id=tenant)
-    assert stats["cells"]["by_source_type"] == {
-        "auto_extract": 1,
-        "documentation": 1,
-        "synthesis": 1,
-    }
+    from psycopg import AsyncConnection, sql
+
+    schema = f"admin_stats_{uuid.uuid4().hex}"
+    store = PostgresBrainStore(
+        dsn=brain_test_dsn,
+        schema=schema,
+        pool_min_size=1,
+        pool_max_size=1,
+    )
+    try:
+        await store.ensure_schema()
+        for index, source_type in enumerate(("auto_extract", "documentation", "synthesis")):
+            await store.upsert_cell(
+                tenant_id=tenant,
+                cell_kind="documentation",
+                content=f"source stats {index}",
+                source_type=source_type,
+            )
+        stats = await PostgresAdminOps(store).get_memory_layer_stats(tenant_id=tenant)
+        assert stats["cells"]["by_source_type"] == {
+            "auto_extract": 1,
+            "documentation": 1,
+            "synthesis": 1,
+        }
+    finally:
+        try:
+            await store.close()
+        finally:
+            admin = await AsyncConnection.connect(brain_test_dsn, autocommit=True)
+            try:
+                _ = await admin.execute(
+                    sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+                )
+            finally:
+                await admin.close()

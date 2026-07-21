@@ -33,5 +33,13 @@ class DeterministicEmbedder:
         """Asynchronously expose the same deterministic provider contract."""
         return self.embed(text)
 
+    async def embed_query_async(self, text: str) -> list[float]:
+        """Expose the deterministic vector through the query role."""
+        return self.embed(text)
+
+    async def embed_document_async(self, text: str) -> list[float]:
+        """Expose the deterministic vector through the document role."""
+        return self.embed(text)
+
 
 __all__ = ["DeterministicEmbedder"]

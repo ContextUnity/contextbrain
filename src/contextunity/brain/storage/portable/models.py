@@ -10,7 +10,7 @@ from typing import ClassVar, Literal
 
 from contextunity.core.parsing import json_loads as parse_wire_json
 from contextunity.core.types import JsonDict, is_json_dict
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from contextunity.brain.core.exceptions import BrainValidationError
 from contextunity.brain.embedding_space import DEFAULT_EMBEDDING_DIMENSION
@@ -63,21 +63,54 @@ class TraceRecord(BaseModel):
     token_usage: JsonDict = Field(default_factory=dict)
     timing_ms: int | None = None
     metadata: JsonDict = Field(default_factory=dict)
+    security_flags: JsonDict = Field(default_factory=dict)
     provenance: list[str] | None = None
+    graph_run_id: str | None = None
+    payload_digest: str | None = None
+    terminal_status: str | None = None
+    terminal_reason: str | None = None
+    trace_schema_version: str = "legacy_v0"
+    prompt_evidence: list[JsonDict] = Field(default_factory=list, max_length=64)
+    steps: list[JsonDict] = Field(default_factory=list, max_length=4096)
+    control_evidence: JsonDict = Field(default_factory=dict)
+    final_verdict: JsonDict = Field(default_factory=dict)
     created_at: str
 
+    @model_validator(mode="after")
+    def validate_closed_execution_trace_steps(self) -> "TraceRecord":
+        """Canonicalize closed v3+ steps before a portable backend persists them."""
+        if self.trace_schema_version not in {
+            "contextunity.execution-trace/v3",
+            "contextunity.execution-trace/v4",
+            "contextunity.execution-trace/v5",
+            "contextunity.execution-trace/v6",
+        }:
+            return self
+        if (
+            self.trace_schema_version
+            in {"contextunity.execution-trace/v5", "contextunity.execution-trace/v6"}
+            and not self.control_evidence
+        ):
+            raise ValueError("portable execution trace v5/v6 requires root control evidence")
+        if (self.trace_schema_version == "contextunity.execution-trace/v6") != bool(
+            self.final_verdict
+        ):
+            raise ValueError("portable FinalVerdict requires exactly execution trace v6")
+        from contextunity.brain.payloads.memory import (
+            TraceStepPayload,
+            validate_guidance_step_placement,
+        )
 
-class TaxonomyRecord(BaseModel):
-    """Represent and manage Taxonomy Record logic within the system."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-    type: Literal["taxonomy"] = "taxonomy"
-    tenant_id: str
-    domain: str
-    name: str
-    path: str
-    keywords: list[str] = Field(default_factory=list)
-    metadata: JsonDict = Field(default_factory=dict)
+        parsed_steps = [TraceStepPayload.model_validate(step) for step in self.steps]
+        validate_guidance_step_placement(parsed_steps)
+        canonical_steps: list[JsonDict] = []
+        for step in parsed_steps:
+            dumped = step.model_dump(mode="json", exclude_none=True)
+            if not is_json_dict(dumped):
+                raise ValueError("portable execution-trace step must be a JSON object")
+            canonical_steps.append(dumped)
+        self.steps = canonical_steps
+        return self
 
 
 class CellRecord(BaseModel):
@@ -115,19 +148,46 @@ class CellEdgeRecord(BaseModel):
     metadata: JsonDict = Field(default_factory=dict)
 
 
-class EpisodeRecord(BaseModel):
-    """Represent and manage Episode Record logic within the system."""
+class ConversationArchiveRecord(BaseModel):
+    """Canonical Conversation History portable record."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
-    type: Literal["episode"] = "episode"
+    type: Literal["conversation"] = "conversation"
     tenant_id: str
+    record_id: str
     user_id: str
-    episode_id: str
-    content: str
     session_id: str | None = None
+    role: Literal["user", "assistant", "system", "tool", "legacy"]
+    kind: Literal["message", "turn_summary", "conversation_note", "legacy_import"]
+    content: str
+    content_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    source_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    graph_run_id: str | None = None
+    metadata_version: Literal[1] = 1
+    idempotency_key: str
     metadata: JsonDict = Field(default_factory=dict)
     created_at: str
-    embedding_ref: str | None = None
+
+
+class OutcomeObservationArchiveRecord(BaseModel):
+    """Immutable delayed outcome and its original Brain resolution receipt."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    type: Literal["outcome_observation"] = "outcome_observation"
+    observation_id: str
+    tenant_id: str
+    trace_id: str
+    graph_run_id: str
+    verdict_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observation_kind: Literal["verified_success", "verified_failure", "neutral"]
+    source_authority: Literal["operator_review/v1"]
+    source_ref: str
+    occurred_at: str
+    idempotency_key: str
+    canonical_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_version: str
+    resolution_receipt: JsonDict
+    created_at: str
 
 
 class SynapseRecord(BaseModel):
@@ -174,10 +234,10 @@ class EmbeddingRecord(BaseModel):
 RECORD_TYPES: dict[str, type[BaseModel]] = {
     "blackboard": BlackboardRecord,
     "trace": TraceRecord,
-    "taxonomy": TaxonomyRecord,
     "cell": CellRecord,
     "cell_edge": CellEdgeRecord,
-    "episode": EpisodeRecord,
+    "conversation": ConversationArchiveRecord,
+    "outcome_observation": OutcomeObservationArchiveRecord,
     "synapse": SynapseRecord,
 }
 
@@ -207,10 +267,10 @@ __all__ = [
     "PortableManifest",
     "BlackboardRecord",
     "TraceRecord",
-    "TaxonomyRecord",
     "CellRecord",
     "CellEdgeRecord",
-    "EpisodeRecord",
+    "ConversationArchiveRecord",
+    "OutcomeObservationArchiveRecord",
     "SynapseRecord",
     "EmbeddingRecord",
     "RECORD_TYPES",

@@ -58,18 +58,7 @@ class AdminOpsLike(Protocol):
     async def get_session_traces(
         self, *, session_id: str, tenant_id: str | None
     ) -> list[JsonDict]: ...
-    async def get_related_episodes(self, trace_id: str) -> list[JsonDict]: ...
     async def get_trace_tenant(self, trace_id: str) -> str | None: ...
-    async def search_episodes(
-        self,
-        *,
-        tenant_id: str | None,
-        user_id: str | None,
-        session_id: str | None,
-        hours: int | None,
-        limit: int,
-        offset: int,
-    ) -> tuple[list[JsonDict], int]: ...
     async def get_cells(
         self, *, tenant_id: str | None, kind: str | None, limit: int
     ) -> list[JsonDict]: ...
@@ -101,8 +90,26 @@ async def assert_admin_ops_over_seeded_trace(
         limit=10,
         offset=0,
     )
-    assert total >= 1
+    assert total >= 2
     assert any(str(row.get("id") or "") == trace_id for row in traces)
+
+    first_page, first_total = await ops.search_traces(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        hours=None,
+        limit=1,
+        offset=0,
+    )
+    second_page, second_total = await ops.search_traces(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        hours=None,
+        limit=1,
+        offset=1,
+    )
+    assert first_total == second_total == 2
+    assert len(first_page) == len(second_page) == 1
+    assert first_page[0]["id"] != second_page[0]["id"]
 
     details = await ops.get_trace_details(trace_id)
     assert details is not None
@@ -119,7 +126,7 @@ async def assert_admin_ops_over_seeded_trace(
     assert summary["total_traces"] >= 1
 
     layers = await ops.get_memory_layer_stats(tenant_id=None)
-    assert "episodic_events" in layers
+    assert "conversation_records" in layers
     assert "cells" in layers
 
     filters = await ops.get_filter_options(tenant_id=None)
@@ -131,22 +138,8 @@ async def assert_admin_ops_over_seeded_trace(
     trace_tenant = await ops.get_trace_tenant(trace_id)
     assert trace_tenant == tenant_id
 
-    episodes, episode_total = await ops.search_episodes(
-        tenant_id=None,
-        user_id=None,
-        session_id=None,
-        hours=None,
-        limit=10,
-        offset=0,
-    )
-    assert episode_total >= 0
-    assert isinstance(episodes, list)
-
     nodes = await ops.get_cells(tenant_id=None, kind=None, limit=10)
     assert isinstance(nodes, list)
-
-    related = await ops.get_related_episodes(trace_id)
-    assert isinstance(related, list)
 
 
 __all__ = [

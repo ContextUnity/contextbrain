@@ -36,6 +36,7 @@ class SearchMixin(PostgresStoreBase, ABC):
         scope: ScopePath | None = None,
         source_types: list[str] | None = None,
         user_id: str | None = None,
+        metadata_filter: dict[str, str] | None = None,
         fusion: str = "weighted",
         rrf_k: int = 60,
         vector_weight: float = 0.8,
@@ -49,7 +50,11 @@ class SearchMixin(PostgresStoreBase, ABC):
 
         async with await self.tenant_connection(tenant_id, user_id=user_id) as conn:
             where, params = self._build_scope_filters(
-                tenant_id=tenant_id, user_id=user_id, scope=scope, source_types=source_types
+                tenant_id=tenant_id,
+                user_id=user_id,
+                scope=scope,
+                source_types=source_types,
+                metadata_filter=metadata_filter,
             )
             where_sql = sql.SQL(" AND ").join(where)
 
@@ -121,19 +126,25 @@ class SearchMixin(PostgresStoreBase, ABC):
         user_id: str | None,
         scope: ScopePath | None,
         source_types: list[str] | None,
+        metadata_filter: dict[str, str] | None = None,
     ) -> tuple[list[sql.SQL], list[object]]:
         """Build WHERE clause filters."""
         where = [sql.SQL("tenant_id = %s")]
         params: list[object] = [tenant_id]
         if user_id:
-            where.append(sql.SQL("(user_id = %s OR user_id IS NULL)"))
+            where.append(sql.SQL("(user_id = %s OR (user_id IS NULL AND visibility <> 'private'))"))
             params.append(user_id)
+        else:
+            where.append(sql.SQL("visibility <> 'private'"))
         if scope:
             where.append(sql.SQL("scope_path <@ %s::ltree"))
             params.append(scope.path)
         if source_types:
             where.append(sql.SQL("source_type = ANY(%s::text[])"))
             params.append(source_types)
+        for key, value in sorted((metadata_filter or {}).items()):
+            where.append(sql.SQL("struct_data ->> %s = %s"))
+            params.extend([key, value])
         return where, params
 
     async def _fetch_scores(
@@ -165,8 +176,9 @@ class SearchMixin(PostgresStoreBase, ABC):
         cur = conn.cursor(row_factory=dict_row)
         rows = await cur.execute(
             """
-            SELECT id, cell_kind, source_type, source_id, title, content,
-                   struct_data, scope_path, tenant_id, user_id
+            SELECT id, cell_kind, source_type, source_id, source_ref, title, content,
+                   struct_data, scope_path, content_hash, confidence, visibility,
+                   tenant_id, user_id
             FROM cells WHERE tenant_id = %s AND id = ANY(%s::text[])
         """,
             [tenant_id, list(ids)],
@@ -185,9 +197,13 @@ class SearchMixin(PostgresStoreBase, ABC):
                     content=as_str(raw_row.get("content")),
                     source_type=as_str(raw_row.get("source_type")) or None,
                     source_id=as_str(raw_row.get("source_id")) or None,
+                    source_ref=as_str(raw_row.get("source_ref")) or None,
                     title=as_str(raw_row.get("title")) or None,
                     metadata=metadata,
                     scope_path=as_str(raw_row.get("scope_path")) or None,
+                    content_hash=as_str(raw_row.get("content_hash")) or None,
+                    confidence=as_float(raw_row.get("confidence"), default=0.5),
+                    visibility=as_str(raw_row.get("visibility"), default="tenant"),
                     tenant_id=as_str(raw_row.get("tenant_id")) or None,
                     user_id=as_str(raw_row.get("user_id")) or None,
                 )

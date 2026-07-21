@@ -14,7 +14,15 @@ class Embedder(Protocol):
     """Generate vectors in one configured, deployment-wide vector space."""
 
     async def embed_async(self, text: str) -> list[float]:
-        """Return one validated vector for ``text``."""
+        """Return one validated document vector for ``text``."""
+        ...
+
+    async def embed_query_async(self, text: str) -> list[float]:
+        """Return one validated retrieval-query vector for ``text``."""
+        ...
+
+    async def embed_document_async(self, text: str) -> list[float]:
+        """Return one validated retrieval-document vector for ``text``."""
         ...
 
     def embed(self, text: str) -> list[float]:

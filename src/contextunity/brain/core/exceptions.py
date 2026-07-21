@@ -92,6 +92,15 @@ class BrainValidationError(ContextbrainError):
     message: str = "Input or data validation failed"
 
 
+@register_error("BRAIN_UDB_DISABLED")
+class UdbFeatureDisabledError(ContextbrainError):
+    """UDB application calls are disabled by the Brain C0 rollout gate."""
+
+    code: str = "BRAIN_UDB_DISABLED"
+    message: str = "UniversalDebugBus is disabled (brain.yml: udb.enabled=false)"
+    retryable: bool = False
+
+
 @register_error("BRAIN_SYNAPSES_DISABLED")
 class SynapseFeatureDisabledError(ContextbrainError):
     """BrainSynapse RPCs were called while ``brain.yml: synapses.enabled`` is off."""

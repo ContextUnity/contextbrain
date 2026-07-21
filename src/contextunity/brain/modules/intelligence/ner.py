@@ -8,8 +8,6 @@ from collections.abc import Iterable
 from typing import Protocol, TypeGuard
 
 from contextunity.core import get_contextunit_logger
-from contextunity.core.narrowing import as_float, as_int, as_json_dict_list, as_str
-from contextunity.core.parsing import json_loads
 from pydantic import BaseModel
 
 logger = get_contextunit_logger(__name__)
@@ -41,10 +39,6 @@ class _SpacyLanguage(Protocol):
     def __call__(self, text: str) -> _SpacyDoc: ...
 
 
-class _LlmGenerateProvider(Protocol):
-    async def generate(self, prompt: str) -> str: ...
-
-
 def _is_spacy_language(value: object) -> TypeGuard[_SpacyLanguage]:
     return callable(value)
 
@@ -63,14 +57,12 @@ class EntityExtractor:
         self,
         text: str,
         mode: str | None = None,
-        llm_provider: _LlmGenerateProvider | None = None,
     ) -> list[Entity]:
+        """Extract locally; Brain enrichment never owns model-provider egress."""
         active_mode = mode or self.default_mode
 
         if active_mode == "spacy":
             return self._extract_spacy(text)
-        if active_mode == "gateway" and llm_provider:
-            return await self._extract_llm(text, llm_provider)
         if active_mode == "combined":
             local = self._extract_spacy(text)
             patterns = self._extract_patterns(text)
@@ -123,25 +115,3 @@ class EntityExtractor:
             )
 
         return entities
-
-    async def _extract_llm(self, text: str, provider: _LlmGenerateProvider) -> list[Entity]:
-        prompt = (
-            f"Extract persons, organizations and products from: {text}. "
-            'Return JSON list of {"text", "label"}.'
-        )
-        try:
-            raw_res = await provider.generate(prompt)
-            rows = as_json_dict_list(json_loads(raw_res))
-            return [
-                Entity(
-                    text=as_str(row.get("text")),
-                    label=as_str(row.get("label")),
-                    start=as_int(row.get("start")),
-                    end=as_int(row.get("end")),
-                    confidence=as_float(row.get("confidence"), default=1.0),
-                )
-                for row in rows
-            ]
-        except Exception as exc:
-            logger.error("LLM Extraction failed: %s", exc)
-            return []

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from abc import ABC
+from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 
 from contextunity.core import get_contextunit_logger
@@ -137,7 +138,16 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
                 # is tolerated inside set_tenant_context with a warning).
                 from .helpers import set_tenant_context
 
-                await set_tenant_context(conn, tenant_id, user_id)
+                # SET LOCAL ROLE may replace a connection's configured search
+                # path. Reassert the trusted store schema in the same transaction-
+                # local config call as tenant/user to avoid another round-trip.
+                quoted_schema = '"' + self._schema.replace('"', '""') + '"'
+                await set_tenant_context(
+                    conn,
+                    tenant_id,
+                    user_id,
+                    search_path=f"{quoted_schema}, public",
+                )
 
                 try:
                     yield conn
@@ -153,7 +163,6 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
     async def ensure_schema(
         self,
         *,
-        include_commerce: bool = False,
         vector_dim: int = DEFAULT_EMBEDDING_DIMENSION,
     ) -> None:
         """Ensure database schema and tables exist.
@@ -171,7 +180,6 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
             8. Apply RLS policies for tenant isolation
 
         Args:
-            include_commerce: Create commerce/taxonomy tables
             vector_dim: Embedding vector dimension (must match embedder output)
         """
 
@@ -214,10 +222,7 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
                 await guard_and_drop_postgres_user_facts(conn)
 
                 # 5. Run all DDL statements (all use IF NOT EXISTS)
-                statements = build_schema_sql(
-                    vector_dim=vector_dim,
-                    include_commerce=include_commerce,
-                )
+                statements = build_schema_sql(vector_dim=vector_dim)
                 for stmt in statements:
                     _ = await conn.execute(stmt.encode())
 
@@ -243,9 +248,8 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
                         )
 
                 logger.info(
-                    "Schema ensured: %s (core=yes, commerce=%s, rls=yes)",
+                    "Schema ensured: %s (core=yes, rls=yes)",
                     self._schema,
-                    include_commerce,
                 )
             except Exception:
                 logger.error("Failed to ensure schema '%s'", self._schema, exc_info=True)
@@ -379,6 +383,8 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
             if user_id:
                 where_clauses.append("user_id = %(user_id)s")
                 params["user_id"] = user_id
+            else:
+                where_clauses.append("visibility <> 'private'")
             if cell_kind:
                 where_clauses.append("cell_kind = %(cell_kind)s")
                 params["cell_kind"] = cell_kind
@@ -415,8 +421,12 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
             where = ["tenant_id = %(tenant_id)s", "id = %(cell_id)s"]
             params: dict[str, object] = {"tenant_id": tenant_id, "cell_id": cell_id}
             if user_id:
-                where.append("(user_id = %(user_id)s OR user_id IS NULL)")
+                where.append(
+                    "(user_id = %(user_id)s OR (user_id IS NULL AND visibility <> 'private'))"
+                )
                 params["user_id"] = user_id
+            else:
+                where.append("visibility <> 'private'")
             rows = await fetch_all(
                 conn,
                 f"""
@@ -429,3 +439,56 @@ class PostgresStoreBase(BrainStorageInterface, ABC):
                 params,
             )
             return rows[0] if rows else None
+
+    async def delete_documentation_cells(
+        self,
+        *,
+        tenant_id: str,
+        targets: Sequence[tuple[str, str]],
+    ) -> JsonDict:
+        """Atomically delete exact documentation chunks or preserve every chunk on conflict."""
+        expected = dict(targets)
+        if not expected or len(expected) != len(targets):
+            return JsonDict(
+                {"status": "conflict", "deleted_count": 0, "expected_count": len(targets)}
+            )
+        params: dict[str, object] = {"tenant_id": tenant_id, "cell_ids": list(expected)}
+        async with await self.tenant_connection(tenant_id) as conn:
+            rows = await fetch_all(
+                conn,
+                """
+                SELECT id, content_hash FROM cells
+                WHERE tenant_id = %(tenant_id)s
+                  AND source_type = 'documentation'
+                  AND cell_kind = 'documentation'
+                  AND id = ANY(%(cell_ids)s)
+                FOR UPDATE
+                """,
+                params,
+            )
+            actual = {str(row["id"]): str(row["content_hash"]) for row in rows}
+            if len(actual) != len(expected) or any(
+                actual.get(cell_id) != content_hash for cell_id, content_hash in expected.items()
+            ):
+                return JsonDict(
+                    {
+                        "status": "conflict",
+                        "deleted_count": 0,
+                        "expected_count": len(expected),
+                    }
+                )
+            result = await conn.execute(
+                """
+                DELETE FROM cells
+                WHERE tenant_id = %(tenant_id)s
+                  AND source_type = 'documentation'
+                  AND cell_kind = 'documentation'
+                  AND id = ANY(%(cell_ids)s)
+                """,
+                params,
+            )
+            if result.rowcount != len(expected):
+                raise RuntimeError("documentation cell deletion lost its locked target set")
+        return JsonDict(
+            {"status": "deleted", "deleted_count": len(expected), "expected_count": len(expected)}
+        )

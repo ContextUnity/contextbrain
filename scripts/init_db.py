@@ -4,7 +4,6 @@ Usage:
     BRAIN_DATABASE_URL=postgresql://... python scripts/init_db.py
 
 Options:
-    --include-commerce     Include commerce/taxonomy tables
     --vector-dim DIM       Vector dimension (default: from BRAIN_VECTOR_DIM or 1536)
 """
 
@@ -20,9 +19,6 @@ async def main():
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="Initialize Brain database schema")
-    parser.add_argument(
-        "--include-commerce", action="store_true", help="Include commerce/taxonomy tables"
-    )
     parser.add_argument("--vector-dim", type=int, default=None, help="Vector dimension")
     args = parser.parse_args()
 
@@ -36,10 +32,7 @@ async def main():
     # Import schema builder
     from contextunity.brain.storage.postgres.schema import build_schema_sql
 
-    statements = build_schema_sql(
-        vector_dim=vector_dim,
-        include_commerce=args.include_commerce,
-    )
+    statements = build_schema_sql(vector_dim=vector_dim)
 
     # Connect and execute
     from psycopg_pool import AsyncConnectionPool
@@ -48,7 +41,6 @@ async def main():
     host_info = dsn.split("@")[-1] if "@" in dsn else dsn
     print(f"Connecting to {host_info}...")
     print(f"Vector dimension: {vector_dim}")
-    print(f"Include commerce: {args.include_commerce}")
 
     async with AsyncConnectionPool(dsn, open=False) as pool:
         await pool.open()

@@ -10,6 +10,7 @@ from contextunity.core.security.interceptors import _extract_rpc_name, _should_s
 
 from contextunity.brain.service.interceptors import (
     RPC_PERMISSION_MAP,
+    BrainPermissionInterceptor,
 )
 
 # ── _extract_rpc_name ──
@@ -17,16 +18,16 @@ from contextunity.brain.service.interceptors import (
 
 class TestExtractRpcName:
     def test_full_method(self):
-        assert _extract_rpc_name("/brain.BrainService/Search") == "Search"
+        assert _extract_rpc_name("/brain.BrainService/SearchCells") == "SearchCells"
 
     def test_simple_name(self):
-        assert _extract_rpc_name("Search") == "Search"
+        assert _extract_rpc_name("SearchCells") == "SearchCells"
 
     def test_empty(self):
         assert _extract_rpc_name("") == ""
 
     def test_nested_slashes(self):
-        assert _extract_rpc_name("/a/b/c/Search") == "Search"
+        assert _extract_rpc_name("/a/b/c/SearchCells") == "SearchCells"
 
 
 # ── _should_skip ──
@@ -37,10 +38,17 @@ class TestShouldSkip:
         assert _should_skip("/grpc.health.v1.Health/Check") is True
 
     def test_reflection(self):
-        assert _should_skip("/grpc.reflection.v1.ServerReflection/List") is True
+        assert _should_skip("/grpc.reflection.v1.ServerReflection/ServerReflectionInfo") is True
+        assert _should_skip("/grpc.reflection.v1.ServerReflection/List") is False
 
     def test_brain_search(self):
-        assert _should_skip("/brain.BrainService/Search") is False
+        assert _should_skip("/brain.BrainService/SearchCells") is False
+
+
+def test_brain_explicitly_admits_local_platform_operator() -> None:
+    interceptor = BrainPermissionInterceptor()
+
+    assert interceptor._allow_local_platform_hmac is True
 
 
 # ── RPC_PERMISSION_MAP completeness ──
@@ -48,16 +56,14 @@ class TestShouldSkip:
 
 class TestRpcPermissionMap:
     def test_knowledge_rpcs_mapped(self):
-        assert "Search" in RPC_PERMISSION_MAP
+        assert "SearchCells" in RPC_PERMISSION_MAP
         assert "GraphSearch" in RPC_PERMISSION_MAP
         assert "CreateKGRelation" in RPC_PERMISSION_MAP
-        assert "Upsert" in RPC_PERMISSION_MAP
-        assert "QueryMemory" in RPC_PERMISSION_MAP
-        assert "GetTaxonomy" in RPC_PERMISSION_MAP
+        assert "IngestDocument" in RPC_PERMISSION_MAP
 
     def test_memory_rpcs_mapped(self):
-        assert "AddEpisode" in RPC_PERMISSION_MAP
-        assert "GetRecentEpisodes" in RPC_PERMISSION_MAP
+        assert "AppendConversationRecord" in RPC_PERMISSION_MAP
+        assert "QueryConversationHistory" in RPC_PERMISSION_MAP
         assert "WriteBlackboard" in RPC_PERMISSION_MAP
         assert "ReadBlackboard" in RPC_PERMISSION_MAP
         assert "PruneExpiredBlackboard" in RPC_PERMISSION_MAP
@@ -68,11 +74,9 @@ class TestRpcPermissionMap:
 
     def test_read_ops_require_read_permissions(self):
         read_rpcs = [
-            "Search",
+            "SearchCells",
             "GraphSearch",
-            "GetTaxonomy",
-            "QueryMemory",
-            "GetRecentEpisodes",
+            "QueryConversationHistory",
             "ReadBlackboard",
             "GetTraces",
         ]
@@ -83,8 +87,8 @@ class TestRpcPermissionMap:
     def test_write_ops_require_write_permissions(self):
         write_rpcs = [
             "CreateKGRelation",
-            "Upsert",
-            "AddEpisode",
+            "IngestDocument",
+            "AppendConversationRecord",
             "WriteBlackboard",
             "PruneExpiredBlackboard",
             "LogTrace",

@@ -49,7 +49,7 @@ async def test_sqlite_admin_search_traces_and_analytics(
     assert details["agent_id"] == "agent-a"
 
     layers = ops.get_memory_layer_stats(tenant_id=None)
-    assert "episodic_events" in layers
+    assert "conversation_records" in layers
     assert "cells" in layers
 
     analytics = ops.get_analytics_summary(tenant_id=None, hours=None)
@@ -62,17 +62,6 @@ async def test_sqlite_admin_search_traces_and_analytics(
 
     session_traces = ops.get_session_traces(session_id="sess-1", tenant_id=None)
     assert len(session_traces) == 1
-
-    events, event_total = ops.search_episodes(
-        tenant_id=None,
-        user_id=None,
-        session_id=None,
-        hours=None,
-        limit=10,
-        offset=0,
-    )
-    assert event_total == 0
-    assert events == []
 
     system_analytics = ops.get_system_analytics(tenant_id=None, hours=None)
     assert system_analytics["total_traces"] == 1

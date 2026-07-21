@@ -29,6 +29,8 @@ EmbeddingProviderKind = Literal[
 ]
 
 _ONNX_EMBEDDINGGEMMA_MODEL = "onnx-community/embeddinggemma-300m-ONNX"
+# Existing durable vectors were written in this space. A role-prefixed model
+# upgrade requires a separately owned reindex/storage-isolation migration.
 _ONNX_EMBEDDINGGEMMA_SPACE = "embeddinggemma-300m-onnx-768-v1"
 _EXTERNAL_PROVIDERS = frozenset({"openai", "ollama", "vllm"})
 _LOCAL_PROVIDERS = frozenset({"onnx", "sentence_transformers"})
@@ -39,7 +41,7 @@ class EmbeddingProviderConfig(BaseModel):
 
     ``endpoint`` is the complete embeddings endpoint for HTTP providers.  This
     prevents provider selection from guessing URL shapes such as ``/v1`` or
-    ``/api/embed``.  Credentials are resolved from L0 configuration only and
+    ``/api/embed``. Credentials are resolved from C0 configuration only and
     never supplied by Router, CLI, or Worker requests.
     """
 
@@ -58,10 +60,21 @@ class EmbeddingProviderConfig(BaseModel):
     api_key: SecretStr | None = None
     device: Literal["auto", "cpu", "cuda", "coreml", "dml"] = "auto"
     model_cache_dir: str | None = Field(default=None, min_length=1, max_length=2_048)
+    onnx_intra_op_threads: int = Field(default=2, ge=1, le=64)
+    onnx_cpu_mem_arena: bool = False
+    onnx_mem_pattern: bool = False
 
     @model_validator(mode="after")
     def validate_provider_settings(self) -> "EmbeddingProviderConfig":
         """Reject ambiguous or unreachable provider profiles at config load."""
+        if self.provider != "onnx" and (
+            self.onnx_intra_op_threads != 2
+            or self.onnx_cpu_mem_arena is not False
+            or self.onnx_mem_pattern is not False
+        ):
+            raise ValueError(
+                f"embeddings.onnx_* settings require provider=onnx; provider={self.provider}"
+            )
         if self.provider in _EXTERNAL_PROVIDERS:
             if not self.endpoint:
                 raise ValueError(f"embeddings.endpoint is required for provider={self.provider}")
@@ -73,8 +86,8 @@ class EmbeddingProviderConfig(BaseModel):
                 )
             if self.device != "auto" or self.model_cache_dir is not None:
                 raise ValueError(
-                    f"embeddings.device and embeddings.model_cache_dir apply only to local providers; "
-                    f"provider={self.provider}"
+                    "embeddings.device, embeddings.model_cache_dir, and embeddings.onnx_* "
+                    f"settings apply only to local providers; provider={self.provider}"
                 )
         elif self.provider in _LOCAL_PROVIDERS:
             if self.endpoint is not None or self.api_key is not None:

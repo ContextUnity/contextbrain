@@ -70,7 +70,11 @@ _role_missing_warned = False
 
 
 async def set_tenant_context(
-    conn: PgConnection, tenant_id: str | None, user_id: str | None = None
+    conn: PgConnection,
+    tenant_id: str | None,
+    user_id: str | None = None,
+    *,
+    search_path: str | None = None,
 ) -> None:
     """Set the RLS execution role and tenant context for the current transaction.
 
@@ -115,17 +119,29 @@ async def set_tenant_context(
     # We use format() here because SET doesn't support $1 parameters,
     # but tenant_id is validated (not empty, no SQL injection risk because
     # it comes from validated payload, not raw user input).
-    _ = await conn.execute(
-        "SELECT set_config('app.current_tenant', %s, true)",
-        [tenant_id],
-    )
-
-    # Set app.current_user for fine-grained user-level RLS inside the tenant
+    # Set tenant, user, and the store-owned search path together so secure
+    # per-operation setup costs one protocol round-trip. All remain transaction-local.
     actual_user = user_id if user_id is not None else "*"
-    _ = await conn.execute(
-        "SELECT set_config('app.current_user', %s, true)",
-        [actual_user],
-    )
+    settings = [tenant_id, actual_user]
+    if search_path is None:
+        _ = await conn.execute(
+            """
+            SELECT
+                set_config('app.current_tenant', %s, true),
+                set_config('app.current_user', %s, true)
+            """,
+            settings,
+        )
+    else:
+        _ = await conn.execute(
+            """
+            SELECT
+                set_config('app.current_tenant', %s, true),
+                set_config('app.current_user', %s, true),
+                set_config('search_path', %s, true)
+            """,
+            [*settings, search_path],
+        )
 
 
 __all__ = ["PgConnection", "vec", "execute", "fetch_all", "Json", "set_tenant_context"]

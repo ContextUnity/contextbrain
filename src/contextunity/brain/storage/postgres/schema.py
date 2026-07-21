@@ -1,13 +1,11 @@
 """Postgres schema DDL for knowledge store (pgvector + ltree).
 
 Modules:
-- core: BrainCells, CellEdges, cell aliases, episodes (always included)
-- commerce: Dealer products, taxonomy (for e-commerce)
-- news_engine: Raw news, facts, posts (for news pipeline)
+- core: BrainCells, CellEdges, aliases, Conversation History (always included)
 
 Canonical naming: tables and columns use the canonical Flat Memory nouns
 (``cells``, ``cell_edges``, ``cell_aliases``, ``scope_path``, ``synapses``,
-``event_journal``, ``blackboard``). Legacy physical names (``knowledge_nodes``,
+``execution_traces``, ``blackboard``). Legacy physical names (``knowledge_nodes``,
 ``knowledge_edges``, ``knowledge_aliases``, ``taxonomy_path``,
 ``agent_experiences``, ``agent_traces``, ``blackboard_records``) appear only in
 ``_preflight_rename_sql()`` below, which converts an older database to
@@ -31,6 +29,7 @@ def _extension_statements() -> list[str]:
     return [
         "CREATE EXTENSION IF NOT EXISTS vector;",
         "CREATE EXTENSION IF NOT EXISTS ltree;",
+        "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
     ]
 
 
@@ -114,6 +113,189 @@ def _rename_column(table: str, old: str, new: str) -> str:
     """
 
 
+def _legacy_conversation_preflight_sql() -> str:
+    """Return the atomic PostgreSQL legacy Conversation History preflight.
+
+    PostgreSQL has no ``UPDATE ... IF TABLE EXISTS`` form. Keep the complete
+    legacy-table decision and transformation in one ``DO`` block so a fresh
+    schema is a no-op, a legacy schema is migrated as one statement, and a
+    split-brain schema fails before canonical DDL can hide it.
+    """
+    return r"""
+        DO $$
+        DECLARE
+            legacy_table regclass;
+            canonical_table regclass;
+        BEGIN
+            legacy_table := to_regclass(
+                format('%I.%I', current_schema(), 'episodic_events')
+            );
+            canonical_table := to_regclass(
+                format('%I.%I', current_schema(), 'conversation_records')
+            );
+
+            IF legacy_table IS NOT NULL AND canonical_table IS NOT NULL THEN
+                RAISE EXCEPTION 'both legacy and canonical conversation tables exist';
+            END IF;
+
+            IF legacy_table IS NOT NULL THEN
+                IF EXISTS (
+                    SELECT 1
+                    FROM episodic_events
+                    WHERE id::text !~
+                            '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$'
+                       OR tenant_id IS NULL OR tenant_id = ''
+                       OR user_id IS NULL OR user_id = ''
+                       OR content IS NULL
+                       OR jsonb_typeof(COALESCE(metadata, '{}'::jsonb)) <> 'object'
+                ) THEN
+                    RAISE EXCEPTION 'malformed legacy conversation row blocks migration'
+                        USING ERRCODE = '23514';
+                END IF;
+
+                ALTER TABLE episodic_events RENAME TO conversation_records;
+                canonical_table := to_regclass(
+                    format('%I.%I', current_schema(), 'conversation_records')
+                );
+            END IF;
+
+            IF canonical_table IS NULL THEN
+                RETURN;
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'conversation_records'
+                  AND column_name = 'id'
+            ) THEN
+                ALTER TABLE conversation_records RENAME COLUMN id TO record_id;
+            END IF;
+
+            ALTER TABLE conversation_records
+                ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'legacy',
+                ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'legacy_import',
+                ADD COLUMN IF NOT EXISTS content_hash TEXT,
+                ADD COLUMN IF NOT EXISTS source_hash TEXT,
+                ADD COLUMN IF NOT EXISTS graph_run_id UUID,
+                ADD COLUMN IF NOT EXISTS metadata_version INTEGER NOT NULL DEFAULT 1,
+                ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+
+            ALTER TABLE conversation_records
+                ALTER COLUMN record_id TYPE UUID USING record_id::text::uuid;
+
+            UPDATE conversation_records
+            SET role = COALESCE(
+                    NULLIF(metadata #>> '{_conversation_migration,role}', ''),
+                    role
+                ),
+                kind = COALESCE(
+                    NULLIF(metadata #>> '{_conversation_migration,kind}', ''),
+                    kind
+                ),
+                content_hash = COALESCE(
+                    content_hash,
+                    'sha256:' || encode(sha256(convert_to(content, 'UTF8')), 'hex')
+                );
+
+            UPDATE conversation_records
+            SET source_hash = CASE
+                    WHEN source_hash IS NOT NULL THEN source_hash
+                    WHEN metadata #>> '{_conversation_migration,source_hash}'
+                        ~ '^sha256:[0-9a-f]{64}$'
+                        THEN metadata #>> '{_conversation_migration,source_hash}'
+                    WHEN metadata->>'source_hash' ~ '^sha256:[0-9a-f]{64}$'
+                        THEN metadata->>'source_hash'
+                    ELSE content_hash
+                END,
+                graph_run_id = CASE
+                    WHEN graph_run_id IS NOT NULL THEN graph_run_id
+                    WHEN metadata #>> '{_conversation_migration,graph_run_id}'
+                        ~ '^[0-9a-fA-F-]{36}$'
+                        THEN (
+                            metadata #>> '{_conversation_migration,graph_run_id}'
+                        )::uuid
+                    WHEN metadata->>'graph_run_id' ~ '^[0-9a-fA-F-]{36}$'
+                        THEN (metadata->>'graph_run_id')::uuid
+                    ELSE NULL
+                END,
+                idempotency_key = COALESCE(
+                    idempotency_key,
+                    NULLIF(
+                        metadata #>> '{_conversation_migration,idempotency_key}',
+                        ''
+                    ),
+                    'legacy:' || record_id::text
+                ),
+                metadata = metadata - '_conversation_migration';
+
+            ALTER TABLE conversation_records
+                ALTER COLUMN content_hash SET NOT NULL,
+                ALTER COLUMN source_hash SET NOT NULL,
+                ALTER COLUMN idempotency_key SET NOT NULL,
+                DROP COLUMN IF EXISTS embedding;
+
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'conversation_records_role_check'
+                  AND conrelid = canonical_table
+            ) THEN
+                ALTER TABLE conversation_records
+                    ADD CONSTRAINT conversation_records_role_check
+                    CHECK (role IN ('user','assistant','system','tool','legacy'));
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'conversation_records_kind_check'
+                  AND conrelid = canonical_table
+            ) THEN
+                ALTER TABLE conversation_records
+                    ADD CONSTRAINT conversation_records_kind_check
+                    CHECK (kind IN (
+                        'message','turn_summary','conversation_note','legacy_import'
+                    ));
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'conversation_records_content_hash_check'
+                  AND conrelid = canonical_table
+            ) THEN
+                ALTER TABLE conversation_records
+                    ADD CONSTRAINT conversation_records_content_hash_check
+                    CHECK (content_hash ~ '^sha256:[0-9a-f]{64}$');
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'conversation_records_source_hash_check'
+                  AND conrelid = canonical_table
+            ) THEN
+                ALTER TABLE conversation_records
+                    ADD CONSTRAINT conversation_records_source_hash_check
+                    CHECK (source_hash ~ '^sha256:[0-9a-f]{64}$');
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'conversation_records_metadata_version_check'
+                  AND conrelid = canonical_table
+            ) THEN
+                ALTER TABLE conversation_records
+                    ADD CONSTRAINT conversation_records_metadata_version_check
+                    CHECK (metadata_version = 1);
+            END IF;
+
+            DROP INDEX IF EXISTS episodic_events_embedding_hnsw;
+            DROP INDEX IF EXISTS episodic_events_user_idx;
+            DROP INDEX IF EXISTS episodic_events_session_idx;
+            DROP INDEX IF EXISTS episodic_events_tenant_idx;
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                conversation_records_tenant_idempotency_idx
+                ON conversation_records (tenant_id, idempotency_key);
+        END
+        $$;
+    """
+
+
 def _drop_legacy_policy(table: str, old_policy: str) -> str:
     """Drop an RLS policy created under a table's legacy (pre-rename) name.
 
@@ -156,6 +338,36 @@ def _preflight_rename_sql() -> list[str]:
     stmts.append(_rename_table("blackboard_records", "blackboard"))
     stmts.append(_rename_table("agent_experiences", "synapses"))
     stmts.append(_rename_table("agent_traces", "event_journal"))
+    stmts.append(_legacy_conversation_preflight_sql())
+    stmts.append(
+        """
+        DO $$
+        DECLARE
+            has_unknown boolean := false;
+        BEGIN
+            IF to_regclass(format('%I.%I', current_schema(), 'event_journal')) IS NOT NULL
+               AND EXISTS (
+                   SELECT 1 FROM information_schema.columns
+                   WHERE table_schema = current_schema()
+                     AND table_name = 'event_journal'
+                     AND column_name = 'event_type'
+               ) THEN
+                EXECUTE 'SELECT EXISTS (SELECT 1 FROM event_journal
+                    WHERE event_type <> ''trace.logged''
+                       OR severity <> ''info''
+                       OR status <> ''recorded''
+                       OR payload <> ''{}''::jsonb
+                       OR source_refs <> ''[]''::jsonb)'
+                    INTO has_unknown;
+                IF has_unknown THEN
+                    RAISE EXCEPTION 'unmapped generic event row blocks trace migration';
+                END IF;
+            END IF;
+        END
+        $$;
+        """
+    )
+    stmts.append(_rename_table("event_journal", "execution_traces"))
 
     # 2. Columns (table must already be renamed by step 1).
     stmts.append(_rename_column("cells", "taxonomy_path", "scope_path"))
@@ -197,13 +409,21 @@ def _preflight_rename_sql() -> list[str]:
     stmts.append(_rename_index("experiences_status_idx", "synapses_status_idx"))
     stmts.append(_rename_index("experiences_tenant_idx", "synapses_tenant_idx"))
 
-    stmts.append(_rename_index("agent_traces_pkey", "event_journal_pkey"))
-    stmts.append(_rename_index("agent_traces_tenant_idx", "event_journal_tenant_idx"))
-    stmts.append(_rename_index("agent_traces_agent_idx", "event_journal_agent_idx"))
-    stmts.append(_rename_index("agent_traces_session_idx", "event_journal_session_idx"))
-    stmts.append(_rename_index("agent_traces_created_idx", "event_journal_created_idx"))
+    stmts.append(_rename_index("agent_traces_pkey", "execution_traces_pkey"))
+    stmts.append(_rename_index("agent_traces_tenant_idx", "execution_traces_tenant_idx"))
+    stmts.append(_rename_index("agent_traces_agent_idx", "execution_traces_agent_idx"))
+    stmts.append(_rename_index("agent_traces_session_idx", "execution_traces_session_idx"))
+    stmts.append(_rename_index("agent_traces_created_idx", "execution_traces_created_idx"))
     stmts.append(
-        _rename_index("agent_traces_tenant_created_idx", "event_journal_tenant_created_idx")
+        _rename_index("agent_traces_tenant_created_idx", "execution_traces_tenant_created_idx")
+    )
+    stmts.append(_rename_index("event_journal_pkey", "execution_traces_pkey"))
+    stmts.append(_rename_index("event_journal_tenant_idx", "execution_traces_tenant_idx"))
+    stmts.append(_rename_index("event_journal_agent_idx", "execution_traces_agent_idx"))
+    stmts.append(_rename_index("event_journal_session_idx", "execution_traces_session_idx"))
+    stmts.append(_rename_index("event_journal_created_idx", "execution_traces_created_idx"))
+    stmts.append(
+        _rename_index("event_journal_tenant_created_idx", "execution_traces_tenant_created_idx")
     )
 
     # 4. CHECK/FK constraints (verified against a live legacy-upgraded database, 2026-07-04).
@@ -251,7 +471,8 @@ def _preflight_rename_sql() -> list[str]:
     stmts.append(_drop_legacy_policy("cell_aliases", "knowledge_aliases_tenant_isolation"))
     stmts.append(_drop_legacy_policy("blackboard", "blackboard_records_tenant_isolation"))
     stmts.append(_drop_legacy_policy("synapses", "agent_experiences_tenant_isolation"))
-    stmts.append(_drop_legacy_policy("event_journal", "agent_traces_tenant_isolation"))
+    stmts.append(_drop_legacy_policy("execution_traces", "agent_traces_tenant_isolation"))
+    stmts.append(_drop_legacy_policy("execution_traces", "event_journal_tenant_isolation"))
 
     return stmts
 
@@ -370,30 +591,46 @@ def _core_schema(vector_dim: int) -> list[str]:
         """,
         "CREATE INDEX IF NOT EXISTS cell_aliases_node_id_idx ON cell_aliases (node_id);",
         "CREATE INDEX IF NOT EXISTS cell_aliases_tenant_idx ON cell_aliases (tenant_id);",
-        # Episodic Memory (The Journal)
+        # Conversation History
         """
-        CREATE TABLE IF NOT EXISTS episodic_events (
-            id          UUID PRIMARY KEY,
-            tenant_id   TEXT NOT NULL,
-            user_id     TEXT NOT NULL,
-            session_id  TEXT NULL,
-            content     TEXT NOT NULL,
-            embedding   VECTOR(%d) NULL,
-            metadata    JSONB NOT NULL DEFAULT '{}'::jsonb,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+        CREATE TABLE IF NOT EXISTS conversation_records (
+            record_id        UUID PRIMARY KEY,
+            tenant_id        TEXT NOT NULL,
+            user_id          TEXT NOT NULL,
+            session_id       TEXT NULL,
+            role             TEXT NOT NULL CHECK (role IN ('user','assistant','system','tool','legacy')),
+            kind             TEXT NOT NULL CHECK (kind IN ('message','turn_summary','conversation_note','legacy_import')),
+            content          TEXT NOT NULL,
+            content_hash     TEXT NOT NULL CHECK (content_hash ~ '^sha256:[0-9a-f]{64}$'),
+            source_hash      TEXT NOT NULL CHECK (source_hash ~ '^sha256:[0-9a-f]{64}$'),
+            graph_run_id     UUID NULL,
+            metadata_version INTEGER NOT NULL CHECK (metadata_version = 1),
+            idempotency_key  TEXT NOT NULL,
+            metadata         JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+            UNIQUE (tenant_id, idempotency_key)
         );
-        """
-        % int(vector_dim),
-        "CREATE INDEX IF NOT EXISTS episodic_events_user_idx ON episodic_events (user_id);",
-        "CREATE INDEX IF NOT EXISTS episodic_events_session_idx ON episodic_events (session_id);",
-        "CREATE INDEX IF NOT EXISTS episodic_events_tenant_idx ON episodic_events (tenant_id);",
-        """
-        CREATE INDEX IF NOT EXISTS episodic_events_embedding_hnsw
-          ON episodic_events USING hnsw (embedding vector_cosine_ops);
         """,
-        # Event Journal (Observability) — v0: trace-compatible append-only event storage.
+        "CREATE INDEX IF NOT EXISTS conversation_records_tenant_user_time_idx ON conversation_records (tenant_id, user_id, created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS conversation_records_tenant_session_time_idx ON conversation_records (tenant_id, session_id, created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS conversation_records_tenant_run_idx ON conversation_records (tenant_id, graph_run_id);",
         """
-        CREATE TABLE IF NOT EXISTS event_journal (
+        CREATE TABLE IF NOT EXISTS conversation_migration_receipts (
+            migration_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
+            source_count BIGINT NOT NULL,
+            target_count BIGINT NOT NULL,
+            source_digest TEXT NOT NULL,
+            target_digest TEXT NOT NULL,
+            completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (migration_id, tenant_id),
+            CHECK (source_count = target_count),
+            CHECK (source_digest = target_digest)
+        );
+        """,
+        # Execution Traces — one terminal record per graph run.
+        """
+        CREATE TABLE IF NOT EXISTS execution_traces (
             id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             tenant_id       TEXT NOT NULL,
             agent_id        TEXT NOT NULL,
@@ -406,53 +643,80 @@ def _core_schema(vector_dim: int) -> list[str]:
             security_flags  JSONB NOT NULL DEFAULT '{}'::jsonb,
             metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
             provenance      TEXT[] NULL,
-            event_id        UUID UNIQUE DEFAULT gen_random_uuid(),
-            event_type      TEXT NOT NULL DEFAULT 'trace.logged',
-            severity        TEXT NOT NULL DEFAULT 'info',
-            status          TEXT NOT NULL DEFAULT 'recorded',
-            payload         JSONB NOT NULL DEFAULT '{}'::jsonb,
-            source_refs     JSONB NOT NULL DEFAULT '[]'::jsonb,
+            graph_run_id    UUID NULL,
+            payload_digest  TEXT NULL,
+            terminal_status TEXT NULL CHECK (terminal_status IN ('succeeded','failed','cancelled')),
+            terminal_reason TEXT NULL,
+            trace_schema_version TEXT NOT NULL DEFAULT 'legacy_v0',
+            prompt_evidence JSONB NOT NULL DEFAULT '[]'::jsonb,
+            steps           JSONB NOT NULL DEFAULT '[]'::jsonb,
+            control_evidence JSONB NOT NULL DEFAULT '{}'::jsonb
+                CONSTRAINT execution_traces_control_evidence_object_check
+                CHECK (jsonb_typeof(control_evidence) = 'object'),
+            final_verdict JSONB NOT NULL DEFAULT '{}'::jsonb
+                CONSTRAINT execution_traces_final_verdict_object_check
+                CHECK (jsonb_typeof(final_verdict) = 'object'),
             created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         """,
-        "CREATE INDEX IF NOT EXISTS event_journal_tenant_idx ON event_journal (tenant_id);",
-        "CREATE INDEX IF NOT EXISTS event_journal_agent_idx ON event_journal (agent_id);",
-        "CREATE INDEX IF NOT EXISTS event_journal_session_idx ON event_journal (session_id);",
-        "CREATE INDEX IF NOT EXISTS event_journal_created_idx ON event_journal (created_at DESC);",
-        "CREATE INDEX IF NOT EXISTS event_journal_tenant_created_idx ON event_journal (tenant_id, created_at DESC);",
-    ]
-
-
-def _commerce_schema(vector_dim: int) -> list[str]:
-    """Commerce/Taxonomy tables - for e-commerce integrations."""
-    return [
-        # Catalog Taxonomy (The Gold Standard)
-        # Note: Support both singular and plural domain names for compatibility
+        "CREATE INDEX IF NOT EXISTS execution_traces_tenant_idx ON execution_traces (tenant_id);",
+        "CREATE INDEX IF NOT EXISTS execution_traces_agent_idx ON execution_traces (agent_id);",
+        "CREATE INDEX IF NOT EXISTS execution_traces_session_idx ON execution_traces (session_id);",
+        "CREATE INDEX IF NOT EXISTS execution_traces_created_idx ON execution_traces (created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS execution_traces_tenant_created_idx ON execution_traces (tenant_id, created_at DESC);",
+        "CREATE UNIQUE INDEX IF NOT EXISTS execution_traces_tenant_id_uq ON execution_traces (tenant_id, id);",
         """
-        CREATE TABLE IF NOT EXISTS catalog_taxonomy (
-            tenant_id   TEXT NOT NULL,
-            domain      TEXT NOT NULL CHECK (domain IN (
-                'category', 'categories',
-                'color', 'colors',
-                'size', 'sizes',
-                'gender', 'genders'
-            )),
-            name        TEXT NOT NULL,
-            path        LTREE NOT NULL,
-            keywords    TEXT[] NOT NULL DEFAULT '{}',
-            embedding   VECTOR(%d) NULL,
-            metadata    JSONB NOT NULL DEFAULT '{}'::jsonb,
-            updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            PRIMARY KEY (tenant_id, domain, path)
+        CREATE TABLE IF NOT EXISTS outcome_observations (
+            observation_id UUID PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            trace_id UUID NOT NULL,
+            graph_run_id UUID NOT NULL,
+            verdict_digest TEXT NOT NULL CHECK (verdict_digest ~ '^[0-9a-f]{64}$'),
+            observation_kind TEXT NOT NULL CHECK (observation_kind IN ('verified_success','verified_failure','neutral')),
+            source_authority TEXT NOT NULL CHECK (source_authority = 'operator_review/v1'),
+            source_ref TEXT NOT NULL,
+            occurred_at TIMESTAMPTZ NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            canonical_digest TEXT NOT NULL CHECK (canonical_digest ~ '^[0-9a-f]{64}$'),
+            policy_version TEXT NOT NULL,
+            resolution_receipt JSONB NOT NULL CHECK (jsonb_typeof(resolution_receipt) = 'object'),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT outcome_observations_trace_scope_fk
+                FOREIGN KEY (tenant_id, trace_id)
+                REFERENCES execution_traces(tenant_id, id) ON DELETE RESTRICT,
+            UNIQUE (tenant_id, source_authority, idempotency_key)
         );
-        """
-        % int(vector_dim),
-        "CREATE INDEX IF NOT EXISTS catalog_taxonomy_path_gist ON catalog_taxonomy USING GIST (path);",
-        "CREATE INDEX IF NOT EXISTS catalog_taxonomy_domain_idx ON catalog_taxonomy (domain);",
-        """
-        CREATE INDEX IF NOT EXISTS catalog_taxonomy_embedding_hnsw
-          ON catalog_taxonomy USING hnsw (embedding vector_cosine_ops);
         """,
+        "CREATE INDEX IF NOT EXISTS outcome_observations_trace_idx ON outcome_observations (tenant_id, trace_id);",
+        "CREATE UNIQUE INDEX IF NOT EXISTS outcome_observations_tenant_id_uq ON outcome_observations (tenant_id, observation_id);",
+        """
+        CREATE TABLE IF NOT EXISTS execution_trace_artifacts (
+            artifact_id UUID PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            trace_id UUID NOT NULL,
+            graph_run_id UUID NOT NULL,
+            invocation_id UUID NOT NULL,
+            provider_attempt_id UUID NOT NULL,
+            artifact_kind TEXT NOT NULL CHECK (artifact_kind = 'model_io'),
+            content_schema TEXT NOT NULL CHECK (content_schema = 'contextunity.model-io-content/v1'),
+            capture_state TEXT NOT NULL CHECK (capture_state IN ('captured','disabled','redacted','rejected','unavailable')),
+            storage_state TEXT NOT NULL CHECK (storage_state IN ('hot','archiving','cold','restoring','purging','purged')),
+            lifecycle_profile_id TEXT NOT NULL,
+            content_digest TEXT NOT NULL,
+            reservation_digest TEXT NOT NULL,
+            protected_envelope JSONB NULL,
+            archive_receipt JSONB NULL,
+            request_bytes BIGINT NOT NULL CHECK (request_bytes >= 0),
+            response_bytes BIGINT NOT NULL CHECK (response_bytes >= 0),
+            revision BIGINT NOT NULL CHECK (revision >= 1),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            purged_at TIMESTAMPTZ NULL,
+            UNIQUE (tenant_id, project_id, graph_run_id, provider_attempt_id, artifact_kind)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS execution_trace_artifacts_trace_idx ON execution_trace_artifacts (tenant_id, project_id, trace_id);",
     ]
 
 
@@ -470,16 +734,32 @@ def _column_backfill() -> list[str]:
     ALTER TABLE here so existing deployments pick it up automatically.
     """
     return [
-        # event_journal — provenance tracking (added after initial trace system)
-        "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS provenance TEXT[] NULL;",
-        # event_journal — Event Journal v0 columns; a table that was just
-        # renamed from agent_traces predates these and needs the backfill.
-        "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS event_id UUID DEFAULT gen_random_uuid();",
-        "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS event_type TEXT NOT NULL DEFAULT 'trace.logged';",
-        "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'info';",
-        "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'recorded';",
-        "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}'::jsonb;",
-        "ALTER TABLE event_journal ADD COLUMN IF NOT EXISTS source_refs JSONB NOT NULL DEFAULT '[]'::jsonb;",
+        "ALTER TABLE execution_traces ALTER COLUMN id SET DEFAULT gen_random_uuid();",
+        # Execution Trace terminal-snapshot columns. Existing rows remain legacy_v0.
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS provenance TEXT[] NULL;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS graph_run_id UUID NULL;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS payload_digest TEXT NULL;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS terminal_status TEXT NULL;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS terminal_reason TEXT NULL;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS trace_schema_version TEXT NOT NULL DEFAULT 'legacy_v0';",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS prompt_evidence JSONB NOT NULL DEFAULT '[]'::jsonb;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS steps JSONB NOT NULL DEFAULT '[]'::jsonb;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS control_evidence JSONB NOT NULL DEFAULT '{}'::jsonb;",
+        "ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS final_verdict JSONB NOT NULL DEFAULT '{}'::jsonb;",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'execution_traces_final_verdict_object_check' AND conrelid = 'execution_traces'::regclass) THEN ALTER TABLE execution_traces ADD CONSTRAINT execution_traces_final_verdict_object_check CHECK (jsonb_typeof(final_verdict) = 'object'); END IF; END $$;",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'execution_traces_control_evidence_object_check' AND conrelid = 'execution_traces'::regclass) THEN ALTER TABLE execution_traces ADD CONSTRAINT execution_traces_control_evidence_object_check CHECK (jsonb_typeof(control_evidence) = 'object'); END IF; END $$;",
+        "CREATE UNIQUE INDEX IF NOT EXISTS execution_traces_tenant_id_uq ON execution_traces (tenant_id, id);",
+        "ALTER TABLE outcome_observations DROP CONSTRAINT IF EXISTS outcome_observations_trace_id_fkey;",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'outcome_observations_trace_scope_fk' AND conrelid = 'outcome_observations'::regclass) THEN ALTER TABLE outcome_observations ADD CONSTRAINT outcome_observations_trace_scope_fk FOREIGN KEY (tenant_id, trace_id) REFERENCES execution_traces(tenant_id, id) ON DELETE RESTRICT; END IF; END $$;",
+        "CREATE UNIQUE INDEX IF NOT EXISTS synapses_tenant_id_uq ON synapses (tenant_id, id);",
+        "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'outcome_synapse_effects_synapse_scope_fk' AND conrelid = 'outcome_synapse_effects'::regclass) THEN ALTER TABLE outcome_synapse_effects ADD CONSTRAINT outcome_synapse_effects_synapse_scope_fk FOREIGN KEY (tenant_id, synapse_id) REFERENCES synapses(tenant_id, id) ON DELETE RESTRICT; END IF; END $$;",
+        "CREATE UNIQUE INDEX IF NOT EXISTS execution_traces_tenant_run_uq ON execution_traces (tenant_id, graph_run_id) WHERE graph_run_id IS NOT NULL;",
+        "ALTER TABLE execution_traces DROP COLUMN IF EXISTS event_id;",
+        "ALTER TABLE execution_traces DROP COLUMN IF EXISTS event_type;",
+        "ALTER TABLE execution_traces DROP COLUMN IF EXISTS severity;",
+        "ALTER TABLE execution_traces DROP COLUMN IF EXISTS status;",
+        "ALTER TABLE execution_traces DROP COLUMN IF EXISTS payload;",
+        "ALTER TABLE execution_traces DROP COLUMN IF EXISTS source_refs;",
         # cells — Phase 3 BrainCell metadata columns
         "ALTER TABLE cells ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();",
         "ALTER TABLE cells ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0.5;",
@@ -492,6 +772,11 @@ def _column_backfill() -> list[str]:
         "ALTER TABLE synapses ADD COLUMN IF NOT EXISTS content_hash TEXT NULL;",
         "ALTER TABLE synapses ADD COLUMN IF NOT EXISTS node_id TEXT NULL;",
         "ALTER TABLE synapses ADD COLUMN IF NOT EXISTS node_name TEXT NULL;",
+        # UDB mutation receipts added after the original UDB schema. Existing
+        # rows remain NULL and are rejected on retry rather than silently
+        # accepting a command whose immutable payload cannot be proven.
+        "ALTER TABLE debug_case_mitigations ADD COLUMN IF NOT EXISTS canonical_digest TEXT NULL;",
+        "ALTER TABLE debug_case_transitions ADD COLUMN IF NOT EXISTS canonical_digest TEXT NULL;",
     ]
 
 
@@ -516,9 +801,8 @@ def _constraint_upgrades() -> list[str]:
                'chunk','concept','fact','preference','config','document',
                'documentation','entity','summary'
            ));""",
-        # event_journal.event_id must be unique for external references (Event Journal v0)
-        "ALTER TABLE event_journal DROP CONSTRAINT IF EXISTS event_journal_event_id_key;",
-        "ALTER TABLE event_journal ADD CONSTRAINT event_journal_event_id_key UNIQUE (event_id);",
+        "ALTER TABLE execution_traces DROP CONSTRAINT IF EXISTS execution_traces_terminal_status_check;",
+        "ALTER TABLE execution_traces ADD CONSTRAINT execution_traces_terminal_status_check CHECK (terminal_status IS NULL OR terminal_status IN ('succeeded','failed','cancelled'));",
         # synapses — fault taxonomy adds 'policy_fault' and 'reference_fault'
         # alongside the original 'agent_fault' / 'infra_fault' / 'upstream_fault' set.
         "ALTER TABLE synapses DROP CONSTRAINT IF EXISTS synapses_fault_class_check;",
@@ -642,6 +926,131 @@ def _synapses_schema(vector_dim: int) -> list[str]:
             ON synapses (status) WHERE status IN ('active', 'confirmed');
         """,
         "CREATE INDEX IF NOT EXISTS synapses_tenant_idx ON synapses (tenant_id);",
+        "CREATE UNIQUE INDEX IF NOT EXISTS synapses_tenant_id_uq ON synapses (tenant_id, id);",
+        """
+        CREATE TABLE IF NOT EXISTS outcome_synapse_effects (
+            effect_id UUID PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            observation_id UUID NOT NULL,
+            synapse_id UUID NOT NULL,
+            source_authority TEXT NOT NULL CHECK (source_authority = 'operator_review/v1'),
+            idempotency_key TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            CONSTRAINT outcome_synapse_effects_observation_scope_fk
+                FOREIGN KEY (tenant_id, observation_id)
+                REFERENCES outcome_observations(tenant_id, observation_id)
+                ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+            CONSTRAINT outcome_synapse_effects_synapse_scope_fk
+                FOREIGN KEY (tenant_id, synapse_id)
+                REFERENCES synapses(tenant_id, id) ON DELETE RESTRICT,
+            UNIQUE (tenant_id, source_authority, idempotency_key, synapse_id)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS outcome_synapse_effects_observation_idx ON outcome_synapse_effects (tenant_id, observation_id);",
+    ]
+
+
+def _udb_schema() -> list[str]:
+    """Return UDB tables; they are a separate negative-experience authority."""
+    return [
+        """
+        CREATE TABLE IF NOT EXISTS debug_cases (
+            case_id             UUID PRIMARY KEY,
+            tenant_id           TEXT NOT NULL,
+            fingerprint_version TEXT NOT NULL CHECK (fingerprint_version = 'contextunity.udb-fingerprint/v1'),
+            fingerprint         TEXT NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
+            fault_class         TEXT NOT NULL CHECK (fault_class IN ('agent_fault','infra_fault','upstream_fault','policy_fault','reference_fault')),
+            operation_kind      TEXT NOT NULL CHECK (operation_kind IN ('brain_search','auto_extract','secure_node','synapse_record','memory_synthesis','embedding_enrichment')),
+            policy_version      TEXT NOT NULL CHECK (policy_version = 'contextunity.error-evidence/v1'),
+            comparison_key      JSONB NOT NULL,
+            state               TEXT NOT NULL CHECK (state IN ('open','resolved')),
+            fault_count         INTEGER NOT NULL CHECK (fault_count >= 1),
+            success_count       INTEGER NOT NULL CHECK (success_count >= 0),
+            q_error             DOUBLE PRECISION NOT NULL CHECK (q_error >= 0.0 AND q_error <= 1.0),
+            case_revision       INTEGER NOT NULL CHECK (case_revision >= 1),
+            first_occurred_at   TIMESTAMPTZ NOT NULL,
+            last_occurred_at    TIMESTAMPTZ NOT NULL,
+            resolved_at         TIMESTAMPTZ NULL,
+            UNIQUE (tenant_id, case_id),
+            UNIQUE (tenant_id, fingerprint_version, fingerprint)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS debug_cases_tenant_state_idx ON debug_cases (tenant_id, state, last_occurred_at DESC);",
+        """
+        CREATE TABLE IF NOT EXISTS debug_case_occurrences (
+            occurrence_id       UUID PRIMARY KEY,
+            case_id             UUID NOT NULL,
+            tenant_id           TEXT NOT NULL,
+            producer_id         TEXT NOT NULL,
+            idempotency_key     TEXT NOT NULL,
+            fingerprint_version TEXT NOT NULL,
+            fingerprint         TEXT NOT NULL,
+            fault_class         TEXT NOT NULL,
+            operation_kind      TEXT NOT NULL,
+            fault_code          TEXT NOT NULL,
+            policy_version      TEXT NOT NULL,
+            comparison_key      JSONB NOT NULL,
+            trace_id            UUID NULL,
+            graph_run_id        UUID NULL,
+            node_id             TEXT NULL,
+            step_id             UUID NULL,
+            occurred_at         TIMESTAMPTZ NOT NULL,
+            canonical_digest    TEXT NOT NULL CHECK (canonical_digest ~ '^[0-9a-f]{64}$'),
+            FOREIGN KEY (tenant_id, case_id) REFERENCES debug_cases(tenant_id, case_id) ON DELETE RESTRICT,
+            UNIQUE (tenant_id, case_id, occurrence_id),
+            UNIQUE (tenant_id, producer_id, idempotency_key)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS debug_occurrences_tenant_case_idx ON debug_case_occurrences (tenant_id, case_id, occurred_at DESC);",
+        """
+        CREATE TABLE IF NOT EXISTS debug_case_recoveries (
+            recovery_id            UUID PRIMARY KEY,
+            case_id                UUID NOT NULL,
+            tenant_id              TEXT NOT NULL,
+            policy_version         TEXT NOT NULL,
+            comparison_key         JSONB NOT NULL,
+            expected_case_revision INTEGER NOT NULL,
+            exposure_id            TEXT NOT NULL,
+            kind                   TEXT NOT NULL CHECK (kind IN ('verified_recovery_probe','comparable_success')),
+            verified_at            TIMESTAMPTZ NOT NULL,
+            canonical_digest       TEXT NOT NULL CHECK (canonical_digest ~ '^[0-9a-f]{64}$'),
+            FOREIGN KEY (tenant_id, case_id) REFERENCES debug_cases(tenant_id, case_id) ON DELETE RESTRICT,
+            UNIQUE (case_id, exposure_id)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS debug_recoveries_tenant_case_idx ON debug_case_recoveries (tenant_id, case_id);",
+        """
+        CREATE TABLE IF NOT EXISTS debug_case_transitions (
+            transition_id          TEXT PRIMARY KEY,
+            case_id                UUID NOT NULL,
+            tenant_id              TEXT NOT NULL,
+            transition_kind        TEXT NOT NULL CHECK (transition_kind IN ('resolved','reopened')),
+            expected_case_revision INTEGER NOT NULL,
+            trigger_occurrence_id  UUID NULL,
+            transitioned_at        TIMESTAMPTZ NOT NULL,
+            canonical_digest       TEXT NOT NULL CHECK (canonical_digest ~ '^[0-9a-f]{64}$'),
+            FOREIGN KEY (tenant_id, case_id) REFERENCES debug_cases(tenant_id, case_id) ON DELETE RESTRICT,
+            FOREIGN KEY (tenant_id, case_id, trigger_occurrence_id)
+                REFERENCES debug_case_occurrences(tenant_id, case_id, occurrence_id) ON DELETE RESTRICT,
+            UNIQUE (case_id, transition_id)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS debug_transitions_tenant_case_idx ON debug_case_transitions (tenant_id, case_id);",
+        """
+        CREATE TABLE IF NOT EXISTS debug_case_mitigations (
+            attempt_id             UUID PRIMARY KEY,
+            case_id                UUID NOT NULL,
+            tenant_id              TEXT NOT NULL,
+            expected_case_revision INTEGER NOT NULL,
+            kind                   TEXT NOT NULL CHECK (kind IN ('retry','mitigation','manual_probe')),
+            idempotency_key        TEXT NOT NULL,
+            attempted_at           TIMESTAMPTZ NOT NULL,
+            canonical_digest        TEXT NOT NULL CHECK (canonical_digest ~ '^[0-9a-f]{64}$'),
+            FOREIGN KEY (tenant_id, case_id) REFERENCES debug_cases(tenant_id, case_id) ON DELETE RESTRICT,
+            UNIQUE (case_id, idempotency_key)
+        );
+        """,
     ]
 
 
@@ -664,12 +1073,20 @@ def _rls_policies() -> list[str]:
         "cells",
         "cell_edges",
         "cell_aliases",
-        "episodic_events",
-        "event_journal",
-        "catalog_taxonomy",
+        "conversation_records",
+        "conversation_migration_receipts",
+        "execution_traces",
+        "outcome_observations",
+        "outcome_synapse_effects",
+        "execution_trace_artifacts",
         "blackboard",
         "synapses",
         "cell_embedding_jobs",
+        "debug_cases",
+        "debug_case_occurrences",
+        "debug_case_recoveries",
+        "debug_case_transitions",
+        "debug_case_mitigations",
     ]
 
     stmts: list[str] = []
@@ -720,15 +1137,34 @@ def _rls_policies() -> list[str]:
             "user_id IS NULL OR user_id = current_setting('app.current_user', true) "
             "OR current_setting('app.current_user', true) = '*'"
         ),
-        "episodic_events": (
+        "conversation_records": (
             "user_id = current_setting('app.current_user', true) "
             "OR current_setting('app.current_user', true) = '*'"
         ),
-        "event_journal": (
+        "execution_traces": (
             "user_id IS NULL OR user_id = current_setting('app.current_user', true) "
             "OR current_setting('app.current_user', true) = '*'"
         ),
     }
+
+    # The role switch in ``set_tenant_context`` must retain access to the
+    # configured schema. Without USAGE PostgreSQL silently resolves unqualified
+    # table names against public after SET LOCAL ROLE.
+    stmts.append(
+        """
+        DO $$
+        DECLARE schema_name TEXT := current_schema();
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_app') THEN
+                EXECUTE format('GRANT USAGE ON SCHEMA %I TO brain_app', schema_name);
+            END IF;
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_admin') THEN
+                EXECUTE format('GRANT USAGE ON SCHEMA %I TO brain_admin', schema_name);
+            END IF;
+        END
+        $$;
+        """
+    )
 
     # 3. Enable RLS and create policies for each tenant table
     for table in tenant_tables:
@@ -817,7 +1253,6 @@ def build_preflight_rename_sql() -> Sequence[str]:
 def build_schema_sql(
     *,
     vector_dim: int,
-    include_commerce: bool = False,
 ) -> Sequence[str]:
     """Build schema SQL statements.
 
@@ -826,7 +1261,6 @@ def build_schema_sql(
             - 768 for all-mpnet-base-v2 (local)
             - 1536 for OpenAI text-embedding-3-small
             - 3072 for OpenAI text-embedding-3-large
-        include_commerce: Include commerce/taxonomy tables
 
     Returns:
         List of SQL statements to execute
@@ -837,9 +1271,7 @@ def build_schema_sql(
     statements = _core_schema(vector_dim)
     statements.extend(_blackboard_schema(vector_dim))
     statements.extend(_synapses_schema(vector_dim))
-
-    if include_commerce:
-        statements.extend(_commerce_schema(vector_dim))
+    statements.extend(_udb_schema())
 
     return statements
 

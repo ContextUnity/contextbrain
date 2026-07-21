@@ -64,8 +64,9 @@ class TestResolveTenantId:
         with pytest.raises(SecurityError):
             resolve_tenant_id(token, "other")
 
-    def test_no_token_uses_payload(self):
-        assert resolve_tenant_id(None, "legacy") == "legacy"
+    def test_no_token_rejects_payload_selector(self):
+        with pytest.raises(SecurityError, match="verified ContextToken"):
+            resolve_tenant_id(None, "legacy")
 
     def test_no_token_no_payload_fails_closed(self):
         from contextunity.core.exceptions import SecurityError
@@ -73,13 +74,15 @@ class TestResolveTenantId:
         with pytest.raises(SecurityError):
             resolve_tenant_id(None)
 
-    def test_token_without_tenants_uses_payload(self):
+    def test_token_without_tenants_rejects_payload(self):
         token = _token(tenants=None)
-        assert resolve_tenant_id(token, "fallback") == "fallback"
+        with pytest.raises(SecurityError, match="outside token scope"):
+            resolve_tenant_id(token, "fallback")
 
-    def test_token_with_empty_tenants_uses_payload(self):
+    def test_token_with_empty_tenants_rejects_payload(self):
         token = _token(tenants=[])
-        assert resolve_tenant_id(token, "legacy") == "legacy"
+        with pytest.raises(SecurityError, match="outside token scope"):
+            resolve_tenant_id(token, "legacy")
 
     def test_multi_tenant_without_explicit_payload_fails_closed(self):
         """>1 allowed_tenants requires explicit tenant_id; no [0] pick (order-dependent unsafe)."""

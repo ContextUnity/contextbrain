@@ -19,6 +19,8 @@ from ...payloads import (
     GetCellEmbeddingStatusPayload,
     GetEmbeddingCapabilityPayload,
 )
+from ...udb_application import UdbApplication
+from ...udb_reporter import BrainUdbReporter
 from ..handler_base import BrainHandlerBase
 from ..helpers import (
     extract_token_from_context,
@@ -37,6 +39,15 @@ class EmbeddingHandlersMixin(BrainHandlerBase):
 
     def _embedding_config(self) -> EmbeddingEnrichmentConfig:
         return get_core_config().embedding_enrichment
+
+    def _udb_reporter(self) -> BrainUdbReporter:
+        """Construct the local port; Brain never reports through self-gRPC."""
+        return BrainUdbReporter(
+            application=UdbApplication(
+                storage=self.storage,
+                enabled=get_core_config().udb.enabled,
+            )
+        )
 
     @grpc_error_handler
     async def GetEmbeddingCapability(
@@ -189,8 +200,13 @@ class EmbeddingHandlersMixin(BrainHandlerBase):
                 payload={"status": "skipped", "reason_code": "input_too_large"}, parent_unit=unit
             )
         try:
-            vector = await self.embedder.embed_async(content)
+            vector = await self.embedder.embed_document_async(content)
         except (EmbeddingError, OSError, RuntimeError, TimeoutError, ValueError):
+            await self._udb_reporter().report_embedding_provider_failure(
+                tenant_id=tenant_id,
+                job_id=params.job_id,
+                lease_id=params.lease_id,
+            )
             return make_response(
                 payload={"status": "retryable", "error_code": "provider_failure"}, parent_unit=unit
             )

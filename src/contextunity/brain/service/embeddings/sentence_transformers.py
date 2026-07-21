@@ -63,6 +63,14 @@ class SentenceTransformersEmbedder:
 
         return run_coroutine_sync(lambda: self.embed_async(text))
 
+    async def embed_query_async(self, text: str) -> list[float]:
+        """Delegate query roles to the selected SentenceTransformers model."""
+        return await self.embed_async(text)
+
+    async def embed_document_async(self, text: str) -> list[float]:
+        """Delegate document roles to the selected SentenceTransformers model."""
+        return await self.embed_async(text)
+
     async def embed_async(self, text: str) -> list[float]:
         """Generate one vector and prove the selected model's native dimension."""
         cached = await self._cache.get(self._identity, text)

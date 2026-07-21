@@ -9,11 +9,18 @@ import asyncio
 import json
 import os
 import uuid
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from contextunity.core.exceptions import StorageError
+from contextunity.core.sdk.conversation import (
+    conversation_content_hash,
+    conversation_record_id,
+    conversation_source_hash,
+)
+from contextunity.core.types import JsonDict
 
 from contextunity.brain.core.exceptions import BrainValidationError
 from contextunity.brain.storage.portable import (
@@ -22,9 +29,11 @@ from contextunity.brain.storage.portable import (
     CellRecord,
     PortableManifest,
     SynapseRecord,
+    TraceRecord,
     import_portable_archive,
     parse_record,
 )
+from contextunity.brain.storage.portable.importer import _import_trace
 from contextunity.brain.storage.sqlite import SqliteBrainStore
 
 BRAIN_TEST_DSN = os.environ.get("BRAIN_TEST_DSN")
@@ -49,6 +58,55 @@ def run():
 TENANT = "export-tenant"
 
 
+def _terminal_trace() -> JsonDict:
+    trace: JsonDict = {
+        "schema_version": "contextunity.execution-trace/v2",
+        "trace_id": str(uuid.uuid4()),
+        "graph_run_id": str(uuid.uuid4()),
+        "tenant_id": TENANT,
+        "agent_id": "router-agent",
+        "project_id": "project-a",
+        "graph_name": "graph-a",
+        "terminal_status": "succeeded",
+        "terminal_reason": "verified_success",
+        "duration_ms": 0,
+        "steps": [],
+        "usage": {"input_tokens": 0, "output_tokens": 0, "cost_micros": 0},
+        "prompt_evidence": [],
+        "provenance": [],
+        "security_flags": [],
+        "control_evidence": {
+            "node_attempts": 0,
+            "failed_node_attempts": 0,
+            "model_attempts": 0,
+            "failed_model_attempts": 0,
+            "tool_attempts": 1,
+            "failed_tool_attempts": 0,
+            "graph_cycles": 0,
+            "contribution_refs": [],
+            "invalid_contribution_refs": [],
+            "fault_refs": [],
+            "effect_receipt_refs": ["44444444-4444-4444-8444-444444444444"],
+            "effect_receipts": [
+                {
+                    "receipt_id": "44444444-4444-4444-8444-444444444444",
+                    "operation_id": "55555555-5555-4555-8555-555555555555",
+                    "idempotency_key": "66666666-6666-4666-8666-666666666666",
+                    "effect_state": "committed",
+                    "replay_safe": False,
+                    "adapter_id": "federated:write",
+                    "capability_id": "federated:write",
+                    "effect_or_result_hash": "b" * 64,
+                }
+            ],
+        },
+    }
+    trace["digest"] = sha256(
+        json.dumps(trace, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return trace
+
+
 class TestParseRecord:
     def test_parse_synapse_record(self):
         line = json.dumps(
@@ -70,6 +128,51 @@ class TestParseRecord:
     def test_parse_unknown_type(self):
         with pytest.raises(BrainValidationError, match="Unknown record type"):
             parse_record('{"type": "alien"}')
+
+    def test_v3_trace_rejects_raw_guidance_in_open_step_data(self):
+        with pytest.raises(ValueError, match="Extra inputs"):
+            parse_record(
+                json.dumps(
+                    {
+                        "type": "trace",
+                        "tenant_id": "t",
+                        "trace_id": "11111111-1111-4111-8111-111111111111",
+                        "agent_id": "router",
+                        "trace_schema_version": "contextunity.execution-trace/v3",
+                        "steps": [
+                            {
+                                "sequence": 0,
+                                "attempt_id": "33333333-3333-4333-8333-333333333333",
+                                "kind": "model",
+                                "name": "test/model",
+                                "status": "succeeded",
+                                "duration_ms": 0,
+                                "usage": {
+                                    "input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "cost_micros": 0,
+                                },
+                                "guidance_evidence": {
+                                    "origin": "graph_llm_node",
+                                    "purpose": "agentic_reasoning",
+                                    "mode": "required",
+                                    "outcome": "applied_once",
+                                    "policy_version": "v1",
+                                    "policy_digest": "b1c8f3995fae62701ab5a955083d6ba7b211d7a6f371cf4e67c061e3580a6e8b",
+                                    "descriptor": {
+                                        "artifact_id": "core.agentic-ethos",
+                                        "artifact_version": "v1",
+                                        "content_digest": "176ed2a85316a932a2f88a90d2f987e5d2855aeb2038379a74dbbcabbd563cd1",
+                                        "release_id": "2026.07.1",
+                                    },
+                                    "content": "must never enter a portable archive",
+                                },
+                            }
+                        ],
+                        "created_at": "2026-07-18T00:00:00+00:00",
+                    }
+                )
+            )
 
     def test_current_format_rejects_legacy_cell_kind(self):
         with pytest.raises(ValueError, match="node_kind"):
@@ -128,22 +231,24 @@ class TestExport:
         assert bb[0].scope_path == "graph.step1"
 
     def test_export_all_types(self, store, run, tmp_path):
-        run(
-            store.upsert_taxonomy(
-                tenant_id=TENANT,
-                domain="product",
-                name="Gear",
-                path="product.gear",
-                keywords=["outdoor"],
-            )
-        )
         run(store.log_trace(tenant_id=TENANT, agent_id="test-agent"))
         run(
-            store.add_episode(
-                id="ep-1",
+            store.append_conversation_record(
+                record_id=conversation_record_id(
+                    tenant_id=TENANT, idempotency_key="portable:record-1"
+                ),
+                tenant_id=TENANT,
                 user_id="u1",
                 content="Hello",
-                tenant_id=TENANT,
+                session_id=None,
+                role="user",
+                kind="message",
+                content_hash=conversation_content_hash("Hello"),
+                source_hash=conversation_source_hash("portable:test:record-1"),
+                graph_run_id=None,
+                metadata_version=1,
+                idempotency_key="portable:record-1",
+                metadata={},
             )
         )
         run(
@@ -174,8 +279,8 @@ class TestExport:
         manifest = run(writer.export(store, [TENANT]))
 
         assert TENANT in manifest.tenants
-        assert manifest.record_counts.get("taxonomy", 0) >= 1
         assert manifest.record_counts.get("trace", 0) >= 1
+        assert manifest.record_counts.get("conversation", 0) == 1
         assert manifest.record_counts.get("cell", 0) >= 1
         assert manifest.record_counts.get("synapse", 0) == 1
 
@@ -218,6 +323,20 @@ class TestValidate:
 
 
 class TestImport:
+    def test_v5_portable_record_requires_explicit_root_control_evidence(self) -> None:
+        with pytest.raises(ValueError, match="requires root control evidence"):
+            TraceRecord(
+                tenant_id=TENANT,
+                trace_id="11111111-1111-4111-8111-111111111111",
+                agent_id="router-agent",
+                graph_run_id="22222222-2222-4222-8222-222222222222",
+                payload_digest="a" * 64,
+                terminal_status="failed",
+                terminal_reason="failed",
+                trace_schema_version="contextunity.execution-trace/v5",
+                created_at="2026-07-06T00:00:00+00:00",
+            )
+
     def test_dry_run_returns_counts(self, store, run, tmp_path):
         run(
             store.upsert_cell(
@@ -255,15 +374,6 @@ class TestImport:
                 content={"imported": True},
             )
         )
-        run(
-            store.upsert_taxonomy(
-                tenant_id=TENANT,
-                domain="cat",
-                name="Test",
-                path="cat.test",
-                keywords=["demo"],
-            )
-        )
 
         archive_dir = tmp_path / "real"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
@@ -276,7 +386,6 @@ class TestImport:
         assert result["ok"] is True
         assert result["counts"].get("cell", 0) >= 1
         assert result["counts"].get("blackboard", 0) >= 1
-        assert result["counts"].get("taxonomy", 0) >= 1
 
         # legacy get_user_facts removed; query via cells instead
         cells = run(target.query_cells(tenant_id=TENANT, cell_kind="fact", limit=10))
@@ -382,35 +491,341 @@ class TestImport:
         traces = run(target.get_traces(tenant_id=TENANT, limit=100))
         assert len(traces) == 2  # not 4
 
-    def test_episode_idempotent(self, store, run, tmp_path):
-        """Re-import must NOT duplicate episodes."""
-        run(
-            store.add_episode(
-                id="ep-idem-1",
-                user_id="u1",
-                content="Hello",
-                tenant_id=TENANT,
-            )
-        )
-
-        archive_dir = tmp_path / "ep-idem"
+    def test_terminal_trace_round_trip_preserves_receipt_identity(self, store, run, tmp_path):
+        terminal = _terminal_trace()
+        receipt = run(store.finalize_execution_trace(terminal_trace=terminal))
+        archive_dir = tmp_path / "terminal-trace"
         run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
 
         target = SqliteBrainStore(
-            db_path=str(tmp_path / "ep_target.sqlite3"),
+            db_path=str(tmp_path / "terminal_target.sqlite3"),
             vector_dim=8,
         )
         run(import_portable_archive(target, archive_dir, dry_run=False))
         run(import_portable_archive(target, archive_dir, dry_run=False))
 
-        episodes = run(
-            target.get_recent_episodes(
-                user_id="u1",
+        traces = run(target.get_traces(tenant_id=TENANT, limit=100))
+        assert len(traces) == 1
+        assert traces[0]["id"] == receipt["trace_id"]
+        assert traces[0]["graph_run_id"] == receipt["graph_run_id"]
+        assert traces[0]["payload_digest"] == receipt["digest"]
+        assert traces[0]["trace_schema_version"] == "contextunity.execution-trace/v2"
+        assert traces[0]["control_evidence"] == terminal["control_evidence"]
+
+    def test_v3_guidance_evidence_survives_portable_round_trip(self, store, run, tmp_path):
+        terminal = _terminal_trace()
+        terminal["schema_version"] = "contextunity.execution-trace/v3"
+        terminal["steps"] = [
+            {
+                "sequence": 0,
+                "attempt_id": "55555555-5555-4555-8555-555555555555",
+                "kind": "model",
+                "name": "test/model",
+                "status": "succeeded",
+                "duration_ms": 1,
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 3,
+                    "cost_micros": 2,
+                    "provider_details": {
+                        "schema_id": "openai.responses.usage/v1",
+                        "values": {
+                            "openai.cached_input_tokens": 7,
+                            "openai.reasoning_output_tokens": 2,
+                        },
+                    },
+                },
+                "guidance_evidence": {
+                    "origin": "graph_llm_node",
+                    "purpose": "agentic_reasoning",
+                    "mode": "required",
+                    "outcome": "applied_once",
+                    "policy_version": "v1",
+                    "policy_digest": "b1c8f3995fae62701ab5a955083d6ba7b211d7a6f371cf4e67c061e3580a6e8b",
+                    "descriptor": {
+                        "artifact_id": "core.agentic-ethos",
+                        "artifact_version": "v1",
+                        "content_digest": "176ed2a85316a932a2f88a90d2f987e5d2855aeb2038379a74dbbcabbd563cd1",
+                        "release_id": "2026.07.1",
+                    },
+                },
+            }
+        ]
+        terminal["usage"] = {"input_tokens": 10, "output_tokens": 3, "cost_micros": 2}
+        control = terminal["control_evidence"]
+        assert isinstance(control, dict)
+        control["model_attempts"] = 1
+        terminal.pop("digest", None)
+        terminal["digest"] = sha256(
+            json.dumps(
+                terminal,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        receipt = run(store.finalize_execution_trace(terminal_trace=terminal))
+        archive_dir = tmp_path / "terminal-trace-v3"
+        run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
+
+        target = SqliteBrainStore(
+            db_path=str(tmp_path / "terminal_target_v3.sqlite3"),
+            vector_dim=8,
+        )
+        run(import_portable_archive(target, archive_dir, dry_run=False))
+
+        traces = run(target.get_traces(tenant_id=TENANT, limit=100))
+        assert traces[0]["id"] == receipt["trace_id"]
+        assert traces[0]["trace_schema_version"] == "contextunity.execution-trace/v3"
+        steps = traces[0]["steps"]
+        assert isinstance(steps, list)
+        assert steps[0]["guidance_evidence"]["outcome"] == "applied_once"
+        assert "content" not in steps[0]["guidance_evidence"]
+        assert steps[0]["usage"]["provider_details"] == {
+            "schema_id": "openai.responses.usage/v1",
+            "values": {
+                "openai.cached_input_tokens": 7,
+                "openai.reasoning_output_tokens": 2,
+            },
+        }
+
+    def test_v5_control_step_survives_portable_round_trip(self, store, run, tmp_path):
+        terminal = _terminal_trace()
+        terminal["schema_version"] = "contextunity.execution-trace/v5"
+        terminal["steps"] = [
+            {
+                "sequence": 0,
+                "attempt_id": "55555555-5555-4555-8555-555555555555",
+                "kind": "node",
+                "name": "worker",
+                "status": "succeeded",
+                "duration_ms": 1,
+                "usage": {"input_tokens": 0, "output_tokens": 0, "cost_micros": 0},
+            },
+            {
+                "sequence": 1,
+                "attempt_id": "55555555-5555-4555-8555-555555555556",
+                "kind": "control",
+                "name": "router_censor",
+                "status": "succeeded",
+                "duration_ms": 0,
+                "usage": {"input_tokens": 0, "output_tokens": 0, "cost_micros": 0},
+                "control_action": "request_replan",
+                "control_reason": "stagnation_low_q_repeated_fault",
+                "evidence_refs": ["policy:" + "a" * 64, "verifier:node:verifier"],
+                "replan_request": {
+                    "run_id": terminal["graph_run_id"],
+                    "reason": "stagnation_low_q_repeated_fault",
+                    "verifier_ref": "node:verifier",
+                    "policy_digest": "a" * 64,
+                    "failed_task_ids": [],
+                    "stalled_task_ids": ["worker"],
+                    "remaining_provider_attempts": 1,
+                    "remaining_node_attempts": 1,
+                    "remaining_graph_cycles": 1,
+                    "remaining_side_effect_attempts": 1,
+                    "remaining_input_tokens": 1,
+                    "remaining_output_tokens": 1,
+                    "remaining_cost_micros": 1,
+                    "remaining_wall_time_ms": 1,
+                    "fault_refs": [],
+                    "effect_receipt_refs": [],
+                    "progress_hashes": [],
+                    "stagnation_hashes": ["b" * 64],
+                },
+            },
+        ]
+        terminal["usage"] = {"input_tokens": 0, "output_tokens": 0, "cost_micros": 0}
+        terminal["terminal_status"] = "failed"
+        terminal["terminal_reason"] = "replan_requested"
+        terminal.pop("digest", None)
+        terminal["digest"] = sha256(
+            json.dumps(
+                terminal,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        receipt = run(store.finalize_execution_trace(terminal_trace=terminal))
+        archive_dir = tmp_path / "terminal-trace-v5"
+        run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
+
+        target = SqliteBrainStore(
+            db_path=str(tmp_path / "terminal_target_v5.sqlite3"),
+            vector_dim=8,
+        )
+        run(import_portable_archive(target, archive_dir, dry_run=False))
+
+        traces = run(target.get_traces(tenant_id=TENANT, limit=100))
+        assert traces[0]["id"] == receipt["trace_id"]
+        assert traces[0]["trace_schema_version"] == "contextunity.execution-trace/v5"
+        steps = traces[0]["steps"]
+        assert isinstance(steps, list)
+        assert steps[1]["kind"] == "control"
+        assert steps[1]["control_action"] == "request_replan"
+        assert "payload" not in steps[1]
+
+    @pytest.mark.asyncio
+    async def test_v5_import_validates_complete_terminal_before_generic_store_write(self) -> None:
+        fault_id = "77777777-7777-4777-8777-777777777777"
+        record = TraceRecord(
+            tenant_id=TENANT,
+            trace_id="11111111-1111-4111-8111-111111111111",
+            agent_id="router-agent",
+            graph_name="graph-a",
+            metadata={"project_id": "project-a"},
+            graph_run_id="22222222-2222-4222-8222-222222222222",
+            payload_digest="a" * 64,
+            terminal_status="failed",
+            terminal_reason="replan_requested",
+            trace_schema_version="contextunity.execution-trace/v5",
+            token_usage={"input_tokens": 0, "output_tokens": 0, "cost_micros": 0},
+            timing_ms=1,
+            steps=[
+                {
+                    "sequence": 0,
+                    "attempt_id": "33333333-3333-4333-8333-333333333333",
+                    "kind": "control",
+                    "name": "router_censor",
+                    "status": "succeeded",
+                    "duration_ms": 0,
+                    "usage": {"input_tokens": 0, "output_tokens": 0, "cost_micros": 0},
+                    "control_action": "request_replan",
+                    "control_reason": "stagnation_detected",
+                    "evidence_refs": [
+                        "policy:" + "a" * 64,
+                        "verifier:node:verifier",
+                        f"fault:{fault_id}",
+                    ],
+                    "replan_request": {
+                        "run_id": "22222222-2222-4222-8222-222222222222",
+                        "reason": "stagnation_detected",
+                        "verifier_ref": "node:verifier",
+                        "policy_digest": "a" * 64,
+                        "failed_task_ids": [],
+                        "stalled_task_ids": [],
+                        "remaining_provider_attempts": 1,
+                        "remaining_node_attempts": 1,
+                        "remaining_graph_cycles": 1,
+                        "remaining_side_effect_attempts": 1,
+                        "remaining_input_tokens": 1,
+                        "remaining_output_tokens": 1,
+                        "remaining_cost_micros": 1,
+                        "remaining_wall_time_ms": 1,
+                        "fault_refs": [fault_id],
+                        "effect_receipt_refs": [],
+                        "progress_hashes": [],
+                        "stagnation_hashes": [],
+                    },
+                }
+            ],
+            control_evidence={
+                "node_attempts": 0,
+                "failed_node_attempts": 0,
+                "model_attempts": 0,
+                "failed_model_attempts": 0,
+                "tool_attempts": 0,
+                "failed_tool_attempts": 0,
+                "graph_cycles": 0,
+                "contribution_refs": [],
+                "invalid_contribution_refs": [],
+                "fault_refs": [],
+                "effect_receipt_refs": [],
+                "effect_receipts": [],
+            },
+            created_at="2026-07-06T00:00:00+00:00",
+        )
+
+        class _NoWriteStore:
+            writes = 0
+
+            async def finalize_execution_trace(self, *, terminal_trace: JsonDict) -> JsonDict:
+                _ = terminal_trace
+                self.writes += 1
+                return {}
+
+            async def log_trace(
+                self,
+                *,
+                tenant_id: str,
+                agent_id: str,
+                session_id: str | None = None,
+                user_id: str | None = None,
+                graph_name: str | None = None,
+                tool_calls: list[JsonDict] | None = None,
+                token_usage: JsonDict | None = None,
+                timing_ms: int | None = None,
+                security_flags: JsonDict | None = None,
+                metadata: JsonDict | None = None,
+                provenance: list[str] | None = None,
+            ) -> str:
+                _ = (
+                    tenant_id,
+                    agent_id,
+                    session_id,
+                    user_id,
+                    graph_name,
+                    tool_calls,
+                    token_usage,
+                    timing_ms,
+                    security_flags,
+                    metadata,
+                    provenance,
+                )
+                self.writes += 1
+                return "unexpected"
+
+        store = _NoWriteStore()
+        with pytest.raises(ValueError, match="control evidence"):
+            await _import_trace(store, record, TENANT)
+        assert store.writes == 0
+
+    def test_conversation_history_idempotent(self, store, run, tmp_path):
+        """Re-import must return the durable duplicate without adding rows."""
+        idempotency_key = "portable:record-idem-1"
+        record_id = conversation_record_id(tenant_id=TENANT, idempotency_key=idempotency_key)
+        run(
+            store.append_conversation_record(
+                record_id=record_id,
                 tenant_id=TENANT,
-                limit=100,
+                user_id="u1",
+                content="Hello",
+                session_id=None,
+                role="user",
+                kind="message",
+                content_hash=conversation_content_hash("Hello"),
+                source_hash=conversation_source_hash("portable:test:record-idem-1"),
+                graph_run_id=None,
+                metadata_version=1,
+                idempotency_key=idempotency_key,
+                metadata={},
             )
         )
-        assert len(episodes) == 1  # not 2
+
+        archive_dir = tmp_path / "conversation-idem"
+        run(BrainPortableArchiveWriter(archive_dir, 8).export(store, [TENANT]))
+
+        target = SqliteBrainStore(
+            db_path=str(tmp_path / "conversation_target.sqlite3"),
+            vector_dim=8,
+        )
+        run(import_portable_archive(target, archive_dir, dry_run=False))
+        run(import_portable_archive(target, archive_dir, dry_run=False))
+
+        records = run(
+            target.query_conversation_history(
+                user_id="u1",
+                tenant_id=TENANT,
+                projection="recent",
+                session_id=None,
+                graph_run_id=None,
+                older_than_days=None,
+                limit=100,
+                offset=0,
+            )
+        )
+        assert [record.record_id for record in records] == [record_id]
 
     def test_synapse_idempotent(self, store, run, tmp_path):
         """Re-import must NOT duplicate Synapse records."""
@@ -503,12 +918,24 @@ class TestEmbeddingValidation:
 async def postgres_target():
     if not BRAIN_TEST_DSN:
         pytest.skip("BRAIN_TEST_DSN not set — skipping SQLite-vec -> Postgres export test")
+    from psycopg import AsyncConnection, sql
+
     from contextunity.brain.storage.postgres import PostgresBrainStore
 
-    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN)
+    schema = f"portable_trace_{uuid.uuid4().hex}"
+    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN, schema=schema)
     await store.ensure_schema()
-    yield store
-    await store.close()
+    try:
+        yield store
+    finally:
+        await store.close()
+        admin = await AsyncConnection.connect(BRAIN_TEST_DSN, autocommit=True)
+        try:
+            _ = await admin.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+        finally:
+            await admin.close()
 
 
 class TestSqliteToPostgresExportShape:
@@ -522,16 +949,52 @@ class TestSqliteToPostgresExportShape:
             scope_path="export.shape.step1",
             content={"migrated": "from-sqlite"},
         )
+        conversation_key = "portable:sqlite-postgres:turn-1"
+        conversation_id = conversation_record_id(tenant_id=tenant, idempotency_key=conversation_key)
+        graph_run_id = uuid.uuid4()
+        await store.append_conversation_record(
+            record_id=conversation_id,
+            tenant_id=tenant,
+            user_id="user-a",
+            session_id="session-a",
+            role="assistant",
+            kind="conversation_note",
+            content="portable conversation",
+            content_hash=conversation_content_hash("portable conversation"),
+            source_hash=conversation_source_hash("portable:sqlite-postgres:source"),
+            graph_run_id=graph_run_id,
+            metadata_version=1,
+            idempotency_key=conversation_key,
+            metadata={"origin": "sqlite"},
+        )
 
         archive_dir = tmp_path / "sqlite-to-postgres"
         manifest = await BrainPortableArchiveWriter(archive_dir, vector_dim=8).export(
             store, tenant_ids=[tenant]
         )
         assert manifest.record_counts.get("blackboard", 0) == 1
+        assert manifest.record_counts.get("conversation", 0) == 1
 
         result = await import_portable_archive(postgres_target, archive_dir, dry_run=False)
         assert result["ok"] is True
         assert result["counts"].get("blackboard", 0) == 1
+        assert result["counts"].get("conversation", 0) == 1
+
+        conversations = await postgres_target.query_conversation_history(
+            tenant_id=tenant,
+            projection="recent",
+            user_id="user-a",
+            session_id=None,
+            graph_run_id=None,
+            older_than_days=None,
+            limit=10,
+            offset=0,
+        )
+        assert len(conversations) == 1
+        assert conversations[0].record_id == conversation_id
+        assert conversations[0].graph_run_id == graph_run_id
+        assert conversations[0].idempotency_key == conversation_key
+        assert conversations[0].metadata == {"origin": "sqlite"}
 
         # _import_blackboard() calls write_blackboard() (not a raw INSERT) for
         # any non-SQLite target, which mints a *new* UUID rather than

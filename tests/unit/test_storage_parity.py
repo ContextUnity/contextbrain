@@ -12,12 +12,17 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from hashlib import sha256
+from json import dumps as canonical_dumps
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from contextunity.core.types import JsonDict
 
 from contextunity.brain.core.exceptions import BrainValidationError
+from contextunity.brain.payloads.memory import LogTracePayload
 from contextunity.brain.storage.sqlite import SqliteBrainStore
 
 # ── Fixtures ──────────────────────────────────────────────────────
@@ -43,6 +48,70 @@ def run(sqlite_store):
 
 
 BRAIN_TEST_DSN = os.environ.get("BRAIN_TEST_DSN")
+TENANT = "test-tenant"
+OTHER_TENANT = "other-tenant"
+USER = "user-123"
+
+
+def _terminal_trace(*, tenant_id: str = TENANT, graph_run_id: str | None = None) -> JsonDict:
+    trace: JsonDict = {
+        "schema_version": "contextunity.execution-trace/v2",
+        "trace_id": str(uuid4()),
+        "graph_run_id": graph_run_id or str(uuid4()),
+        "tenant_id": tenant_id,
+        "agent_id": "router-agent",
+        "session_id": "session-a",
+        "user_id": "user-a",
+        "project_id": "project-a",
+        "graph_name": "graph-a",
+        "terminal_status": "succeeded",
+        "terminal_reason": "verified_success",
+        "duration_ms": 25,
+        "steps": [],
+        "usage": {"input_tokens": 0, "output_tokens": 0, "cost_micros": 0},
+        "prompt_evidence": [],
+        "provenance": ["router:terminal"],
+        "security_flags": [],
+        "control_evidence": {
+            "node_attempts": 0,
+            "failed_node_attempts": 0,
+            "model_attempts": 0,
+            "failed_model_attempts": 0,
+            "tool_attempts": 1,
+            "failed_tool_attempts": 0,
+            "graph_cycles": 0,
+            "contribution_refs": [],
+            "invalid_contribution_refs": [],
+            "fault_refs": [],
+            "effect_receipt_refs": ["44444444-4444-4444-8444-444444444444"],
+            "effect_receipts": [
+                {
+                    "receipt_id": "44444444-4444-4444-8444-444444444444",
+                    "operation_id": "55555555-5555-4555-8555-555555555555",
+                    "idempotency_key": "66666666-6666-4666-8666-666666666666",
+                    "effect_state": "committed",
+                    "replay_safe": False,
+                    "adapter_id": "federated:write",
+                    "capability_id": "federated:write",
+                    "effect_or_result_hash": "b" * 64,
+                }
+            ],
+        },
+    }
+    trace["digest"] = sha256(
+        canonical_dumps(trace, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return trace
+
+
+def _redigest(trace: JsonDict) -> None:
+    canonical = dict(trace)
+    canonical.pop("digest", None)
+    trace["digest"] = sha256(
+        canonical_dumps(
+            canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
 
 
 @pytest_asyncio.fixture
@@ -58,19 +127,24 @@ async def postgres_store():
     """
     if not BRAIN_TEST_DSN:
         pytest.skip("BRAIN_TEST_DSN not set — skipping Postgres parity test")
+    from psycopg import AsyncConnection, sql
+
     from contextunity.brain.storage.postgres import PostgresBrainStore
 
-    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN)
+    schema = f"trace_parity_{uuid4().hex}"
+    store = PostgresBrainStore(dsn=BRAIN_TEST_DSN, schema=schema)
     await store.ensure_schema()
     try:
         yield store
     finally:
         await store.close()
-
-
-TENANT = "test-tenant"
-OTHER_TENANT = "other-tenant"
-USER = "user-123"
+        admin = await AsyncConnection.connect(BRAIN_TEST_DSN, autocommit=True)
+        try:
+            _ = await admin.execute(
+                sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(schema))
+            )
+        finally:
+            await admin.close()
 
 
 # ── Blackboard ────────────────────────────────────────────────────
@@ -371,78 +445,173 @@ class TestTracesParity:
         traces = run(sqlite_store.get_traces(tenant_id=OTHER_TENANT))
         assert traces == []
 
+    def test_terminal_finalization_receipt_is_durable_and_idempotent(self, sqlite_store, run):
+        terminal = _terminal_trace()
+        created = run(sqlite_store.finalize_execution_trace(terminal_trace=terminal))
+        duplicate = run(sqlite_store.finalize_execution_trace(terminal_trace=terminal))
+
+        assert created == {
+            "trace_id": terminal["trace_id"],
+            "graph_run_id": terminal["graph_run_id"],
+            "digest": terminal["digest"],
+            "outcome": "created",
+        }
+        assert duplicate == {**created, "outcome": "duplicate"}
+        rows = run(sqlite_store.get_traces(tenant_id=TENANT))
+        assert len(rows) == 1
+        assert rows[0]["id"] == terminal["trace_id"]
+        assert rows[0]["trace_schema_version"] == "contextunity.execution-trace/v2"
+        assert rows[0]["control_evidence"] == terminal["control_evidence"]
+
+    def test_terminal_plan_lineage_is_preserved_in_durable_trace_metadata(self, sqlite_store, run):
+        terminal = _terminal_trace()
+        terminal.update(
+            {
+                "plan_id": "plan-2",
+                "plan_revision": 2,
+                "parent_plan_id": "plan-1",
+                "parent_plan_revision": 1,
+                "replan_ref": "44444444-4444-4444-8444-444444444444",
+            }
+        )
+        _redigest(terminal)
+
+        _ = run(sqlite_store.finalize_execution_trace(terminal_trace=terminal))
+
+        row = run(sqlite_store.get_traces(tenant_id=TENANT))[0]
+        assert row["metadata"] == {
+            "project_id": "project-a",
+            "registration_hash": None,
+            "plan_id": "plan-2",
+            "plan_revision": 2,
+            "parent_plan_id": "plan-1",
+            "parent_plan_revision": 1,
+            "replan_ref": "44444444-4444-4444-8444-444444444444",
+        }
+
+    def test_payload_validation_preserves_router_digest_input(self, sqlite_store, run):
+        terminal = _terminal_trace()
+        validated = LogTracePayload.model_validate({"terminal_trace": terminal})
+        assert validated.terminal_trace is not None
+        terminal_wire = validated.terminal_trace.model_dump(mode="json", exclude_unset=True)
+
+        receipt = run(sqlite_store.finalize_execution_trace(terminal_trace=terminal_wire))
+
+        assert receipt["digest"] == terminal["digest"]
+        assert "registration_hash" not in terminal_wire
+
+    def test_terminal_finalization_rejects_conflicting_digest_without_overwrite(
+        self, sqlite_store, run
+    ):
+        terminal = _terminal_trace()
+        _ = run(sqlite_store.finalize_execution_trace(terminal_trace=terminal))
+        conflicting = dict(terminal)
+        conflicting["agent_id"] = "different-agent"
+        _redigest(conflicting)
+
+        with pytest.raises(BrainValidationError, match="conflicting terminal trace"):
+            run(sqlite_store.finalize_execution_trace(terminal_trace=conflicting))
+        rows = run(sqlite_store.get_traces(tenant_id=TENANT))
+        assert rows[0]["agent_id"] == "router-agent"
+
+    def test_terminal_trace_is_tenant_scoped(self, sqlite_store, run):
+        terminal = _terminal_trace(tenant_id=TENANT)
+        _ = run(sqlite_store.finalize_execution_trace(terminal_trace=terminal))
+        assert run(sqlite_store.get_traces(tenant_id=OTHER_TENANT)) == []
+        assert run(sqlite_store.get_traces(tenant_id=TENANT, user_id="user-b")) == []
+        assert len(run(sqlite_store.get_traces(tenant_id=TENANT, user_id="user-a"))) == 1
+        assert len(run(sqlite_store.get_traces(tenant_id=TENANT, session_id="session-a"))) == 1
+
+    def test_execution_trace_retention_is_age_and_tenant_scoped(self, sqlite_store, run):
+        old = _terminal_trace(tenant_id=TENANT)
+        recent = _terminal_trace(tenant_id=TENANT)
+        other = _terminal_trace(tenant_id=OTHER_TENANT)
+        for terminal in (old, recent, other):
+            _ = run(sqlite_store.finalize_execution_trace(terminal_trace=terminal))
+        with sqlite_store.get_sqlite_connection() as db:
+            _ = db.execute(
+                "UPDATE execution_traces SET created_at = datetime('now', '-60 days') "
+                "WHERE id IN (?, ?)",
+                (old["trace_id"], other["trace_id"]),
+            )
+            db.commit()
+
+        assert (
+            run(sqlite_store.delete_old_execution_traces(tenant_id=TENANT, older_than_days=30)) == 1
+        )
+        remaining = run(sqlite_store.get_traces(tenant_id=TENANT))
+        assert [row["id"] for row in remaining] == [recent["trace_id"]]
+        assert len(run(sqlite_store.get_traces(tenant_id=OTHER_TENANT))) == 1
+
+
+@pytest.mark.skipif(
+    not BRAIN_TEST_DSN,
+    reason="BRAIN_TEST_DSN not set — skipping Postgres execution trace parity",
+)
+class TestExecutionTracePostgresParity:
+    """Run the terminal receipt/conflict/tenant contract on live Postgres."""
+
+    @pytest.mark.asyncio
+    async def test_terminal_finalization_matches_sqlite_contract(self, postgres_store) -> None:
+        tenant = f"trace-parity-{uuid4().hex}"
+        terminal = _terminal_trace(tenant_id=tenant)
+
+        created = await postgres_store.finalize_execution_trace(terminal_trace=terminal)
+        duplicate = await postgres_store.finalize_execution_trace(terminal_trace=terminal)
+
+        assert created == {
+            "trace_id": terminal["trace_id"],
+            "graph_run_id": terminal["graph_run_id"],
+            "digest": terminal["digest"],
+            "outcome": "created",
+        }
+        assert duplicate == {**created, "outcome": "duplicate"}
+        rows = await postgres_store.get_traces(tenant_id=tenant)
+        assert len(rows) == 1
+        assert rows[0]["id"] == terminal["trace_id"]
+        assert rows[0]["trace_schema_version"] == "contextunity.execution-trace/v2"
+        assert rows[0]["control_evidence"] == terminal["control_evidence"]
+        assert await postgres_store.get_traces(tenant_id=f"other-{tenant}") == []
+        assert await postgres_store.get_traces(tenant_id=tenant, user_id="user-b") == []
+        assert len(await postgres_store.get_traces(tenant_id=tenant, user_id="user-a")) == 1
+        assert len(await postgres_store.get_traces(tenant_id=tenant, session_id="session-a")) == 1
+
+        conflicting = dict(terminal)
+        conflicting["agent_id"] = "different-agent"
+        _redigest(conflicting)
+        with pytest.raises(BrainValidationError, match="conflicting terminal trace"):
+            await postgres_store.finalize_execution_trace(terminal_trace=conflicting)
+        unchanged = await postgres_store.get_traces(tenant_id=tenant)
+        assert unchanged[0]["agent_id"] == "router-agent"
+
+    @pytest.mark.asyncio
+    async def test_retention_preserves_recent_and_other_tenant_rows(self, postgres_store) -> None:
+        tenant = f"trace-retention-{uuid4().hex}"
+        other_tenant = f"trace-retention-other-{uuid4().hex}"
+        old = _terminal_trace(tenant_id=tenant)
+        recent = _terminal_trace(tenant_id=tenant)
+        other = _terminal_trace(tenant_id=other_tenant)
+        for terminal in (old, recent, other):
+            _ = await postgres_store.finalize_execution_trace(terminal_trace=terminal)
+        async with await postgres_store.tenant_connection("*", user_id="*") as conn:
+            _ = await conn.execute(
+                """
+                UPDATE execution_traces SET created_at = now() - interval '60 days'
+                WHERE id = ANY(%(ids)s)
+                """,
+                {"ids": [old["trace_id"], other["trace_id"]]},
+            )
+
+        assert (
+            await postgres_store.delete_old_execution_traces(tenant_id=tenant, older_than_days=30)
+            == 1
+        )
+        remaining = await postgres_store.get_traces(tenant_id=tenant)
+        assert [row["id"] for row in remaining] == [recent["trace_id"]]
+        assert len(await postgres_store.get_traces(tenant_id=other_tenant)) == 1
+
 
 # ── Taxonomy ──────────────────────────────────────────────────────
-
-
-class TestTaxonomyParity:
-    """Taxonomy: upsert → get with domain filtering."""
-
-    def test_upsert_and_get(self, sqlite_store, run):
-        run(
-            sqlite_store.upsert_taxonomy(
-                tenant_id=TENANT,
-                domain="product",
-                name="Outdoor Gear",
-                path="product.outdoor",
-                keywords=["camping", "hiking"],
-                metadata={"icon": "🏕️"},
-            )
-        )
-
-        items = run(sqlite_store.get_all_taxonomy(tenant_id=TENANT))
-        assert len(items) == 1
-        assert items[0]["name"] == "Outdoor Gear"
-        assert items[0]["keywords"] == ["camping", "hiking"]
-
-    def test_domain_filter(self, sqlite_store, run):
-        run(
-            sqlite_store.upsert_taxonomy(
-                tenant_id=TENANT,
-                domain="product",
-                name="A",
-                path="product.a",
-                keywords=[],
-            )
-        )
-        run(
-            sqlite_store.upsert_taxonomy(
-                tenant_id=TENANT,
-                domain="category",
-                name="B",
-                path="category.b",
-                keywords=[],
-            )
-        )
-
-        items = run(sqlite_store.get_all_taxonomy(tenant_id=TENANT, domain="product"))
-        assert len(items) == 1
-        assert items[0]["domain"] == "product"
-
-    def test_upsert_updates(self, sqlite_store, run):
-        run(
-            sqlite_store.upsert_taxonomy(
-                tenant_id=TENANT,
-                domain="d",
-                name="V1",
-                path="d.x",
-                keywords=["old"],
-            )
-        )
-        run(
-            sqlite_store.upsert_taxonomy(
-                tenant_id=TENANT,
-                domain="d",
-                name="V2",
-                path="d.x",
-                keywords=["new"],
-            )
-        )
-
-        items = run(sqlite_store.get_all_taxonomy(tenant_id=TENANT, domain="d"))
-        assert len(items) == 1
-        assert items[0]["name"] == "V2"
-        assert items[0]["keywords"] == ["new"]
 
 
 # ── Graph ─────────────────────────────────────────────────────────
@@ -538,8 +707,8 @@ class TestGraphParity:
 
 # ── Search (insert -> search through canonical `cells`) ────────────
 #
-# ``hybrid_search`` is the storage method behind the ``Search`` RPC / SDK
-# ``BrainClient.search()`` — the primary way anything reads content back out
+# ``hybrid_search`` is the storage method behind the ``SearchCells`` RPC / SDK
+# ``BrainClient.search_cells()`` — the primary way anything reads content back out
 # of ``cells`` — yet had zero test coverage anywhere in the suite before this.
 # ``TestGraphParity`` above only exercises structural graph traversal
 # (``graph_search``), not content search.
@@ -632,6 +801,94 @@ class TestSearchParity:
 
         assert [result.node.id for result in results] == ["cell-scope-good"]
 
+    def test_search_enforces_source_and_private_visibility_filters(self, sqlite_store, run):
+        run(
+            sqlite_store.upsert_cell(
+                tenant_id=TENANT,
+                user_id=None,
+                cell_kind="chunk",
+                content="canonical visibility marker",
+                source_type="documentation",
+                visibility="tenant",
+            )
+        )
+        run(
+            sqlite_store.upsert_cell(
+                tenant_id=TENANT,
+                user_id="owner-a",
+                cell_kind="chunk",
+                content="canonical visibility marker",
+                source_type="test",
+                visibility="private",
+            )
+        )
+
+        public_results = run(
+            sqlite_store.hybrid_search(
+                query_text="canonical visibility marker",
+                query_vec=[],
+                tenant_id=TENANT,
+                source_types=["documentation"],
+            )
+        )
+        private_without_owner = run(
+            sqlite_store.hybrid_search(
+                query_text="canonical visibility marker",
+                query_vec=[],
+                tenant_id=TENANT,
+                source_types=["test"],
+            )
+        )
+        private_with_owner = run(
+            sqlite_store.hybrid_search(
+                query_text="canonical visibility marker",
+                query_vec=[],
+                tenant_id=TENANT,
+                user_id="owner-a",
+                source_types=["test"],
+            )
+        )
+
+        assert len(public_results) == 1
+        assert public_results[0].node.source_type == "documentation"
+        assert private_without_owner == []
+        assert len(private_with_owner) == 1
+        assert private_with_owner[0].node.visibility == "private"
+
+    def test_search_applies_metadata_filter_before_limit(self, sqlite_store, run):
+        for index in range(5):
+            run(
+                sqlite_store.upsert_cell(
+                    tenant_id=TENANT,
+                    cell_kind="chunk",
+                    content="shared metadata ranking marker",
+                    source_type="documentation",
+                    metadata={"service": "other", "doc_type": "documentation"},
+                )
+            )
+        wanted = run(
+            sqlite_store.upsert_cell(
+                tenant_id=TENANT,
+                cell_kind="chunk",
+                content="shared metadata ranking marker",
+                source_type="documentation",
+                metadata={"service": "contextunity.docs", "doc_type": "documentation"},
+            )
+        )
+
+        results = run(
+            sqlite_store.hybrid_search(
+                query_text="shared metadata ranking marker",
+                query_vec=[],
+                tenant_id=TENANT,
+                source_types=["documentation"],
+                metadata_filter={"service": "contextunity.docs"},
+                limit=1,
+            )
+        )
+
+        assert [result.node.id for result in results] == [wanted["id"]]
+
     def test_search_ignores_non_chunk_nodes(self, sqlite_store, run):
         """Only ``cell_kind='chunk'`` cells are text-searchable — ``concept``
         nodes (used for graph-structure-only entries, e.g. TestGraphParity's
@@ -692,6 +949,50 @@ class TestSearchPostgresParity:
         assert any("canonical cells search proof" in r.node.content for r in results)
 
     @pytest.mark.asyncio
+    async def test_source_and_private_visibility_filters_match_sqlite(self, postgres_store):
+        marker = f"postgres visibility {time.time_ns()}"
+        await postgres_store.upsert_cell(
+            tenant_id=TENANT,
+            user_id=None,
+            cell_kind="chunk",
+            content=marker,
+            source_type="documentation",
+            visibility="tenant",
+        )
+        await postgres_store.upsert_cell(
+            tenant_id=TENANT,
+            user_id="owner-a",
+            cell_kind="chunk",
+            content=marker,
+            source_type="test",
+            visibility="private",
+        )
+
+        public_results = await postgres_store.hybrid_search(
+            query_text=marker,
+            query_vec=[0.0] * 768,
+            tenant_id=TENANT,
+            source_types=["documentation"],
+        )
+        private_without_owner = await postgres_store.hybrid_search(
+            query_text=marker,
+            query_vec=[0.0] * 768,
+            tenant_id=TENANT,
+            source_types=["test"],
+        )
+        private_with_owner = await postgres_store.hybrid_search(
+            query_text=marker,
+            query_vec=[0.0] * 768,
+            tenant_id=TENANT,
+            user_id="owner-a",
+            source_types=["test"],
+        )
+
+        assert any(result.node.source_type == "documentation" for result in public_results)
+        assert private_without_owner == []
+        assert any(result.node.visibility == "private" for result in private_with_owner)
+
+    @pytest.mark.asyncio
     async def test_tenant_required_for_upsert(self, postgres_store):
         """Same typed-error shape as SQLite's TestGraphParity.test_tenant_required_for_upsert
         — parity coverage must include failure paths, not just successful ones."""
@@ -705,101 +1006,7 @@ class TestSearchPostgresParity:
             )
 
 
-# ── Episodes ──────────────────────────────────────────────────────
-
-
-class TestEpisodesParity:
-    """Episodes: add → get_recent → count → delete_old."""
-
-    def test_add_and_get_recent(self, sqlite_store, run):
-        run(
-            sqlite_store.add_episode(
-                id="ep-1",
-                user_id=USER,
-                content="Hello world",
-                tenant_id=TENANT,
-                metadata={"turn": 1},
-            )
-        )
-
-        episodes = run(
-            sqlite_store.get_recent_episodes(
-                user_id=USER,
-                tenant_id=TENANT,
-                limit=5,
-            )
-        )
-        assert len(episodes) == 1
-        assert episodes[0]["id"] == "ep-1"
-        assert episodes[0]["content"] == "Hello world"
-        assert episodes[0]["metadata"] == {"turn": 1}
-
-    def test_count_episodes(self, sqlite_store, run):
-        for i in range(3):
-            run(
-                sqlite_store.add_episode(
-                    id=f"ep-{i}",
-                    user_id=USER,
-                    content=f"Episode {i}",
-                    tenant_id=TENANT,
-                )
-            )
-
-        stats = run(sqlite_store.count_episodes(tenant_id=TENANT))
-        assert stats["total"] == 3
-        assert stats["oldest"] is not None
-        assert stats["newest"] is not None
-
-    def test_delete_by_ids(self, sqlite_store, run):
-        for i in range(3):
-            run(
-                sqlite_store.add_episode(
-                    id=f"del-{i}",
-                    user_id=USER,
-                    content=f"Del {i}",
-                    tenant_id=TENANT,
-                )
-            )
-
-        deleted = run(
-            sqlite_store.delete_old_episodes(
-                tenant_id=TENANT,
-                episode_ids=["del-0", "del-1"],
-            )
-        )
-        assert deleted == 2
-
-        stats = run(sqlite_store.count_episodes(tenant_id=TENANT))
-        assert stats["total"] == 1
-
-    def test_tenant_required(self, sqlite_store, run):
-        with pytest.raises(BrainValidationError, match="tenant_id"):
-            run(
-                sqlite_store.add_episode(
-                    id="x",
-                    user_id=USER,
-                    content="x",
-                    tenant_id="",
-                )
-            )
-
-
-class TestEpisodesPostgresParity:
-    """Same typed-error shape against live Postgres — failure-path parity,
-    not just the successful-path proof TestEpisodesParity gives for SQLite."""
-
-    @pytest.mark.asyncio
-    async def test_tenant_required(self, postgres_store):
-        with pytest.raises(BrainValidationError, match="tenant_id"):
-            await postgres_store.add_episode(
-                id="pg-episode-tenant-check",
-                user_id=USER,
-                content="x",
-                tenant_id="",
-            )
-
-
-# ── Synapses ─────────────────────────────────────────────────────
+# ── Synapses# ── Synapses ─────────────────────────────────────────────────────
 
 
 class TestSynapsesParity:

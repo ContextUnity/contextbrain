@@ -75,7 +75,3 @@ log_level: INFO
 # synapses:
 #   enabled: false
 #   decay_enabled: false
-
-# otel_enabled: false
-# otel_endpoint: http://localhost:4317
-# langfuse_enabled: false

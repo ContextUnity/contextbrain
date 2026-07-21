@@ -38,6 +38,7 @@ from ..helpers import (
     validate_token_for_read,
     validate_token_for_write,
 )
+from ..read_bulkhead import get_brain_read_bulkhead
 
 logger = get_contextunit_logger(__name__)
 
@@ -183,7 +184,7 @@ class SynapseHandlersMixin(BrainHandlerBase):
         token = extract_token_from_context(context)
         # Must match BrainPermissionInterceptor's RPC_PERMISSION_MAP entry —
         # Synapse is a memory surface, so the memory:* family is canonical,
-        # same as Blackboard/episodes.
+        # same as Blackboard/Conversation History.
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
         _require_synapses_enabled()
         raw_payload = unit.payload if is_json_dict(unit.payload) else {}
@@ -273,16 +274,17 @@ class SynapseHandlersMixin(BrainHandlerBase):
             raise
         tenant_id = resolve_tenant_id(token, params.tenant_id)
 
-        rows = await self.storage.query_synapses(
-            tenant_id=tenant_id,
-            action_type=params.action_type,
-            agent_id=params.agent_id,
-            node_role=params.node_role,
-            status=params.status,
-            scope_path=params.scope_path,
-            min_q=params.min_q,
-            limit=params.limit,
-        )
+        async with get_brain_read_bulkhead().acquire(tenant_id):
+            rows = await self.storage.query_synapses(
+                tenant_id=tenant_id,
+                action_type=params.action_type,
+                agent_id=params.agent_id,
+                node_role=params.node_role,
+                status=params.status,
+                scope_path=params.scope_path,
+                min_q=params.min_q,
+                limit=params.limit,
+            )
 
         for row in rows:
             yield make_response(

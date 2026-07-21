@@ -327,14 +327,14 @@ class SynapsesMixin(SqliteConnectionMixin):
         }
 
     async def decay_synapses(self, *, tenant_id: str, factor: float = 0.99) -> int:
-        """Phase 3/5-ready Q-decay hook — raises while disabled (default).
+        """Phase 5 Consolidation Cycle Q-decay hook — disabled by default.
 
         Raises:
             SynapseDecayDisabledError: ``brain.yml: synapses.decay_enabled`` is ``False``.
         """
         if not get_core_config().synapses.decay_enabled:
             raise SynapseDecayDisabledError(tenant_id=tenant_id)
-        raise NotImplementedError("Synapse decay ships with the Phase 3/5 Dream Cycle")
+        raise NotImplementedError("Synapse decay ships with the Phase 5 Consolidation Cycle")
 
 
 __all__ = ["SynapsesMixin"]

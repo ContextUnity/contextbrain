@@ -11,7 +11,6 @@ from contextunity.brain.service.nlp import NLPEnricher
 from .keyphrases import KeyphraseExtractor
 from .keywords import KeywordExtractor
 from .ner import Entity, EntityExtractor
-from .taxonomy_manager import TaxonomyManager
 
 logger = get_contextunit_logger(__name__)
 
@@ -27,10 +26,9 @@ class IntelligenceHub:
     _nlp_enricher: NLPEnricher | None
     _legacy_ner: EntityExtractor
     _legacy_keyphrases: KeyphraseExtractor
-    taxonomy: TaxonomyManager
     _legacy_keywords: KeywordExtractor
 
-    def __init__(self, project_path: str | None = None) -> None:
+    def __init__(self) -> None:
         self._nlp_enricher = None
         try:
             self._nlp_enricher = NLPEnricher.get_instance()
@@ -47,12 +45,7 @@ class IntelligenceHub:
         self._legacy_ner = EntityExtractor()
         self._legacy_keyphrases = KeyphraseExtractor()
 
-        if not project_path:
-            from contextunity.brain.core import get_core_config
-
-            project_path = get_core_config().project_path
-        self.taxonomy = TaxonomyManager(project_path or "")
-        self._legacy_keywords = KeywordExtractor(taxonomy=self.taxonomy.categories)
+        self._legacy_keywords = KeywordExtractor()
 
     async def enrich_content(self, text: str) -> JsonDict:
         if self._nlp_enricher:

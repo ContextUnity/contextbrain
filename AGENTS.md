@@ -1,6 +1,6 @@
 # ContextBrain — Agent Instructions
 
-Knowledge layer: vector storage, knowledge graphs, taxonomy hierarchies, and episodic agent memory.
+Knowledge layer: vector storage, knowledge graphs, BrainCells, and typed Conversation History.
 
 **Types & payloads:** [docs/architecture/type-boundaries.md](../../docs/architecture/type-boundaries.md)
 **Code quality:** [docs/architecture/code-quality.md](../../docs/architecture/code-quality.md)

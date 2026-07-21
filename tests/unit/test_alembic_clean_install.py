@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from contextunity.brain.storage.postgres.schema import build_column_backfill_sql
+
 _VERSIONS = Path(__file__).resolve().parents[2] / "migrations" / "versions"
 
 
@@ -39,6 +41,20 @@ class TestAlembicCleanInstallGuards:
     def test_0011_upgrade_sql_uses_guard(self):
         source = (_VERSIONS / "0011_drop_user_facts_guard.py").read_text()
         assert "to_regclass('user_facts') IS NULL" in source
+
+    def test_postgres_security_backfills_are_separate_statements(self):
+        statements = build_column_backfill_sql()
+        assert any("outcome_synapse_effects_synapse_scope_fk" in item for item in statements)
+        assert any("execution_traces_tenant_run_uq" in item for item in statements)
+        assert not any(
+            "outcome_synapse_effects_synapse_scope_fk" in item
+            and "execution_traces_tenant_run_uq" in item
+            for item in statements
+        )
+        assert not any(
+            "execution_traces_tenant_run_uq" in item and "DROP COLUMN IF EXISTS event_id" in item
+            for item in statements
+        )
 
     def test_0012_migrates_user_fact_cell_kind(self):
         source = (_VERSIONS / "0012_remove_user_fact_cell_kind.py").read_text()

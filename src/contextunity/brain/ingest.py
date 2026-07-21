@@ -35,24 +35,24 @@ class IngestionService:
     intel: IntelligenceHub
     graph: KnowledgeGraphOrchestrator
 
-    def __init__(self, storage: BrainStorageProtocol, project_path: str | None = None):
+    def __init__(self, storage: BrainStorageProtocol):
         """Initialize the modular ingestion pipeline.
 
         Args:
             storage (BrainStorageProtocol): The storage parameter.
-            project_path (str | None): The project path parameter.
         """
         self.storage = storage
-        self.intel = IntelligenceHub(project_path)
+        self.intel = IntelligenceHub()
         self.graph = KnowledgeGraphOrchestrator()
 
     async def ingest_document(
         self,
         content: str | bytes,
         metadata: JsonDict,
+        *,
+        tenant_id: str,
         modality: str = "text",
         embedder: TextEmbedder | None = None,
-        tenant_id: str = "default",
         user_id: str | None = None,
         source_type: str = "document",
     ) -> str:
@@ -99,8 +99,9 @@ class IngestionService:
         self,
         content: str,
         metadata: JsonDict,
+        *,
+        tenant_id: str,
         embedder: TextEmbedder | None = None,
-        tenant_id: str = "default",
         user_id: str | None = None,
         source_type: str = "document",
     ) -> str:
@@ -197,43 +198,4 @@ class IngestionService:
             }
         )
 
-        # 1. Resolve Category (via Taxonomy Manager inside Intel)
-        # Skip taxonomy matching for non-product content (docs, tool definitions, etc.)
-        skip_types = {"procedural", "documentation"}
-        source_type = as_str(enriched.get("source_type"))
-        if not enriched.get("category") and source_type not in skip_types:
-            matched_cat = self.intel.taxonomy.match_category(content)
-            if matched_cat:
-                enriched["category"] = matched_cat
-            else:
-                await self._persist_pending("category", content, metadata)
-
-        # 2. Resolve Size
-        raw_size = enriched.get("raw_size")
-        if raw_size is not None:
-            raw_size_text = as_str(raw_size)
-            category_context = as_str(enriched.get("category", ""))
-            resolved_size = self.intel.taxonomy.resolve_size(
-                raw_size_text, category_context=category_context
-            )
-            enriched["size"] = resolved_size["resolved"]
-            enriched["size_standard"] = resolved_size["standard"]
-            if resolved_size["standard"] == "unknown":
-                await self._persist_pending("size", raw_size_text, enriched)
-
         return enriched
-
-    async def _persist_pending(self, item_type: str, raw_value: str, _context: JsonDict) -> None:
-        """Save unrecognized item to database for Gardener UI.
-
-        Args:
-            item_type (str): The item type parameter.
-            raw_value (str): The raw value parameter.
-            _context (JsonDict): Request context payload (reserved for future DB insert).
-        """
-        # This part requires a DB connection.
-        # For now, we logging. In a real system, we'd use self.vector_store.session or similar.
-        logger.warning(
-            f"GARDENER ALERT: Unrecognized {item_type}: '{raw_value}'. Added to review queue."
-        )
-        # Placeholder for DB INSERT into gardener_pending

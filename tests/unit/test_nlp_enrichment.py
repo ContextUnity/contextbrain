@@ -6,8 +6,11 @@ Extractor/classifier classes require ML models — integration scope.
 
 from __future__ import annotations
 
+from inspect import signature
+
 import pytest
 
+from contextunity.brain.modules.intelligence.ner import EntityExtractor
 from contextunity.brain.service.nlp import (
     EnrichmentResult,
     Entity,
@@ -118,3 +121,13 @@ class TestCosineSimilarity:
 
     def test_both_zero_returns_zero(self):
         assert ZeroShotClassifier._cosine_similarity([0.0], [0.0]) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_legacy_brain_ner_never_accepts_a_model_provider() -> None:
+    """Brain enrichment stays local; Router owns every model-provider call."""
+    assert "llm_provider" not in signature(EntityExtractor.extract).parameters
+
+    entities = await EntityExtractor(default_mode="gateway").extract("SKU-ABC123")
+
+    assert [(entity.text, entity.label) for entity in entities] == [("SKU-ABC123", "SKU")]

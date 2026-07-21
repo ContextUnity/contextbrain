@@ -1,21 +1,24 @@
-"""Memory handlers - episodes and facts."""
+"""Brain-owned Conversation History and retention handlers."""
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import AsyncIterator
 
 import grpc
 from contextunity.core import contextunit_pb2, get_contextunit_logger
 from contextunity.core.grpc_errors import grpc_error_handler, grpc_stream_error_handler
 from contextunity.core.permissions import Permissions
-from contextunity.core.types import is_json_dict
+from contextunity.core.sdk.conversation import conversation_retention_evidence_hash
+from contextunity.core.tokens import ContextToken
 
+from ...core.exceptions import BrainValidationError
 from ...payloads import (
-    AddEpisodePayload,
-    GetEpisodeStatsPayload,
-    GetOldEpisodesPayload,
-    GetRecentEpisodesPayload,
-    RetentionCleanupPayload,
+    AppendConversationRecordPayload,
+    ApplyConversationRetentionPayload,
+    ApplyExecutionTraceRetentionPayload,
+    GetConversationHistoryStatsPayload,
+    QueryConversationHistoryPayload,
 )
 from ..handler_base import BrainHandlerBase
 from ..helpers import (
@@ -28,178 +31,213 @@ from ..helpers import (
     validate_token_for_write,
     validate_user_access,
 )
+from ..read_bulkhead import get_brain_read_bulkhead
 
 logger = get_contextunit_logger(__name__)
 
 
+def _conversation_read_permission(token: ContextToken | None) -> str:
+    """Select the narrowest shipped read permission for the verified caller."""
+    if isinstance(token, ContextToken) and token.has_permission(Permissions.MEMORY_READ):
+        return Permissions.MEMORY_READ
+    return Permissions.ADMIN_READ
+
+
 class MemoryHandlersMixin(BrainHandlerBase):
-    """Mixin for episodic and entity memory handlers."""
+    """Canonical Conversation History handlers."""
 
     @grpc_error_handler
-    async def AddEpisode(
+    async def AppendConversationRecord(
         self,
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> contextunit_pb2.ContextUnit:
-        """Persist a conversation turn into Episodic memory."""
+        """Append one immutable tenant/user-scoped conversation record."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
-        params = AddEpisodePayload.model_validate(unit.payload or {})
+        params = AppendConversationRecordPayload.model_validate(unit.payload or {})
         validate_tenant_write_policy(
             token,
             params.tenant_id,
             context,
             content=params.content,
-            source_type="memory",
-            record_kind="episode",
+            source_type="conversation_history",
+            record_kind=params.kind,
         )
         validate_user_access(token, params.user_id, context)
-
-        # Ensure trace_id is stored in metadata for traceability
-        metadata = params.metadata.copy() if params.metadata else {}
-        if unit.trace_id:
-            metadata["trace_id"] = str(unit.trace_id)
-
-        await self.storage.add_episode(
-            id=str(unit.unit_id),
-            user_id=params.user_id or "*",
+        receipt = await self.storage.append_conversation_record(
+            record_id=params.record_id,
             tenant_id=params.tenant_id,
+            user_id=params.user_id,
             session_id=params.session_id,
+            role=params.role,
+            kind=params.kind,
             content=params.content,
-            metadata=metadata,
+            content_hash=params.content_hash,
+            source_hash=params.source_hash,
+            graph_run_id=params.graph_run_id,
+            metadata_version=params.metadata_version,
+            idempotency_key=params.idempotency_key,
+            metadata=params.metadata,
         )
         return make_response(
-            payload={"success": True},
+            payload={
+                "record_id": str(receipt.record_id),
+                "outcome": receipt.outcome,
+                "content_hash": receipt.content_hash,
+                "source_hash": receipt.source_hash,
+            },
             parent_unit=unit,
         )
 
     @grpc_stream_error_handler
-    async def GetRecentEpisodes(
+    async def QueryConversationHistory(
         self,
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
-        """Get recent episodes for a user."""
+        """Return one bounded canonical history projection."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
-        validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
-        params = GetRecentEpisodesPayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
-        validate_user_access(token, params.user_id, context)
-
-        rows = await self.storage.get_recent_episodes(
-            user_id=params.user_id,
-            tenant_id=params.tenant_id,
-            limit=params.limit,
+        validate_token_for_read(
+            unit,
+            token,
+            context,
+            required_permission=_conversation_read_permission(token),
         )
-
-        for row in rows:
-            yield make_response(
-                payload={
-                    "id": str(row.get("id", "")),
-                    "content": row.get("content", ""),
-                    "metadata": (
-                        {k: str(v) for k, v in meta.items()}
-                        if is_json_dict(meta := row.get("metadata"))
-                        else {}
-                    ),
-                    "created_at": str(row.get("created_at", "")),
-                },
-                parent_unit=unit,
+        params = QueryConversationHistoryPayload.model_validate(unit.payload or {})
+        validate_tenant_access(token, params.tenant_id, context)
+        if not (isinstance(token, ContextToken) and token.has_permission(Permissions.ADMIN_READ)):
+            validate_user_access(
+                token,
+                params.user_id if params.projection == "recent" else None,
+                context,
             )
-
-    @grpc_stream_error_handler
-    async def GetOldEpisodes(
-        self,
-        request: contextunit_pb2.ContextUnit,
-        context: grpc.ServicerContext,
-    ) -> AsyncIterator[contextunit_pb2.ContextUnit]:
-        """Get episodes older than N days for retention and synthesis."""
-        unit = parse_unit(request)
-        token = extract_token_from_context(context)
-        validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
-        params = GetOldEpisodesPayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
-
-        rows = await self.storage.get_old_episodes(
-            tenant_id=params.tenant_id,
-            older_than_days=params.older_than_days,
-            limit=params.limit,
-        )
-
-        for row in rows:
-            raw_metadata = row.get("metadata")
-            metadata = dict(raw_metadata) if is_json_dict(raw_metadata) else {}
+        async with get_brain_read_bulkhead().acquire(params.tenant_id):
+            records = await self.storage.query_conversation_history(
+                tenant_id=params.tenant_id,
+                projection=params.projection,
+                user_id=params.user_id,
+                session_id=params.session_id,
+                graph_run_id=params.graph_run_id,
+                older_than_days=params.older_than_days,
+                limit=params.limit,
+                offset=params.offset,
+            )
+        for record in records:
             yield make_response(
                 payload={
-                    "id": str(row.get("id", "")),
-                    "user_id": str(row.get("user_id", "")),
-                    "content": row.get("content", ""),
-                    "metadata": metadata,
-                    "created_at": str(row.get("created_at", "")),
-                    "source_hash": str(row.get("source_hash") or metadata.get("source_hash") or ""),
-                    "graph_run_id": str(
-                        row.get("graph_run_id") or metadata.get("graph_run_id") or ""
+                    "record_id": str(record.record_id),
+                    "tenant_id": record.tenant_id,
+                    "user_id": record.user_id,
+                    "session_id": record.session_id,
+                    "role": record.role,
+                    "kind": record.kind,
+                    "content": record.content,
+                    "content_hash": record.content_hash,
+                    "source_hash": record.source_hash,
+                    "graph_run_id": (
+                        str(record.graph_run_id) if record.graph_run_id is not None else None
                     ),
+                    "created_at": record.created_at.isoformat(),
+                    "metadata_version": record.metadata_version,
+                    "idempotency_key": record.idempotency_key,
+                    "metadata": record.metadata,
                 },
                 parent_unit=unit,
             )
 
     @grpc_error_handler
-    async def RetentionCleanup(
+    async def GetConversationHistoryStats(
         self,
         request: contextunit_pb2.ContextUnit,
         context: grpc.ServicerContext,
     ) -> contextunit_pb2.ContextUnit:
-        """Delete old episodic events (for retention policy).
+        """Return content-free tenant statistics."""
+        unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_read(
+            unit,
+            token,
+            context,
+            required_permission=_conversation_read_permission(token),
+        )
+        params = GetConversationHistoryStatsPayload.model_validate(unit.payload or {})
+        validate_tenant_access(token, params.tenant_id, context)
+        stats = await self.storage.get_conversation_history_stats(tenant_id=params.tenant_id)
+        return make_response(
+            payload={
+                "tenant_id": stats.tenant_id,
+                "total": stats.total,
+                "oldest": stats.oldest.isoformat() if stats.oldest is not None else None,
+                "newest": stats.newest.isoformat() if stats.newest is not None else None,
+            },
+            parent_unit=unit,
+        )
 
-        Requires MEMORY_WRITE permission.
-        """
+    @grpc_error_handler
+    async def ApplyConversationRetention(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
+        """Apply explicit owner retention with immutable evidence fields."""
         unit = parse_unit(request)
         token = extract_token_from_context(context)
         validate_token_for_write(unit, token, context, required_permission=Permissions.MEMORY_WRITE)
-        params = RetentionCleanupPayload.model_validate(unit.payload or {})
+        params = ApplyConversationRetentionPayload.model_validate(unit.payload or {})
         validate_tenant_access(token, params.tenant_id, context)
-        validate_user_access(token, None, context)  # Must be an admin/system token
+        validate_user_access(token, None, context)
+        expected_evidence = conversation_retention_evidence_hash(
+            tenant_id=params.tenant_id,
+            cutoff=params.cutoff,
+            record_ids=params.record_ids,
+        )
+        if not hmac.compare_digest(params.hold_evidence_hash, expected_evidence):
+            raise BrainValidationError("conversation retention evidence is stale or mismatched")
+        receipt = await self.storage.apply_conversation_retention(
+            tenant_id=params.tenant_id,
+            record_ids=params.record_ids,
+            cutoff=params.cutoff,
+            policy_version=params.policy_version,
+            hold_evidence_hash=params.hold_evidence_hash,
+        )
+        return make_response(
+            payload={
+                "tenant_id": receipt.tenant_id,
+                "deleted_count": receipt.deleted_count,
+                "policy_version": receipt.policy_version,
+                "hold_evidence_hash": receipt.hold_evidence_hash,
+            },
+            parent_unit=unit,
+        )
 
-        deleted = await self.storage.delete_old_episodes(
+    @grpc_error_handler
+    async def ApplyExecutionTraceRetention(
+        self,
+        request: contextunit_pb2.ContextUnit,
+        context: grpc.ServicerContext,
+    ) -> contextunit_pb2.ContextUnit:
+        """Apply terminal Execution Trace retention without conversation selectors."""
+        unit = parse_unit(request)
+        token = extract_token_from_context(context)
+        validate_token_for_write(unit, token, context, required_permission=Permissions.TRACE_WRITE)
+        params = ApplyExecutionTraceRetentionPayload.model_validate(unit.payload or {})
+        validate_tenant_access(token, params.tenant_id, context)
+        validate_user_access(token, None, context)
+        deleted = await self.storage.delete_old_execution_traces(
             tenant_id=params.tenant_id,
             older_than_days=params.older_than_days,
-            episode_ids=params.episode_ids,
         )
         logger.info(
-            "RetentionCleanup: deleted %d episodes (tenant=%s, days=%d)",
+            "ApplyExecutionTraceRetention: deleted %d traces (tenant=%s, days=%d)",
             deleted,
             params.tenant_id,
             params.older_than_days,
         )
         return make_response(
-            payload={"deleted_count": deleted, "tenant_id": params.tenant_id},
-            parent_unit=unit,
-        )
-
-    @grpc_error_handler
-    async def GetEpisodeStats(
-        self,
-        request: contextunit_pb2.ContextUnit,
-        context: grpc.ServicerContext,
-    ) -> contextunit_pb2.ContextUnit:
-        """Get episode count and date range for a tenant."""
-        unit = parse_unit(request)
-        token = extract_token_from_context(context)
-        validate_token_for_read(unit, token, context, required_permission=Permissions.MEMORY_READ)
-        params = GetEpisodeStatsPayload.model_validate(unit.payload or {})
-        validate_tenant_access(token, params.tenant_id, context)
-
-        stats = await self.storage.count_episodes(tenant_id=params.tenant_id)
-        return make_response(
-            payload={
-                "total": stats.get("total", 0),
-                "oldest": str(stats.get("oldest", "")),
-                "newest": str(stats.get("newest", "")),
-                "tenant_id": params.tenant_id,
-            },
+            payload={"tenant_id": params.tenant_id, "deleted_count": deleted},
             parent_unit=unit,
         )
 

@@ -24,11 +24,14 @@ class GraphNode(BaseModel):
     cell_kind: str = "concept"
     source_type: str | None = None
     source_id: str | None = None
+    source_ref: str | None = None
     scope_path: str | None = None
     metadata: JsonDict = Field(default_factory=dict)
     title: str | None = None
     keywords_text: str | None = None
     content_hash: str | None = None
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    visibility: str = "tenant"
     tenant_id: str | None = None
     user_id: str | None = None
 
@@ -114,6 +117,7 @@ class BrainStorageInterface(ABC):
         scope: ScopePath | None = None,
         source_types: list[str] | None = None,
         user_id: str | None = None,
+        metadata_filter: dict[str, str] | None = None,
         fusion: str = "weighted",
         rrf_k: int = 60,
         vector_weight: float = 0.8,

@@ -18,7 +18,7 @@ from .embeddings import get_embedder
 logger = get_contextunit_logger(__name__)
 
 
-def _validate_local_vector_support(
+def validate_local_vector_support(
     *, enrichment_enabled: bool, provider: str, has_sqlite_vec: bool
 ) -> None:
     """Fail before local startup when enabled enrichment lacks its vector runtime."""
@@ -96,8 +96,11 @@ async def create_local_brain() -> LocalBrainServer:
 
     brain_config = get_brain_config()
 
-    storage = SqliteBrainStore(vector_dim=brain_config.embeddings.dimension)
-    _validate_local_vector_support(
+    storage = SqliteBrainStore(
+        db_path=brain_config.sqlite_path,
+        vector_dim=brain_config.embeddings.dimension,
+    )
+    validate_local_vector_support(
         enrichment_enabled=brain_config.embedding_enrichment.enabled,
         provider=brain_config.embeddings.provider,
         has_sqlite_vec=storage.has_sqlite_vec(),
@@ -117,29 +120,10 @@ async def create_local_brain() -> LocalBrainServer:
         interceptors=[BrainPermissionInterceptor(shield_url=shield_url, config=brain_config)]
     )
     brain_pb2_grpc.add_BrainServiceServicer_to_server(brain, server)
-    _ = server.add_insecure_port(f"[::]:{brain_config.port}")
+    _ = server.add_insecure_port(f"127.0.0.1:{brain_config.port}")
 
     return LocalBrainServer(
         grpc_server=server,
         storage=storage,
         prune_interval_seconds=getattr(brain_config, "blackboard_prune_interval_seconds", 300.0),
     )
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    from contextunity.core.logging import setup_logging
-
-    setup_logging()
-
-    async def _run() -> None:
-        server = await create_local_brain()
-        _ = await server.start()
-        print("Brain gRPC listening (local)")
-        _ = await server.wait_for_termination()
-
-    try:
-        asyncio.run(_run())
-    except KeyboardInterrupt:
-        pass

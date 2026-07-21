@@ -125,7 +125,7 @@ async def test_superseded_content_closes_lease_without_overwriting_current_metad
         content_hash="sha256:old",
         source_type="manual",
     )
-    await store.enqueue_embedding_job(
+    accepted = await store.enqueue_embedding_job(
         tenant_id="tenant-a",
         cell_id=cell_id,
         content_hash="sha256:old",
@@ -166,6 +166,36 @@ async def test_superseded_content_closes_lease_without_overwriting_current_metad
     assert current is not None
     assert current["content_hash"] == "sha256:new"
     assert current.get("embedding_status") != "skipped"
+
+    await store.upsert_cell(
+        tenant_id="tenant-a",
+        cell_id=cell_id,
+        cell_kind="document",
+        content="old revision",
+        content_hash="sha256:old",
+        source_type="manual",
+    )
+    requeued = await store.enqueue_embedding_job(
+        tenant_id="tenant-a",
+        cell_id=cell_id,
+        content_hash="sha256:old",
+        profile="default",
+        max_pending=10,
+    )
+    assert requeued == {
+        "job_id": job["job_id"],
+        "status": "pending",
+        "idempotency_key": accepted["idempotency_key"],
+        "accepted": True,
+        "requeued": True,
+    }
+    claimed_again = await store.claim_embedding_jobs(
+        tenant_id="tenant-a", limit=1, lease_seconds=60
+    )
+    retried_job = next(iter(claimed_again), None)
+    assert retried_job is not None
+    assert retried_job["job_id"] == job["job_id"]
+    assert retried_job["attempt"] == 1
 
 
 @pytest.mark.asyncio
@@ -303,6 +333,25 @@ async def test_live_backend_preserves_reference_lifecycle() -> None:
         "status": "skipped",
         "reason_code": "content_superseded",
     }
+    await store.upsert_cell(
+        tenant_id=tenant_id,
+        cell_id=superseded_cell_id,
+        cell_kind="document",
+        content="old live revision",
+        content_hash="sha256:old-live",
+        source_type="manual",
+    )
+    requeued = await store.enqueue_embedding_job(
+        tenant_id=tenant_id,
+        cell_id=superseded_cell_id,
+        content_hash="sha256:old-live",
+        profile="default",
+        max_pending=10,
+    )
+    assert requeued["job_id"] == superseded_job["job_id"]
+    assert requeued["status"] == "pending"
+    assert requeued["accepted"] is True
+    assert requeued["requeued"] is True
     await store.close()
 
 
@@ -334,7 +383,7 @@ class _EmbeddingStorage:
 class _EmbeddingService(EmbeddingHandlersMixin):
     def __init__(self) -> None:
         self.storage = _EmbeddingStorage()
-        self.embedder = type("Embedder", (), {"embed_async": self._embed})()
+        self.embedder = type("Embedder", (), {"embed_document_async": self._embed})()
 
     async def _embed(self, _: str) -> list[float]:
         return [0.1]
@@ -372,6 +421,56 @@ async def test_dimension_mismatch_is_returned_as_typed_terminal_candidate(
         "status": "rejected",
         "error_code": "dimension_mismatch",
     }
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_reports_through_local_udb_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from contextunity.brain.service.handlers import embedding as handler
+
+    reported: list[dict[str, str]] = []
+
+    class _Reporter:
+        def __init__(self, *, application: object) -> None:
+            del application
+
+        async def report_embedding_provider_failure(self, **kwargs: str) -> None:
+            reported.append(kwargs)
+
+    class _FailingEmbedder:
+        async def embed_document_async(self, _: str) -> list[float]:
+            raise OSError("provider unavailable")
+
+    service = _EmbeddingService()
+    service.embedder = _FailingEmbedder()
+    monkeypatch.setattr(handler, "BrainUdbReporter", _Reporter)
+    monkeypatch.setattr(handler, "extract_token_from_context", lambda _: object())
+    monkeypatch.setattr(handler, "validate_token_for_write", lambda *args, **kwargs: None)
+    monkeypatch.setattr(handler, "resolve_tenant_id", lambda *_: "tenant-a")
+    monkeypatch.setattr(handler, "validate_tenant_access", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        handler,
+        "get_core_config",
+        lambda: SimpleNamespace(
+            embedding_enrichment=SimpleNamespace(enabled=True, max_input_chars=100),
+            embeddings=SimpleNamespace(dimension=2),
+            udb=SimpleNamespace(enabled=True),
+        ),
+    )
+    request = ContextUnit(
+        payload={"tenant_id": "tenant-a", "job_id": "job-1", "lease_id": "lease-1"}
+    ).to_protobuf(contextunit_pb2)
+
+    response = await service.EmbedClaimedCell(request, SimpleNamespace())
+
+    assert ContextUnit.from_protobuf(response).payload == {
+        "status": "retryable",
+        "error_code": "provider_failure",
+    }
+    assert reported == [{"tenant_id": "tenant-a", "job_id": "job-1", "lease_id": "lease-1"}]
 
 
 @pytest.mark.asyncio

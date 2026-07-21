@@ -22,6 +22,8 @@ _MODEL_REVISION = "5090578d9565bb06545b4552f76e6bc2c93e4a66"
 _MODEL_FILE = "model_quantized.onnx"
 _MODEL_DATA_FILE = "model_quantized.onnx_data"
 _TOKENIZER_FILE = "tokenizer.json"
+# This is the durable v1 vector-space contract. Do not change it in place:
+# prefix changes require storage isolation and a complete reindex first.
 _TASK_PREFIX = "task: sentence similarity | query: "
 _MAX_TOKENS = 2048
 
@@ -100,6 +102,31 @@ def _execution_providers(device: str) -> list[str]:
     return [preferred, "CPUExecutionProvider"]
 
 
+def _session_options(runtime_module: object, config: EmbeddingProviderConfig) -> object:
+    """Build the memory-bounded CPU session used by local Brain embeddings."""
+    options = _call_attribute(runtime_module, "SessionOptions")
+    setattr(options, "intra_op_num_threads", config.onnx_intra_op_threads)
+    setattr(options, "inter_op_num_threads", 1)
+    setattr(options, "enable_cpu_mem_arena", config.onnx_cpu_mem_arena)
+    setattr(options, "enable_mem_pattern", config.onnx_mem_pattern)
+    setattr(
+        options,
+        "execution_mode",
+        object_attr(object_attr(runtime_module, "ExecutionMode"), "ORT_SEQUENTIAL"),
+    )
+    setattr(
+        options,
+        "graph_optimization_level",
+        object_attr(
+            object_attr(runtime_module, "GraphOptimizationLevel"),
+            "ORT_ENABLE_ALL",
+        ),
+    )
+    _ = _call_attribute(options, "add_session_config_entry", "session.intra_op.allow_spinning", "0")
+    _ = _call_attribute(options, "add_session_config_entry", "session.inter_op.allow_spinning", "0")
+    return options
+
+
 def prefetch_onnx_assets(config: EmbeddingProviderConfig) -> tuple[str, str]:
     """Resolve the pinned graph, external weights, and tokenizer into one cache."""
     if config.model != _MODEL:
@@ -172,19 +199,27 @@ class OnnxEmbedder:
         self._identity = f"{config.space_id}:{config.provider}:{config.model}:{config.dimension}"
 
     def embed(self, text: str) -> list[float]:
-        """Synchronously generate one vector when no event loop is active."""
+        """Synchronously generate one vector in the durable v1 space."""
         return run_coroutine_sync(lambda: self.embed_async(text))
 
     async def embed_async(self, text: str) -> list[float]:
-        """Generate one normalized embedding without an external model daemon."""
+        """Generate one normalized embedding without changing the durable space."""
         cached = await self._cache.get(self._identity, text)
         if cached is not None:
             return validate_embedding_vector(cached, config=self._config)
         await self._ensure_loaded()
-        vector = await asyncio.to_thread(self._embed_blocking, text)
+        vector = await asyncio.to_thread(self._embed_blocking, _TASK_PREFIX + text)
         vector = validate_embedding_vector(vector, config=self._config)
         await self._cache.put(self._identity, text, vector)
         return vector
+
+    async def embed_query_async(self, text: str) -> list[float]:
+        """Keep query vectors compatible with existing durable v1 vectors."""
+        return await self.embed_async(text)
+
+    async def embed_document_async(self, text: str) -> list[float]:
+        """Keep document vectors compatible with existing durable v1 vectors."""
+        return await self.embed_async(text)
 
     async def _ensure_loaded(self) -> None:
         if self._session is not None:
@@ -206,6 +241,7 @@ class OnnxEmbedder:
             runtime_module,
             "InferenceSession",
             model_path,
+            sess_options=_session_options(runtime_module, self._config),
             providers=_execution_providers(self._config.device),
         )
         outputs = _object_items(
@@ -235,7 +271,7 @@ class OnnxEmbedder:
             numpy_module = importlib.import_module("numpy")
         except ImportError as exc:
             raise EmbeddingError("ONNX embeddings require numpy") from exc
-        encoding = _call_attribute(tokenizer, "encode", _TASK_PREFIX + text)
+        encoding = _call_attribute(tokenizer, "encode", text)
         input_ids = _integer_items(
             object_attr(encoding, "ids"), error="ONNX tokenizer returned invalid input ids"
         )
